@@ -2,8 +2,9 @@ import { QUOTE_STALE_AFTER_MS } from '../../config/instrument';
 import { UPCOMING_WINDOW_MS } from '../../config/sessions';
 import { useActiveInstrument, useMarket } from '../../hooks/useMarket';
 import { CONNECTION_LABEL, getQuoteDisplayMode, type QuoteDisplayMode } from '../../services/market/normalize';
+import { FEED_LABEL } from '../../services/mt5/freshness';
 import { useNow } from '../../store/clock';
-import type { ConnectionState, MarketState } from '../../types/market';
+import type { ConnectionState, FeedStatusCode, MarketState } from '../../types/market';
 import { directionOf, formatPercent, formatPrice, formatSigned, formatVolume, UNKNOWN } from '../../utils/format';
 import { Logo } from '../branding/Logo';
 import { StatusPill } from '../ui/StatusPill';
@@ -69,6 +70,20 @@ export function MarketHours({ now }: { now: number }) {
   );
 }
 
+const FEED_TONE: Record<FeedStatusCode, 'ok' | 'warn' | 'bad' | 'off' | 'info'> = {
+  LIVE: 'ok',
+  MT5_CONNECTED: 'info',
+  MT5_CONNECTING: 'info',
+  INSUFFICIENT_HISTORY: 'warn',
+  MARKET_CLOSED: 'warn',
+  STALE: 'warn',
+  SYMBOL_NOT_FOUND: 'warn',
+  AMBIGUOUS_SYMBOL: 'warn',
+  MT5_BRIDGE_OFFLINE: 'bad',
+  MT5_NOT_RUNNING: 'bad',
+  ERROR: 'bad',
+};
+
 const DEPTH_LABEL: Record<ConnectionState, string> = {
   LIVE: 'Connected',
   DELAYED: 'Delayed',
@@ -81,7 +96,7 @@ export function MarketBar() {
   const state = useMarket((s) => s);
   const now = useNow('second');
   const mode = getQuoteDisplayMode(state, now, QUOTE_STALE_AFTER_MS);
-  const { quote, instrument, provider, connection, depth } = state;
+  const { quote, instrument, provider, connection, depth, feed } = state;
   const d = instrument.priceDecimals;
 
   return (
@@ -107,13 +122,16 @@ export function MarketBar() {
 
         <div className="mbar__conn">
           <StatusPill
-            tone={CONNECTION_TONE[connection]}
-            label={CONNECTION_LABEL[connection]}
-            pulse={connection === 'LIVE' || connection === 'CONNECTING'}
+            tone={feed ? FEED_TONE[feed.code] : CONNECTION_TONE[connection]}
+            label={feed ? FEED_LABEL[feed.code] : CONNECTION_LABEL[connection]}
+            pulse={feed ? feed.code === 'LIVE' : connection === 'LIVE' || connection === 'CONNECTING'}
+            title={feed?.message ?? undefined}
             compact
           />
-          <span className="mbar__provider">
+          <span className="mbar__provider" data-testid="provider-line">
             Provider: <strong>{provider?.name ?? 'Not Connected'}</strong>
+            {feed?.providerSymbol && <> · <strong>{feed.providerSymbol}</strong></>}
+            {feed?.code === 'LIVE' && quote.spreadPoints != null && <> · spread {quote.spreadPoints} pts</>}
           </span>
           <span className="mbar__provider mbar__depth" data-testid="depth-status">
             Depth: <strong>{depth.supported ? DEPTH_LABEL[depth.connection] : 'Unsupported'}</strong>

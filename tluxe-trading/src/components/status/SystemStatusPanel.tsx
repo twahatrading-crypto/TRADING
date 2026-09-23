@@ -3,6 +3,7 @@ import { useServices } from '../../app/servicesContext';
 import { ENGINES } from '../../config/engines';
 import { useActiveInstrument, useMarket } from '../../hooks/useMarket';
 import { useOnline } from '../../hooks/useOnline';
+import { FEED_LABEL } from '../../services/mt5/freshness';
 import { buildSystemStatus, STATUS_TONE } from '../../services/status/systemStatus';
 import { useStore } from '../../store/createStore';
 import type { SystemStatusItem } from '../../types/status';
@@ -37,6 +38,7 @@ export function SystemStatusPanel() {
   const priceError = useMarket((s) => s.error);
   const def = useActiveInstrument();
   const depth = useMarket((s) => s.depth);
+  const feed = useMarket((s) => s.feed);
   const ai = useStore(services.ai.store, (s) => s.status);
   const news = useStore(services.news.store, (s) => s.status);
   const calendar = useStore(services.calendar.store, (s) => s.status);
@@ -46,7 +48,12 @@ export function SystemStatusPanel() {
     browserOnline: online,
     instrument: symbol,
     // A category with no mappings (e.g. NASDAQ) has no price source until a variant is chosen.
-    price: { connection, error: priceError, supported: def.providerMappings.some((m) => m.role === 'price') },
+    price: {
+      connection,
+      error: priceError,
+      supported: def.providerMappings.some((m) => m.role === 'price'),
+      detail: feed ? [FEED_LABEL[feed.code], feed.providerSymbol, feed.message].filter(Boolean).join(' · ') : undefined,
+    },
     depth: { connection: depth.connection, error: depth.error, supported: depth.supported },
     ai,
     database: services.databaseStatus,

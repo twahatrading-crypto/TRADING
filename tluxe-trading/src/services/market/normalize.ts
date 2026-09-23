@@ -1,7 +1,7 @@
 import type { Candle, ConnectionState, MarketState, Quote } from '../../types/market';
 
 const QUOTE_KEYS: (keyof Quote)[] = [
-  'last', 'change', 'changePercent', 'bid', 'ask', 'high', 'low', 'volume', 'timestamp',
+  'last', 'change', 'changePercent', 'bid', 'ask', 'high', 'low', 'volume', 'timestamp', 'spreadPoints',
 ];
 
 /** Accept only finite numbers; anything else becomes null (unknown). */
@@ -28,7 +28,12 @@ export function isValidCandle(c: Candle): boolean {
 export function normalizeCandles(input: Candle[]): Candle[] {
   const byTime = new Map<number, Candle>();
   for (const c of input) {
-    if (isValidCandle(c)) byTime.set(c.time, { ...c, volume: sanitizeNumber(c.volume) });
+    if (!isValidCandle(c)) continue;
+    const clean: Candle = { ...c, volume: sanitizeNumber(c.volume) };
+    if ('tickVolume' in c) clean.tickVolume = sanitizeNumber(c.tickVolume);
+    if ('realVolume' in c) clean.realVolume = sanitizeNumber(c.realVolume);
+    if ('spread' in c) clean.spread = sanitizeNumber(c.spread);
+    byTime.set(c.time, clean);
   }
   return [...byTime.values()].sort((a, b) => a.time - b.time);
 }

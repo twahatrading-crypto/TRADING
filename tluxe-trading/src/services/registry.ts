@@ -13,6 +13,8 @@ import { MarketDataService } from './market/MarketDataService';
 import type { MarketDataProvider } from './market/MarketDataProvider';
 import { createNewsService, type NewsProvider, type NewsService } from './news/NewsProvider';
 import { SRService } from './sr/SRService';
+import { loadMt5Config } from './mt5/config';
+import { Mt5Provider } from './mt5/Mt5Provider';
 
 export interface Services {
   instruments: InstrumentSelection;
@@ -22,6 +24,8 @@ export interface Services {
   ai: AiService;
   /** Support & Resistance engine runtime (real candles only). */
   sr: SRService;
+  /** MT5 price provider, when enabled in Settings (null otherwise). */
+  mt5: Mt5Provider | null;
   /** Phase 1 has no persistence layer. */
   databaseStatus: ProviderStatus;
 }
@@ -46,9 +50,11 @@ export interface ServiceOptions {
  * so every instrument reports DATA UNAVAILABLE / Provider: Not Connected.
  * Connecting MT5 or Bookmap later = implement the interface and add it here.
  */
-export function defaultProviders(): ProviderSet {
+export function defaultProviders(storage: Pick<Storage, 'getItem' | 'setItem'> | null = null): ProviderSet {
+  // Real MT5 data only when the user has configured and enabled the private bridge.
+  const mt5 = loadMt5Config(storage);
   return {
-    price: [],
+    price: mt5.enabled && mt5.token ? [new Mt5Provider(mt5)] : [],
     depth: [],
     news: new NullFeedProvider<NewsItem>(),
     calendar: new NullFeedProvider<EconomicEvent>(),
@@ -68,6 +74,7 @@ export function createServices(providers: ProviderSet = defaultProviders(), opts
     calendar: createCalendarService(providers.calendar),
     ai: new AiService(providers.ai),
     sr: new SRService(market, selection, storage),
+    mt5: (providers.price.find((p) => p instanceof Mt5Provider) as Mt5Provider | undefined) ?? null,
     databaseStatus: 'NOT_CONNECTED',
   };
 }

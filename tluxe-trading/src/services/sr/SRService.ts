@@ -12,6 +12,23 @@ import type { MarketDataService } from '../market/MarketDataService';
 
 export const SR_SETTINGS_KEY = 'tluxe.sr.settings.v1';
 
+/**
+ * Closed-bar contract. When the provider marks bars (isClosed), the engine gets
+ * ONLY closed bars (lastBarClosed) and the forming bar supplies the current
+ * price for distances — an unfinished candle can never confirm a pivot.
+ * Unmarked streams fall back to the engine's conservative default (newest bar = forming).
+ */
+export function feedEngine(engine: SRTimeframeEngine, candles: readonly Candle[]): void {
+  const marked = candles.some((c) => c.isClosed !== undefined);
+  if (!marked) {
+    engine.update(candles);
+    return;
+  }
+  const closed = candles.filter((c) => c.isClosed === true);
+  const newest = candles[candles.length - 1];
+  engine.update(closed, { lastBarClosed: true, currentPrice: newest ? newest.close : null });
+}
+
 export interface SRInstrumentState {
   instrumentId: InstrumentId;
   byTimeframe: Partial<Record<Timeframe, SRSnapshot>>;
@@ -118,7 +135,7 @@ export class SRService {
     for (const tf of TIMEFRAMES) {
       const engine = this.engineFor(def, tf);
       const run = (candles: readonly Candle[]) => {
-        engine.update(candles);
+        feedEngine(engine, candles);
         this.publish(id, tf, engine.snapshot());
       };
       this.unsubs.push(this.market.subscribeCandles(id, tf, (candles) => run(candles)));

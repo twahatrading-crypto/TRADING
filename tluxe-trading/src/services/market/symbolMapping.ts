@@ -15,9 +15,20 @@ export interface SymbolOverride {
   inverted?: boolean;
 }
 
+export type ResolutionTier = 'override' | 'fixed' | 'exact' | 'alias' | 'variant';
+
 export type SymbolResolution =
-  | { status: 'resolved'; providerSymbol: string; inverted: boolean; source: 'override' | 'fixed' | 'discovered' }
-  | { status: 'ambiguous'; candidates: string[] }
+  | {
+      status: 'resolved';
+      providerSymbol: string;
+      inverted: boolean;
+      source: 'override' | 'fixed' | 'discovered';
+      /** Which priority tier matched. */
+      tier: ResolutionTier;
+      /** Other plausible symbols from LOWER tiers (reported, never silently dropped). */
+      alternatives: string[];
+    }
+  | { status: 'ambiguous'; candidates: string[]; tier: ResolutionTier }
   | { status: 'not-found' }
   | { status: 'needs-discovery' }
   | { status: 'not-mapped' };
@@ -31,22 +42,46 @@ export interface ResolveOptions {
 }
 
 const norm = (s: string) => s.toUpperCase().replace(/[^A-Z0-9]/g, '');
-/** Allow short broker suffixes/prefix-free decorations: XAUUSD.a, XAUUSDm, EURUSD.pro … */
-const MAX_SUFFIX = 4;
+
+/**
+ * Broker decorations accepted around a base symbol (raw, case-sensitive):
+ *  suffix: separator-led (".a", "_i", "-ECN", "+", "#1") or lowercase-only ("m", "pro", "ecn");
+ *  prefix: separators / up to 2 lowercase letters ("#", "m.", "c_").
+ * An uppercase tail (e.g. "JPY") is NOT a decoration: it could be another instrument.
+ */
+const SUFFIX_RE = /^(?:[._\-+#!~][A-Za-z0-9]{0,6}|[a-z]{1,4})$/;
+const PREFIX_RE = /^(?:[._\-+#!~]{1,2}|[a-z]{1,2}[._\-+#!~]?)$/;
+/** Futures contract month code + year, e.g. "Z6", "Z26". Allowed only for futures/depth feeds. */
+const MONTH_CODE_RE = /^[._\- ]?[FGHJKMNQUVXZ]\d{1,2}$/;
+
+function isVariant(sym: string, base: string, family: ProviderFamily): boolean {
+  const upper = sym.toUpperCase();
+  const at = upper.indexOf(base.toUpperCase());
+  if (at < 0) return false;
+  const prefix = sym.slice(0, at);
+  const suffix = sym.slice(at + base.length);
+  if (prefix === '' && suffix === '') return false; // that is an exact match, not a variant
+  const futures = family === 'futures-feed' || family === 'depth-feed';
+  const okPrefix = prefix === '' || PREFIX_RE.test(prefix);
+  const okSuffix = suffix === '' || SUFFIX_RE.test(suffix) || (futures && MONTH_CODE_RE.test(suffix));
+  return okPrefix && okSuffix;
+}
 
 export function findMapping(instrument: InstrumentDefinition, family: ProviderFamily, role: ProviderRole = 'price'): ProviderMapping | undefined {
   return instrument.providerMappings.find((m) => m.family === family && m.role === role);
 }
 
-function matchHints(hints: readonly string[], available: readonly string[]): string[] {
-  const out = new Set<string>();
-  for (const hint of hints.map(norm)) {
-    for (const sym of available) {
-      const n = norm(sym);
-      if (n === hint || (n.startsWith(hint) && n.length - hint.length <= MAX_SUFFIX)) out.add(sym);
-    }
-  }
-  return [...out];
+/** Tiered matches for a list of names (first = primary/exact, rest = aliases). */
+function tiers(names: readonly string[], available: readonly string[], family: ProviderFamily) {
+  const [primary, ...aliases] = names;
+  const exact = primary ? available.filter((a) => norm(a) === norm(primary)) : [];
+  const alias = available.filter((a) => aliases.some((h) => norm(a) === norm(h)) && !exact.includes(a));
+  const variant = available.filter((a) => !exact.includes(a) && !alias.includes(a) && names.some((h) => isVariant(a, h, family)));
+  return [
+    ['exact', exact],
+    ['alias', alias],
+    ['variant', variant],
+  ] as const;
 }
 
 export function resolveProviderSymbol(
@@ -57,32 +92,45 @@ export function resolveProviderSymbol(
   const mapping = findMapping(instrument, family, opts.role ?? 'price');
   if (!mapping) return { status: 'not-mapped' };
   const { available, overrides } = opts;
-  const inList = (s: string) => !available || available.some((a) => norm(a) === norm(s));
+  const inList = (s: string) => !available || available.some((a) => a === s);
 
+  // 1. Explicit user override (must exist on the provider when the list is known).
   const override = overrides?.[instrument.id];
   if (override) {
     return inList(override.symbol)
-      ? { status: 'resolved', providerSymbol: override.symbol, inverted: !!override.inverted, source: 'override' }
+      ? { status: 'resolved', providerSymbol: override.symbol, inverted: !!override.inverted, source: 'override', tier: 'override', alternatives: [] }
       : { status: 'not-found' };
   }
-
+  // 2. Exact known mapping.
   if (mapping.symbol) {
     return inList(mapping.symbol)
-      ? { status: 'resolved', providerSymbol: mapping.symbol, inverted: false, source: 'fixed' }
+      ? { status: 'resolved', providerSymbol: mapping.symbol, inverted: false, source: 'fixed', tier: 'fixed', alternatives: [] }
       : { status: 'not-found' };
   }
-
   if (!available) return { status: 'needs-discovery' };
 
-  const direct = matchHints(mapping.discoveryHints, available);
-  if (direct.length === 1) return { status: 'resolved', providerSymbol: direct[0]!, inverted: false, source: 'discovered' };
-  if (direct.length > 1) return { status: 'ambiguous', candidates: direct };
+  // 3–4. Discovery: exact canonical/primary name → safe aliases → broker suffix/prefix variants.
+  const pick = (names: readonly string[], inverted: boolean): SymbolResolution | null => {
+    const t = tiers(names, available, family);
+    for (let k = 0; k < t.length; k++) {
+      const [tier, matches] = t[k]!;
+      if (matches.length > 1) return { status: 'ambiguous', candidates: [...matches], tier };
+      if (matches.length === 1) {
+        const alternatives = t.slice(k + 1).flatMap(([, m]) => m);
+        return { status: 'resolved', providerSymbol: matches[0]!, inverted, source: 'discovered', tier, alternatives };
+      }
+    }
+    return null;
+  };
+  const hints = mapping.discoveryHints.length ? mapping.discoveryHints : [instrument.id];
+  const names = hints.some((h) => norm(h) === norm(instrument.id)) ? hints : [instrument.id, ...hints];
+  const direct = pick(names, false);
+  if (direct) return direct;
 
-  // FX only: provider may list the reciprocal pair (e.g. CADUSD for USDCAD).
+  // 5. FX only: provider may list the reciprocal pair (e.g. CADUSD for USDCAD).
   if (instrument.fx) {
-    const reciprocal = matchHints([`${instrument.fx.quote}${instrument.fx.base}`], available);
-    if (reciprocal.length === 1) return { status: 'resolved', providerSymbol: reciprocal[0]!, inverted: true, source: 'discovered' };
-    if (reciprocal.length > 1) return { status: 'ambiguous', candidates: reciprocal };
+    const recip = pick([`${instrument.fx.quote}${instrument.fx.base}`], true);
+    if (recip) return recip;
   }
   return { status: 'not-found' };
 }

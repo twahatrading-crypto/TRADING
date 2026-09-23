@@ -12,7 +12,8 @@ import { roleLabel, SR_VIEW_TITLE, sortZones, STATUS_CLASS, tableRows, type Sort
 export type SRTab = 'zones' | 'mtf' | 'analysis' | 'settings';
 
 const PILL: Record<SRViewState, string> = {
-  READY: 'Analysing provider candles',
+  READY: 'S&R LIVE',
+  STALE: 'Market Data Stale',
   NOT_CONNECTED: 'Data Not Connected',
   INSUFFICIENT_HISTORY: 'Insufficient History',
   CATEGORY: 'S&R Unavailable',
@@ -49,6 +50,7 @@ const TABS: { id: SRTab; label: string }[] = [
 
 export function SRPanel(p: PanelProps) {
   const ready = p.viewState === 'READY';
+  const zonesShown = p.viewState === 'READY' || p.viewState === 'STALE';
   return (
     <section className="panel srpanel" aria-labelledby="srpanel-title">
       <header className="srpanel__head">
@@ -60,7 +62,7 @@ export function SRPanel(p: PanelProps) {
         </h2>
         <div className="srpanel__status">
           <StatusPill tone={ready ? 'ok' : 'warn'} label={PILL[p.viewState]} compact />
-          <span className="srpanel__sub">{ready ? `${p.multi?.zones.length ?? 0} zones · ${p.symbol}` : 'No live data available'}</span>
+          <span className="srpanel__sub">{zonesShown ? `${p.multi?.zones.length ?? 0} zones · ${p.symbol}${ready ? '' : ' · from last received candles'}` : 'No live data available'}</span>
         </div>
       </header>
       <div className="srtabs" role="tablist" aria-label="S&R views">
@@ -109,7 +111,7 @@ function ZonesTab(p: PanelProps) {
   const { rows, total } = tableRows(zones, p.filters, p.settings, p.showAll);
   const sorted = sortZones(rows, p.sort);
   const set = (patch: Partial<ZoneFilters>) => p.onFilters({ ...p.filters, ...patch });
-  const ready = p.viewState === 'READY';
+  const ready = p.viewState === 'READY' || p.viewState === 'STALE';
   const sortBy = (key: SortKey) => p.onSort({ key, dir: p.sort.key === key && p.sort.dir === 'desc' ? 'asc' : 'desc' });
 
   return (
@@ -203,8 +205,8 @@ function ZonesTab(p: PanelProps) {
 /* ----------------------------- Multi-timeframe ---------------------------- */
 
 function MtfTab(p: PanelProps) {
-  if (p.viewState !== 'READY' || !p.multi) {
-    return <EmptyState icon={<Info size={18} />} title={SR_VIEW_TITLE[p.viewState === 'READY' ? 'NOT_CONNECTED' : p.viewState]} message="Confluence is computed only from independently analysed real timeframes." />;
+  if ((p.viewState !== 'READY' && p.viewState !== 'STALE') || !p.multi) {
+    return <EmptyState icon={<Info size={18} />} title={SR_VIEW_TITLE[p.viewState]} message="Confluence is computed only from independently analysed real timeframes." />;
   }
   return (
     <div className="srmtf">
@@ -266,8 +268,8 @@ function Fact({ label, zone, decimals }: { label: string; zone: SRZone | null; d
 }
 
 function AnalysisTab(p: PanelProps) {
-  if (p.viewState !== 'READY' || !p.multi) {
-    return <EmptyState icon={<Info size={18} />} title={SR_VIEW_TITLE[p.viewState === 'READY' ? 'NOT_CONNECTED' : p.viewState]} message="S&R facts appear once real candles are analysed." />;
+  if ((p.viewState !== 'READY' && p.viewState !== 'STALE') || !p.multi) {
+    return <EmptyState icon={<Info size={18} />} title={SR_VIEW_TITLE[p.viewState]} message="S&R facts appear once real candles are analysed." />;
   }
   // Freshest price: lowest timeframe that has one.
   const price = TIMEFRAMES.map((tf) => p.multi!.byTimeframe[tf]?.currentPrice ?? null).find((x) => x !== null) ?? null;
@@ -276,7 +278,7 @@ function AnalysisTab(p: PanelProps) {
     <div className="sranalysis">
       <p className="srmuted">Facts about current support and resistance only — this engine does not produce trade signals.</p>
       <dl>
-        <div className="srfact"><dt>Current price</dt><dd className="num">{formatPrice(price, p.decimals)}</dd></div>
+        <div className="srfact"><dt>Current price{p.viewState === 'STALE' ? ' (stale)' : ''}</dt><dd className="num">{formatPrice(price, p.decimals)}</dd></div>
         <Fact label="Nearest support" zone={f.nearestSupport} decimals={p.decimals} />
         <Fact label="Nearest resistance" zone={f.nearestResistance} decimals={p.decimals} />
         <Fact label={`Strongest support within ${p.settings.nearbyAtr} ATR`} zone={f.strongestNearbySupport} decimals={p.decimals} />

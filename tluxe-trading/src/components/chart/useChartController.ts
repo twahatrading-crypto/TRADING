@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import type { MarketDataService } from '../../services/market/MarketDataService';
 import type { InstrumentId } from '../../types/instruments';
-import type { Timeframe } from '../../types/market';
+import type { Candle, Timeframe } from '../../types/market';
 import type { ChartController } from './ChartController';
 
 /**
@@ -16,8 +16,9 @@ export function useChartController(
   timeframe: Timeframe,
   priceDecimals: number,
   containerRef: RefObject<HTMLDivElement | null>,
-): { barCount: number; controller: ChartController | null } {
+): { barCount: number; controller: ChartController | null; lastBar: Candle | null } {
   const [barCount, setBarCount] = useState(() => market.getCandles(instrumentId, timeframe).length);
+  const [lastBar, setLastBar] = useState<Candle | null>(() => market.getCandles(instrumentId, timeframe).at(-1) ?? null);
   const controllerRef = useRef<ChartController | null>(null);
   const [controller, setController] = useState<ChartController | null>(null);
 
@@ -25,6 +26,7 @@ export function useChartController(
     let cancelled = false;
     let loading: Promise<ChartController | null> | null = null;
     setBarCount(market.getCandles(instrumentId, timeframe).length);
+    setLastBar(market.getCandles(instrumentId, timeframe).at(-1) ?? null);
 
     const ensure = () => {
       if (controllerRef.current) return Promise.resolve(controllerRef.current);
@@ -41,6 +43,7 @@ export function useChartController(
 
     const unsubscribe = market.subscribeCandles(instrumentId, timeframe, (candles, mode) => {
       setBarCount(candles.length);
+      setLastBar(candles.at(-1) ?? null);
       if (!candles.length) return;
       void ensure().then((ctl) => {
         if (!ctl) return;
@@ -62,5 +65,5 @@ export function useChartController(
     };
   }, [market, instrumentId, timeframe, priceDecimals, containerRef]);
 
-  return { barCount, controller };
+  return { barCount, controller, lastBar };
 }

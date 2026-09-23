@@ -6,14 +6,18 @@ import type { ZoneDrawable } from '../chart/ZonesPrimitive';
 
 /* ------------------------------ data state ------------------------------ */
 
-export type SRViewState = 'NOT_CONNECTED' | 'INSUFFICIENT_HISTORY' | 'CATEGORY' | 'READY';
+export type SRViewState = 'NOT_CONNECTED' | 'INSUFFICIENT_HISTORY' | 'CATEGORY' | 'STALE' | 'READY';
 
 export const SR_VIEW_TITLE: Record<SRViewState, string> = {
   NOT_CONNECTED: 'MARKET DATA NOT CONNECTED',
   INSUFFICIENT_HISTORY: 'INSUFFICIENT HISTORY',
   CATEGORY: 'S&R DATA UNAVAILABLE',
-  READY: 'READY',
+  STALE: 'MARKET DATA STALE',
+  READY: 'S&R LIVE',
 };
+
+/** States in which engine zones exist and may be shown (STALE = from the last received candles). */
+export const hasZones = (s: SRViewState) => s === 'READY' || s === 'STALE';
 
 /**
  * Truthful state for one timeframe (or ALL): zones exist only when a real
@@ -26,9 +30,9 @@ export function srViewState(opts: {
 }): SRViewState {
   if (!opts.tradable) return 'CATEGORY';
   const snaps = opts.snapshots.filter((s): s is SRSnapshot => !!s);
-  if (snaps.some((s) => s.state === 'READY')) return 'READY';
-  if (snaps.some((s) => s.barsProcessed > 0)) return 'INSUFFICIENT_HISTORY';
   const live = opts.connection === 'LIVE' || opts.connection === 'DELAYED';
+  if (snaps.some((s) => s.state === 'READY')) return live ? 'READY' : 'STALE';
+  if (snaps.some((s) => s.barsProcessed > 0)) return 'INSUFFICIENT_HISTORY';
   return live ? 'INSUFFICIENT_HISTORY' : 'NOT_CONNECTED';
 }
 

@@ -75,7 +75,7 @@ function SRWorkspace({ onMenu }: { onMenu: () => void }) {
   };
   const selectConfluence = (id: string) => setSelectedConfluenceId((cur) => (cur === id ? null : id));
   const emptyText =
-    viewState === 'READY' ? 'Select a zone in the table to see its details.' : `${SR_VIEW_TITLE[viewState]} — no zones for ${def.shortName}.`;
+    viewState === 'READY' || viewState === 'STALE' ? 'Select a zone in the table to see its details.' : `${SR_VIEW_TITLE[viewState]} — no zones for ${def.shortName}.`;
 
   return (
     <main className="srmain">

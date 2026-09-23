@@ -1,5 +1,5 @@
 import type { DataCapability, InstrumentDefinition, InstrumentId, ProviderFamily, ProviderMapping } from '../../types/instruments';
-import type { Candle, ConnectionState, ProviderInfo, Quote, Timeframe } from '../../types/market';
+import type { Candle, ConnectionState, ProviderFeedDetail, ProviderInfo, Quote, Timeframe } from '../../types/market';
 
 /** Callbacks a price adapter uses to push data. Every call names the canonical instrument. */
 export interface MarketDataSink {
@@ -9,6 +9,8 @@ export interface MarketDataSink {
   /** Partial quote update, already in canonical orientation. Omitted fields keep their value. */
   quote(instrumentId: InstrumentId, update: Partial<Quote>, meta?: { contract?: string | null }): void;
   candles(instrumentId: InstrumentId, timeframe: Timeframe, candles: Candle[], mode: 'replace' | 'upsert'): void;
+  /** Detailed feed status / freshness / symbol metadata for one instrument. */
+  feed(instrumentId: InstrumentId, detail: ProviderFeedDetail): void;
 }
 
 /**

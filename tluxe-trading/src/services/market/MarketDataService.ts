@@ -96,6 +96,7 @@ export class MarketDataService {
             error: null,
           },
           capabilities: [],
+          feed: null,
         }),
       );
     }
@@ -164,6 +165,18 @@ export class MarketDataService {
         this.candles.set(key, clean);
         this.store(id).setState({ lastMessageAt: this.clock() });
         this.candleListeners.get(key)?.forEach((l) => l(clean, mode));
+      },
+      feed: (id, detail) => {
+        if (!this.ownedPrice(provider, id)) return;
+        this.store(id).setState((s) => ({
+          ...s,
+          feed: detail,
+          // Broker metadata may refine display precision; the instrument identity never changes.
+          instrument:
+            detail.meta?.digits != null && detail.meta.digits !== s.instrument.priceDecimals
+              ? { ...s.instrument, priceDecimals: detail.meta.digits }
+              : s.instrument,
+        }));
       },
     };
   }

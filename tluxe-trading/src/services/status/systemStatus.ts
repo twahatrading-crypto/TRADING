@@ -8,6 +8,8 @@ export interface FeedInput {
   error: string | null;
   /** Whether any source of this kind is mapped for the instrument. */
   supported: boolean;
+  /** Provider-specific detail (e.g. "MT5 · LIVE · GOLD.a"); overrides the generic text. */
+  detail?: string;
 }
 
 export interface StatusInputs {
@@ -62,7 +64,7 @@ export function buildSystemStatus(i: StatusInputs): SystemStatusItem[] {
     id,
     label: `${label} · ${i.instrument}`,
     value: feedStatusValue(f),
-    detail: !f.supported ? unsupported : (f.error ?? FEED_DETAIL[f.connection]),
+    detail: !f.supported ? unsupported : (f.detail ?? f.error ?? FEED_DETAIL[f.connection]),
   });
   return [
     { id: 'app', label: 'Application', value: i.browserOnline ? 'ONLINE' : 'OFFLINE', detail: i.browserOnline ? undefined : 'Browser offline' },

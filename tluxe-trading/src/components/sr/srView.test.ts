@@ -19,8 +19,9 @@ describe('srViewState', () => {
     const few = analyzeTimeframe({ instrumentId: 'GC', timeframe: 'H1', tickSize: 0.1, settings: S, candles: F.strongSupport().slice(0, 20) });
     expect(srViewState({ tradable: true, connection: 'DISCONNECTED', snapshots: [few] })).toBe('INSUFFICIENT_HISTORY');
   });
-  it('is READY when any requested timeframe is ready; CATEGORY for non-tradable', () => {
-    expect(srViewState({ tradable: true, connection: 'UNAVAILABLE', snapshots: [undefined, snap('H1')] })).toBe('READY');
+  it('is READY (S&R LIVE) only with a live feed; STALE when zones exist but the feed is not live; CATEGORY for non-tradable', () => {
+    expect(srViewState({ tradable: true, connection: 'LIVE', snapshots: [undefined, snap('H1')] })).toBe('READY');
+    expect(srViewState({ tradable: true, connection: 'DISCONNECTED', snapshots: [undefined, snap('H1')] })).toBe('STALE');
     expect(srViewState({ tradable: false, connection: 'LIVE', snapshots: [snap('H1')] })).toBe('CATEGORY');
   });
 });

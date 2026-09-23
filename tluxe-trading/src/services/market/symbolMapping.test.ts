@@ -10,18 +10,39 @@ describe('resolveProviderSymbol', () => {
     expect(resolveProviderSymbol(I('XAUUSD'), 'mt5')).toEqual({ status: 'needs-discovery' });
   });
 
-  it('discovers broker-specific names from the provider list', () => {
-    expect(resolveProviderSymbol(I('XAUUSD'), 'mt5', { available: ['EURUSD.a', 'XAUUSD.a', 'US30'] })).toEqual({
-      status: 'resolved', providerSymbol: 'XAUUSD.a', inverted: false, source: 'discovered',
+  it('1. explicit override wins over everything', () => {
+    expect(resolveProviderSymbol(I('XAUUSD'), 'mt5', { available: ['XAUUSD', 'GOLD.a'], overrides: { XAUUSD: { symbol: 'GOLD.a' } } })).toMatchObject({
+      status: 'resolved', providerSymbol: 'GOLD.a', tier: 'override',
     });
-    expect(resolveProviderSymbol(I('XAUUSD'), 'mt5', { available: ['GOLD', 'SILVER'] })).toMatchObject({ providerSymbol: 'GOLD' });
-    expect(resolveProviderSymbol(I('EURUSD'), 'mt5', { available: ['EURUSDm'] })).toMatchObject({ providerSymbol: 'EURUSDm' });
   });
 
-  it('surfaces ambiguity instead of guessing', () => {
-    expect(resolveProviderSymbol(I('XAUUSD'), 'mt5', { available: ['XAUUSD', 'XAUUSD.pro'] })).toEqual({
-      status: 'ambiguous', candidates: ['XAUUSD', 'XAUUSD.pro'],
+  it('2. exact canonical name wins; lower-tier matches are reported as alternatives', () => {
+    expect(resolveProviderSymbol(I('XAUUSD'), 'mt5', { available: ['XAUUSD', 'XAUUSD.pro', 'GOLD'] })).toEqual({
+      status: 'resolved', providerSymbol: 'XAUUSD', inverted: false, source: 'discovered', tier: 'exact', alternatives: ['GOLD', 'XAUUSD.pro'],
     });
+    expect(resolveProviderSymbol(I('EURUSD'), 'mt5', { available: ['#EURUSD'] })).toMatchObject({ providerSymbol: '#EURUSD', tier: 'exact' });
+  });
+
+  it('3. safe alias match (GOLD for XAUUSD)', () => {
+    expect(resolveProviderSymbol(I('XAUUSD'), 'mt5', { available: ['GOLD', 'SILVER'] })).toMatchObject({ providerSymbol: 'GOLD', tier: 'alias' });
+    expect(resolveProviderSymbol(I('XAGUSD'), 'mt5', { available: ['GOLD', 'SILVER'] })).toMatchObject({ providerSymbol: 'SILVER', tier: 'alias' });
+  });
+
+  it('4. broker suffix / prefix variants', () => {
+    for (const sym of ['XAUUSD.a', 'XAUUSDm', 'XAUUSD_i', 'XAUUSD-ECN', 'XAUUSDpro', 'm.XAUUSD', 'GOLD.a', 'GOLDm']) {
+      expect(resolveProviderSymbol(I('XAUUSD'), 'mt5', { available: ['EURUSD', sym, 'US30'] })).toMatchObject({ status: 'resolved', providerSymbol: sym, tier: 'variant' });
+    }
+  });
+
+  it('never treats an uppercase tail as a decoration', () => {
+    expect(resolveProviderSymbol(I('EURUSD'), 'mt5', { available: ['EURUSDJPY', 'EURUSDX'] })).toEqual({ status: 'not-found' });
+  });
+
+  it('5. ambiguity inside a tier stops and reports every candidate', () => {
+    expect(resolveProviderSymbol(I('XAUUSD'), 'mt5', { available: ['XAUUSD.a', 'XAUUSD.pro', 'EURUSD'] })).toEqual({
+      status: 'ambiguous', candidates: ['XAUUSD.a', 'XAUUSD.pro'], tier: 'variant',
+    });
+    expect(resolveProviderSymbol(I('XAUUSD'), 'mt5', { available: ['GOLD.a', 'GOLDm'] })).toMatchObject({ status: 'ambiguous' });
   });
 
   it('reports not-found when the broker does not offer it', () => {
@@ -33,11 +54,12 @@ describe('resolveProviderSymbol', () => {
   it('honours explicit overrides, validated against the provider list', () => {
     const overrides = { XAUUSD: { symbol: 'Gold.spot' } };
     expect(resolveProviderSymbol(I('XAUUSD'), 'mt5', { overrides })).toMatchObject({ status: 'resolved', providerSymbol: 'Gold.spot', source: 'override' });
+    expect(resolveProviderSymbol(I('XAUUSD'), 'mt5', { overrides, available: ['Gold.spot'] })).toMatchObject({ providerSymbol: 'Gold.spot' });
     expect(resolveProviderSymbol(I('XAUUSD'), 'mt5', { overrides, available: ['XAUUSD'] })).toEqual({ status: 'not-found' });
   });
 
   it('maps a reciprocal CADUSD feed onto canonical USDCAD as inverted', () => {
-    expect(resolveProviderSymbol(I('USDCAD'), 'mt5', { available: ['CADUSD'] })).toEqual({
+    expect(resolveProviderSymbol(I('USDCAD'), 'mt5', { available: ['CADUSD'] })).toMatchObject({
       status: 'resolved', providerSymbol: 'CADUSD', inverted: true, source: 'discovered',
     });
     // The direct pair wins when present.
@@ -48,6 +70,8 @@ describe('resolveProviderSymbol', () => {
     expect(resolveProviderSymbol(I('GC'), 'mt5', { available: ['XAUUSD', 'GC'] })).toEqual({ status: 'not-mapped' });
     expect(resolveProviderSymbol(I('XAUUSD'), 'futures-feed', { available: ['GC', 'XAUUSD'] })).toEqual({ status: 'not-mapped' });
     expect(resolveProviderSymbol(I('SI'), 'depth-feed', { role: 'depth', available: ['SIZ6', 'GCZ6'] })).toMatchObject({ providerSymbol: 'SIZ6' });
+    // Contract-month codes are only accepted for futures/depth feeds, never on MT5 spot/CFD mappings.
+    expect(resolveProviderSymbol(I('EURUSD'), 'mt5', { available: ['EURUSDZ6'] })).toEqual({ status: 'not-found' });
     expect(resolveProviderSymbol(I('XAGUSD'), 'depth-feed', { role: 'depth', available: ['XAGUSD'] })).toEqual({ status: 'not-mapped' });
   });
 

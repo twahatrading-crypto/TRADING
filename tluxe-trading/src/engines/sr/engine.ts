@@ -88,8 +88,10 @@ export interface SREngineOptions {
 }
 
 export interface UpdateOptions {
-  /** Treat the final candle as closed (fixtures / historical replays). Default false. */
+  /** Treat the final candle as closed (closed-only streams, fixtures, replays). Default false. */
   lastBarClosed?: boolean;
+  /** Current price for distance calculations (e.g. the forming bar's close). Defaults to the last candle's close. */
+  currentPrice?: number | null;
 }
 
 const sameBar = (a: Candle, b: Candle) =>
@@ -133,7 +135,7 @@ export class SRTimeframeEngine {
       if (prev && c.time <= prev.time) continue; // defensive: never go backwards in time
       this.processBar(c);
     }
-    this.lastPrice = candles.length ? candles[candles.length - 1]!.close : null;
+    this.lastPrice = opts.currentPrice !== undefined ? opts.currentPrice : candles.length ? candles[candles.length - 1]!.close : null;
   }
 
   private reset(): void {

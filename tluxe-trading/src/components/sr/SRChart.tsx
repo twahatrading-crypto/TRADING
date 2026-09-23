@@ -52,9 +52,12 @@ export function SRChart(p: Props) {
     a.click();
   };
 
+  const feed = useMarket((s) => s.feed);
   const statusText =
     state === 'READY'
-      ? `S&R: ${snapshot?.barsProcessed ?? 0} closed bars analysed`
+      ? `S&R LIVE · ${snapshot?.barsProcessed ?? 0} closed bars analysed${feed?.providerSymbol ? ` · ${feed.providerSymbol}` : ''}`
+      : state === 'STALE'
+        ? `MARKET DATA STALE · zones from the last ${snapshot?.barsProcessed ?? 0} received closed bars`
       : state === 'INSUFFICIENT_HISTORY' && snapshot && snapshot.barsProcessed > 0
         ? `INSUFFICIENT HISTORY · ${snapshot.barsProcessed}/${snapshot.requiredBars} bars`
         : SR_VIEW_TITLE[state];

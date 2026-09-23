@@ -68,10 +68,12 @@ export class ChartController {
   }
 
   private static vol(c: Candle) {
-    // Bars without a provider-supplied volume are omitted, not drawn as zero.
-    return c.volume === null
+    // Real volume when supplied, else the source's tick volume (labelled as such in the UI).
+    // Bars with neither are omitted, never drawn as zero.
+    const v = c.volume ?? c.tickVolume ?? null;
+    return v === null
       ? { time: c.time as UTCTimestamp }
-      : { time: c.time as UTCTimestamp, value: c.volume, color: c.close >= c.open ? 'rgba(63,207,124,.35)' : 'rgba(239,93,93,.35)' };
+      : { time: c.time as UTCTimestamp, value: v, color: c.close >= c.open ? 'rgba(63,207,124,.35)' : 'rgba(239,93,93,.35)' };
   }
 
   setData(candles: readonly Candle[]): void {

@@ -6,6 +6,7 @@ import { useActiveInstrument, useMarket } from '../../hooks/useMarket';
 import { usePersistentState } from '../../hooks/usePersistentState';
 import type { Timeframe } from '../../types/market';
 import type { OverlayKind } from '../../types/overlays';
+import { formatPrice, formatVolume } from '../../utils/format';
 import { EmptyState } from '../ui/EmptyState';
 import { Panel } from '../ui/Panel';
 import { useChartController } from './useChartController';
@@ -52,7 +53,11 @@ function InstrumentChart() {
   const providerName = useMarket((s) => s.provider?.name ?? null);
   const [tf, setTf] = usePersistentState<Timeframe>(`tluxe.chart.tf.${def.id}`, DEFAULT_TIMEFRAME, isTimeframe);
   const containerRef = useRef<HTMLDivElement>(null);
-  const { barCount } = useChartController(market, def.id, tf, instrument.priceDecimals, containerRef);
+  const { barCount, lastBar } = useChartController(market, def.id, tf, instrument.priceDecimals, containerRef);
+  const feed = useMarket((s) => s.feed);
+  const d = instrument.priceDecimals;
+  const volKey = lastBar?.volume != null ? 'Vol' : lastBar?.tickVolume != null ? 'Tick vol' : 'Vol';
+  const volVal = lastBar?.volume ?? lastBar?.tickVolume ?? null;
   const empty = barCount === 0;
   const where = instrument.exchange ?? instrument.venue;
 
@@ -61,19 +66,28 @@ function InstrumentChart() {
       id="chart"
       className="chart-panel"
       title={`${instrument.symbol} Price Chart`}
-      subtitle={`${instrument.name} · ${where}${instrument.contract ? ` · ${instrument.contract}` : ''} · ${tf}`}
+      subtitle={`${instrument.name} · ${where}${instrument.contract ? ` · ${instrument.contract}` : ''} · ${tf}${feed?.providerSymbol ? ` · MT5 ${feed.providerSymbol}` : ''}`}
       icon={<ChartCandlestick size={18} />}
       actions={<TimeframeTabs value={tf} onChange={setTf} />}
       bodyClassName="chart-body"
     >
       <div className="chart-legend num" aria-label="Last bar">
         <span className="chart-legend__sym">{instrument.symbol} · {tf}</span>
-        {(['O', 'H', 'L', 'C', 'Vol'] as const).map((k) => (
+        {(
+          [
+            ['O', formatPrice(lastBar?.open ?? null, d)],
+            ['H', formatPrice(lastBar?.high ?? null, d)],
+            ['L', formatPrice(lastBar?.low ?? null, d)],
+            ['C', formatPrice(lastBar?.close ?? null, d)],
+            [volKey, formatVolume(volVal)],
+          ] as const
+        ).map(([k, v]) => (
           <span key={k} className="chart-legend__item">
             <span className="chart-legend__k">{k}</span>
-            <span className="chart-legend__v">—</span>
+            <span className="chart-legend__v">{v}</span>
           </span>
         ))}
+        {lastBar && lastBar.isClosed === false && <span className="chart-legend__k">forming</span>}
         <span className="chart-legend__src">{providerName ?? 'No provider'}</span>
       </div>
       <div className="chart-stage">
