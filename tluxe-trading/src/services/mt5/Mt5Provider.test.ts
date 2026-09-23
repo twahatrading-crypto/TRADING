@@ -405,3 +405,29 @@ describe('Mt5Provider — instrument isolation', () => {
     expect(bridge.calls.every((c) => c.name === 'XAUUSD')).toBe(true);
   });
 });
+
+describe('Mt5Provider — no duplicate polling (HMR / StrictMode safety)', () => {
+  it('connecting twice keeps exactly one polling loop per stream', async () => {
+    vi.useFakeTimers({ now: T0 });
+    try {
+      const bridge = new FakeBridge(T0, SYMBOLS);
+      const health = vi.spyOn(bridge, 'health');
+      const cfg = sanitizeMt5Config({ enabled: true, token: 'x'.repeat(32), healthMs: 1000 });
+      const mt5 = new Mt5Provider(cfg, { client: bridge, now: () => Date.now() });
+      const services = createServices({ ...defaultProviders(), price: [mt5] }, { storage: memoryStorage({ 'tluxe.instrument.v1': 'XAUUSD' }) });
+      const stop1 = connectServices(services);
+      const stop2 = connectServices(services); // e.g. a second mount
+      expect(stop2).toBe(stop1);
+      services.market.connect(); // even a direct provider re-connect must not stack timers
+      health.mockClear();
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(health).toHaveBeenCalledTimes(5);
+      stop1();
+      health.mockClear();
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(health).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

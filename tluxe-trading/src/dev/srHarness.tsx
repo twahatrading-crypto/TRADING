@@ -16,7 +16,7 @@ import { App } from '../app/App';
 import { ServicesProvider } from '../app/ServicesContext';
 import { randomWalk } from '../engines/sr/fixtures/builders';
 import type { MarketDataProvider, MarketDataSink } from '../services/market/MarketDataProvider';
-import { createServices, defaultProviders } from '../services/registry';
+import { connectServices, createServices, defaultProviders } from '../services/registry';
 import type { InstrumentDefinition } from '../types/instruments';
 import type { Timeframe } from '../types/market';
 import { TIMEFRAME_SECONDS } from '../engines/sr/settings';
@@ -47,6 +47,7 @@ class FixtureProvider implements MarketDataProvider {
 }
 
 const services = createServices({ ...defaultProviders(), price: [new FixtureProvider()] }, { storage: null });
+import.meta.hot?.dispose(connectServices(services));
 if (!location.hash) location.hash = '#/engines/support-resistance';
 
 const banner = document.createElement('div');

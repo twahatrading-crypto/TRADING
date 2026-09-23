@@ -87,19 +87,31 @@ function browserStorage(): Pick<Storage, 'getItem' | 'setItem'> | null {
   }
 }
 
-/** Connects providers and keeps the market subscription on the selected instrument. */
+const connected = new WeakMap<Services, () => void>();
+
+/**
+ * Connects providers and keeps the market subscription on the selected instrument.
+ * Idempotent: a second call returns the existing teardown instead of opening
+ * duplicate provider connections / polling loops.
+ */
 export function connectServices(s: Services): () => void {
+  const existing = connected.get(s);
+  if (existing) return existing;
   s.market.connect();
   s.news.connect();
   s.calendar.connect();
   s.market.activate(s.instruments.store.getState().activeId);
   const stop = s.instruments.store.subscribe(() => s.market.activate(s.instruments.store.getState().activeId));
   const stopSR = s.sr.start();
-  return () => {
+  const teardown = () => {
+    if (connected.get(s) !== teardown) return;
+    connected.delete(s);
     stop();
     stopSR();
     s.market.disconnect();
     s.news.disconnect();
     s.calendar.disconnect();
   };
+  connected.set(s, teardown);
+  return teardown;
 }

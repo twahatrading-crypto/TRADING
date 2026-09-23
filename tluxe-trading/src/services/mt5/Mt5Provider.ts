@@ -147,6 +147,7 @@ export class Mt5Provider implements MarketDataProvider {
 
   connect(sink: MarketDataSink): void {
     this.sink = sink;
+    this.disconnect(); // idempotent: never stack a second set of polling timers
     if (!this.autoStart) return;
     void this.pollHealth();
     this.timers.push(
