@@ -1,71 +1,83 @@
-# Trading by TLUXE — standing rules for Claude
+# Trading by TLUXE — permanent project rules for Claude (STRICT)
 
-Scope: this repository's `tluxe-trading/` project ONLY
-(on the user's PC: `C:\Users\twaha\TRADING\tluxe-trading`).
+## 1. The only project you may touch
+`C:\Users\twaha\TRADING\tluxe-trading` (this `tluxe-trading/` folder of the repo, branch `claude/busy-bohr-n02jao`).
+All opening, inspecting, editing, building, running, previewing, testing, restarting, publishing and debugging
+stays inside this project.
 
-## Never touch the old project
-- Do NOT touch, modify, start, stop, reuse, import from, or depend on
-  `C:\Users\twaha\OneDrive\Desktop\xauusd-liquidity-engine` (or any other old trading-engine code).
-- Port 5180 belongs to that old project. TLUXE never uses it, and the bridge does not authorise it.
-- Never kill a Node/Vite/Python process before identifying its command line AND project path.
-  Only ever restart this project's own dev server.
+## 2. Old project: completely off limits
+`C:\Users\twaha\OneDrive\Desktop\xauusd-liquidity-engine` must be treated as if it does not exist.
+Never open, inspect, edit, run, build, preview, import from, copy from, compare with, use as a fallback,
+auto-detect, launch, stop or start it, its processes, or its localhost address.
+If an old-project process or preview is detected, do not interact with it. Report it only if it directly blocks this project.
+Never add or change anything in the old project's files or CLAUDE.md.
 
-## Data integrity (always)
-- Never fabricate market data, show fixture data as live, or claim a connection that does not exist.
-  If MT5 is unavailable, show DATA UNAVAILABLE / OFFLINE. Unknown data stays `null` / `—`.
-- No BUY/SELL signals, no order placement, no auto-trading.
-- Never commit, log, print, screenshot or report secrets (`bridge/mt5/.env`, the bridge token, broker logins).
+## 3. Never open the old preview
+Never open or redirect to `http://localhost:5180` or any preview belonging to xauusd-liquidity-engine.
+The project never auto-opens a browser (`open: false` in `vite.config.ts`).
 
-## Ports
-| What | Address |
-| --- | --- |
-| TLUXE dev server (HMR) | http://localhost:5181 (`npm run dev`, strictPort) |
-| TLUXE production preview | http://localhost:4181 (`npm run preview`) |
-| MT5 bridge (separate process) | http://127.0.0.1:8765 |
+## 4. One active local preview
+- Canonical local preview: **http://localhost:5181** (`npm run dev`, HMR, `strictPort`). Production preview: http://localhost:4181.
+- Before opening or using a preview, verify that the listening process belongs to this project.
+  Never assume a port belongs to this project just because something is listening on it.
+- Exactly ONE TLUXE dev server may run at a time.
 
-The bridge's `TLUXE_BRIDGE_ALLOWED_ORIGINS` must list `http://localhost:5181` and `http://127.0.0.1:5181`
-(plus 4181 for the production preview). A browser origin that is not allowed looks exactly like an
-offline bridge. The bridge logs `Rejected browser origin ...` when that happens.
+## 5. If the preview address changes
+Stop ONLY the previous TLUXE preview process (never the old project's). Start TLUXE at the new address.
+Update every setting that depends on the origin: `vite.config.ts`, the bridge default origins in
+`bridge/mt5/tluxe_mt5_bridge/config.py`, `bridge/mt5/.env.example`, the user's bridge `.env` (give the user the command),
+READMEs, `scripts/preview-check.cjs` and this file. Remove the old TLUXE address when it is no longer needed.
+Open ONLY the newest preview. Leave exactly one TLUXE preview running.
 
-## Permanent rule: local live preview
-1. Keep this project's dev server running with HMR for the whole session (`npm run dev`, port 5181).
-   Check whether it is already up (`curl -s localhost:5181`) before starting it. Never start a second copy.
-2. Every code change must reach the preview through HMR. Restart only when required
-   (vite config, dependencies, env, failed HMR). Never make the user restart it.
-3. If the server stops, restart THIS project's server only.
+## 6. MT5
+- Bridge: **http://127.0.0.1:8765**, a separate process from the frontend (`tluxe-trading\bridge\mt5`).
+- The bridge must allow the current preview origin: `http://localhost:5181`, `http://127.0.0.1:5181`
+  (plus 4181 for the production preview). A refused origin looks exactly like an offline bridge.
+  The bridge logs `Rejected browser origin ...`, and Settings shows which origin is required.
+- Keep the token/security setup (Bearer token ≥32 chars, bound to 127.0.0.1, origin allowlist).
+  Never expose the token in logs, UI, commits, screenshots or reports.
+- REAL MT5 DATA or DATA UNAVAILABLE. Never fabricate market data. Never modify the old project to make MT5 work.
 
-## Permanent rule: ONE canonical Claude preview
-- Canonical artifact: https://claude.ai/artifact/QK44Njt3D8GibYBY5UWepE
-- After every meaningful, verified UI/frontend change, rebuild
-  (`npx vite build --base=./ --outDir <scratchpad>/preview-dist`) and republish to THIS URL,
-  never as a new artifact. Report the new version number.
-- The artifact is a static, hosted preview. It cannot reach the user's Windows MT5 bridge, so it must show
-  DATA UNAVAILABLE / NOT CONNECTED. Never insert fake prices or candles to make it look live.
-  localhost:5181 on the user's PC is the authoritative REAL application.
-- The cloud dev server in this container is not reachable from the user's devices. Say so honestly.
+## 7. Live development (HMR)
+- Keep the TLUXE dev server running. SAVE → HMR → preview updates. Restart only when required
+  (vite config, dependencies, env, failed HMR).
+- No duplicate MT5 connections, polling timers, WebSockets, subscriptions or listeners during HMR:
+  - Providers are connected ONCE in `src/main.tsx` (outside React), with an `import.meta.hot.dispose` teardown.
+    Never connect providers from a React effect.
+  - `connectServices` is idempotent, and `Mt5Provider.connect` clears existing timers.
+  - Candles are upserted by timestamp. Stores are per instrument.
 
-## MT5 bridge rules
-- The bridge is a separate process from the frontend. Keep its token/security configuration as is
-  (Bearer token ≥32 chars, bound to 127.0.0.1, origin allowlist).
-- Providers are connected ONCE in `src/main.tsx` (outside React), with an `import.meta.hot.dispose` teardown.
-  Never connect providers from a React effect.
-- `connectServices` is idempotent, and `Mt5Provider.connect` clears existing timers. So there are never duplicate
-  polling loops, subscriptions or timers after HMR.
-- Candles are upserted by timestamp (no duplicates). Stores are per instrument (no cross-instrument leakage).
+## 8. One canonical Claude preview
+- Canonical: **https://claude.ai/artifact/QK44Njt3D8GibYBY5UWepE**. Update it in place after meaningful, verified UI changes
+  (`npx vite build --base=./ --outDir <scratchpad>/preview-dist`, then republish to this URL). Report its version.
+- If a new URL is ever unavoidable, make it canonical here, remove the old one from docs/config, never open the old one again,
+  and report only the new one.
+- The Claude preview is visual/shareable only. The REAL application is the TLUXE local preview plus the MT5 bridge.
+  The hosted preview cannot reach the user's MT5, so it shows DATA UNAVAILABLE. Never use fake candles or prices to make it look connected.
 
-## Sidebar (must be kept)
+## 9. Sidebar (all pages, via `AppShell`)
 Dashboard · Trading Strategy (Support & Resistance · Liquidity SOON · Order Blocks SOON · Sweep / Reversal SOON) · Settings.
-- `AppShell` wraps every page and stays mounted across routes.
-- Strategy entries live in `src/config/navigation.ts` (`route: null` = disabled SOON).
-  Support & Resistance must open the real S&R page.
+Support & Resistance opens the real S&R page. Entries live in `src/config/navigation.ts` (`route: null` = disabled SOON).
 
-## Automatic verification after every meaningful change
-1. `npm run typecheck`, the relevant tests (`npm test`), and `npm run build`.
-   For bridge changes, also run `python -m unittest discover -s tests` in `bridge/mt5`.
-2. `npm run preview:check`: renders every page, fails on console errors, checks for exactly one bridge
-   polling loop, and confirms HMR works without a full reload or losing state.
-3. Check routing: Dashboard ↔ Support & Resistance via the sidebar.
-4. Check `git status` only shows changes inside `tluxe-trading/` (the old project is untouched).
-5. For market-data changes: confirm REAL MT5 data (with the user, on localhost:5181) before reporting success.
-   Never report LIVE from this container, which cannot reach the user's MT5.
-6. Republish the canonical artifact and report its version.
+## 10. Safety check before any process command
+Before starting or stopping any Node/Vite/Python process, identify its PID, command line, working/project path and port.
+Only act when it is confirmed to belong to `tluxe-trading` (or `tluxe-trading\bridge\mt5` for the MT5 bridge).
+Never kill a process based only on its port number.
+
+## 11. Verification after meaningful changes
+Check: the correct repository and branch · `npm run typecheck` · relevant tests (`npm test`; for bridge changes also
+`python -m unittest discover -s tests` in `bridge/mt5`) · `npm run build` · `npm run preview:check`
+(console errors, routing, HMR, a single polling loop) · the sidebar · the MT5 connection where applicable (REAL data,
+confirmed with the user on localhost:5181, before saying it works) · that only the correct preview is used ·
+that `git status` shows changes only inside `tluxe-trading/` (old project untouched).
+
+## 12. End-of-task report (only these)
+1. Files changed in the NEW project
+2. Current NEW local preview address
+3. Current canonical Claude preview address
+4. MT5 status (if relevant)
+5. Test/build results
+6. Confirmation: OLD PROJECT UNTOUCHED
+
+## Always
+No BUY/SELL signals, no order placement, no auto-trading. Never commit secrets (`bridge/mt5/.env`).

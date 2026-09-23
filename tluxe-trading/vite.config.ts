@@ -3,9 +3,10 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig({
   plugins: [react()],
-  // 5181/4181: TLUXE's own ports (5180 belongs to another project). strictPort: fail loudly instead of drifting.
-  server: { host: true, port: 5181, strictPort: true },
-  preview: { host: true, port: 4181, strictPort: true },
+  // TLUXE's own ports. strictPort: fail loudly instead of drifting to a port another app may use.
+  // open: false: never launch a browser automatically; open http://localhost:5181 yourself.
+  server: { host: true, port: 5181, strictPort: true, open: false },
+  preview: { host: true, port: 4181, strictPort: true, open: false },
   build: {
     target: 'es2022',
     rollupOptions: {
