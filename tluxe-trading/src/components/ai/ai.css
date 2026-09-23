@@ -143,6 +143,7 @@
 .ai__ws dd.is-ok { color: var(--green); }
 .ai__ws dd.is-warn { color: var(--amber); }
 .ai__ws dd.is-off { color: var(--text-3); }
+.ai__ws dd.is-ctx { color: var(--gold-bright); }
 .ai__offline {
   margin: 10px 0 0;
   font-size: var(--fs-xs);

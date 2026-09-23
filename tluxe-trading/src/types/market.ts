@@ -1,3 +1,5 @@
+import type { AssetClass, DataCapability, InstrumentId } from './instruments';
+
 /**
  * Normalized market-data contracts.
  *
@@ -15,16 +17,21 @@ export type ConnectionState =
 
 export type Timeframe = 'M1' | 'M5' | 'M15' | 'M30' | 'H1' | 'H4' | 'D1';
 
+/** Display-ready view of the active instrument (derived from InstrumentDefinition). */
 export interface InstrumentInfo {
-  /** Root symbol, e.g. "GC". */
+  id: InstrumentId;
   symbol: string;
-  /** Contract code if known (e.g. "GCZ6"). Null until a provider supplies it. */
-  contract: string | null;
+  displayName: string;
   name: string;
-  exchange: string;
+  assetClass: AssetClass;
+  /** Listing exchange, or null for OTC / broker / multi-venue instruments. */
+  exchange: string | null;
+  venue: string;
   currency: string;
   /** Price decimals used for display. */
   priceDecimals: number;
+  /** Contract code if known (e.g. "GCZ6"). Null until a provider supplies it. */
+  contract: string | null;
 }
 
 export interface Quote {
@@ -47,14 +54,31 @@ export interface ProviderInfo {
   declaredDelaySec: number | null;
 }
 
+/** Status of one data source (price or depth) for one instrument. */
+export interface FeedStatus {
+  provider: ProviderInfo | null;
+  connection: ConnectionState;
+  lastMessageAt: number | null;
+  error: string | null;
+}
+
+/** Normalized market state for ONE instrument. Every instrument has its own. */
 export interface MarketState {
   instrument: InstrumentInfo;
+  /* Price feed (quotes / candles) — kept flat for quote-bar consumers. */
   provider: ProviderInfo | null;
   connection: ConnectionState;
   quote: Quote;
-  /** Local receipt time of the last provider message (epoch ms). */
+  /** Local receipt time of the last price-feed message (epoch ms). */
   lastMessageAt: number | null;
   error: string | null;
+  /** Depth / order-book feed, independent of the price feed. */
+  depth: FeedStatus & {
+    /** Whether any depth source is mapped for this instrument at all. */
+    supported: boolean;
+  };
+  /** Capabilities currently supplied by connected providers (never assumed). */
+  capabilities: DataCapability[];
 }
 
 /** OHLCV candle. `time` is the bar open time in epoch seconds (UTC). */

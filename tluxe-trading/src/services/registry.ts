@@ -1,17 +1,20 @@
-import { GC_INSTRUMENT } from '../config/instrument';
+import { INSTRUMENTS } from '../config/instruments';
 import type { EconomicEvent } from '../types/calendar';
+import type { InstrumentDefinition } from '../types/instruments';
 import type { NewsItem } from '../types/news';
 import type { ProviderStatus } from '../types/providers';
 import { NullAiProvider, type AiProvider } from './ai/AiProvider';
 import { AiService } from './ai/AiService';
 import { createCalendarService, type CalendarProvider, type CalendarService } from './calendar/CalendarProvider';
 import { NullFeedProvider } from './feed/FeedProvider';
+import { InstrumentSelection } from './instruments/InstrumentSelection';
+import type { DepthProvider } from './market/DepthProvider';
 import { MarketDataService } from './market/MarketDataService';
 import type { MarketDataProvider } from './market/MarketDataProvider';
-import { NullMarketDataProvider } from './market/NullMarketDataProvider';
 import { createNewsService, type NewsProvider, type NewsService } from './news/NewsProvider';
 
 export interface Services {
+  instruments: InstrumentSelection;
   market: MarketDataService;
   news: NewsService;
   calendar: CalendarService;
@@ -21,29 +24,40 @@ export interface Services {
 }
 
 export interface ProviderSet {
-  market: MarketDataProvider;
+  /** Price feeds in priority order (e.g. futures vendor, MT5, crypto exchange). */
+  price: MarketDataProvider[];
+  /** Order-book / depth feeds (e.g. Bookmap). Independent of price feeds. */
+  depth: DepthProvider[];
   news: NewsProvider;
   calendar: CalendarProvider;
   ai: AiProvider;
 }
 
+export interface ServiceOptions {
+  instruments?: readonly InstrumentDefinition[];
+  storage?: Pick<Storage, 'getItem' | 'setItem'> | null;
+}
+
 /**
- * Phase 1 wiring: no real providers exist yet, so every slot uses its Null
- * implementation. Connecting a real feed later = implementing the interface
- * and swapping it in here — no dashboard changes required.
+ * Phase 1 wiring: no real providers exist yet. Price and depth lists are empty,
+ * so every instrument reports DATA UNAVAILABLE / Provider: Not Connected.
+ * Connecting MT5 or Bookmap later = implement the interface and add it here.
  */
 export function defaultProviders(): ProviderSet {
   return {
-    market: new NullMarketDataProvider(),
+    price: [],
+    depth: [],
     news: new NullFeedProvider<NewsItem>(),
     calendar: new NullFeedProvider<EconomicEvent>(),
     ai: new NullAiProvider(),
   };
 }
 
-export function createServices(providers: ProviderSet = defaultProviders()): Services {
+export function createServices(providers: ProviderSet = defaultProviders(), opts: ServiceOptions = {}): Services {
+  const instruments = opts.instruments ?? INSTRUMENTS;
   return {
-    market: new MarketDataService(providers.market, GC_INSTRUMENT),
+    instruments: new InstrumentSelection(instruments, opts.storage),
+    market: new MarketDataService({ instruments, price: providers.price, depth: providers.depth }),
     news: createNewsService(providers.news),
     calendar: createCalendarService(providers.calendar),
     ai: new AiService(providers.ai),
@@ -51,11 +65,15 @@ export function createServices(providers: ProviderSet = defaultProviders()): Ser
   };
 }
 
+/** Connects providers and keeps the market subscription on the selected instrument. */
 export function connectServices(s: Services): () => void {
   s.market.connect();
   s.news.connect();
   s.calendar.connect();
+  s.market.activate(s.instruments.store.getState().activeId);
+  const stop = s.instruments.store.subscribe(() => s.market.activate(s.instruments.store.getState().activeId));
   return () => {
+    stop();
     s.market.disconnect();
     s.news.disconnect();
     s.calendar.disconnect();

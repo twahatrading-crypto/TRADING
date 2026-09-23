@@ -24,6 +24,7 @@ export const AI_NOT_CONNECTED_NOTICE =
 export class AiService {
   readonly store: Store<AiState>;
   private seq = 0;
+  private instrumentId: string | null = null;
 
   constructor(private readonly provider: AiProvider, private readonly clock: () => number = Date.now) {
     this.store = createStore<AiState>({
@@ -39,6 +40,11 @@ export class AiService {
     this.store.setState((s) => ({ ...s, messages: [...s.messages, msg] }));
   }
 
+  /** The dashboard's active instrument; every request carries it. */
+  setInstrument(instrumentId: string): void {
+    this.instrumentId = instrumentId;
+  }
+
   async send(tab: AiTab, text: string, action: AiActionId | null = null): Promise<void> {
     const trimmed = text.trim();
     if (!trimmed || this.store.getState().pending) return;
@@ -51,7 +57,7 @@ export class AiService {
     }
     this.store.setState({ pending: true });
     try {
-      const res = await this.provider.send({ tab, action, text: trimmed });
+      const res = await this.provider.send({ instrumentId: this.instrumentId, tab, action, text: trimmed });
       this.push('assistant', res.text);
     } catch (err) {
       this.push('system', `Request failed: ${err instanceof Error ? err.message : String(err)}`);

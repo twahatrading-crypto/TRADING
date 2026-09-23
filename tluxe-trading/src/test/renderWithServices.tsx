@@ -1,10 +1,20 @@
 import { render } from '@testing-library/react';
 import type { ReactElement } from 'react';
 import { ServicesProvider } from '../app/ServicesContext';
-import { connectServices, createServices, defaultProviders, type ProviderSet, type Services } from '../services/registry';
+import {
+  connectServices,
+  createServices,
+  defaultProviders,
+  type ProviderSet,
+  type ServiceOptions,
+  type Services,
+} from '../services/registry';
+import { memoryStorage } from './providers';
 
-export function renderWithServices(ui: ReactElement, providers: Partial<ProviderSet> = {}) {
-  const services: Services = createServices({ ...defaultProviders(), ...providers });
+/** Renders with real services wired to (by default) no providers and isolated storage. */
+export function renderWithServices(ui: ReactElement, providers: Partial<ProviderSet> = {}, opts: ServiceOptions = {}) {
+  const storage = opts.storage === undefined ? memoryStorage() : opts.storage;
+  const services: Services = createServices({ ...defaultProviders(), ...providers }, { ...opts, storage });
   connectServices(services);
-  return { services, ...render(<ServicesProvider services={services}>{ui}</ServicesProvider>) };
+  return { services, storage, ...render(<ServicesProvider services={services}>{ui}</ServicesProvider>) };
 }

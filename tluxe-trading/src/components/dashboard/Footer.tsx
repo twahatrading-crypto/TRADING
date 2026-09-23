@@ -1,9 +1,8 @@
-import { useServices } from '../../app/servicesContext';
-import { useStore } from '../../store/createStore';
+import { useMarket } from '../../hooks/useMarket';
 
 export function Footer() {
-  const { market } = useServices();
-  const connection = useStore(market.store, (s) => s.connection);
+  const connection = useMarket((s) => s.connection);
+  const symbol = useMarket((s) => s.instrument.symbol);
   const live = connection === 'LIVE' || connection === 'DELAYED';
   return (
     <footer className="foot">
@@ -14,7 +13,7 @@ export function Footer() {
         <span>v0.1</span>
         <span className="foot__right">
           <span className={`dot ${live ? 'dot--ok' : 'dot--warn'}`} aria-hidden="true" />
-          {live ? 'Market data connected' : 'Market data not connected'}
+          {symbol} market data {live ? 'connected' : 'not connected'}
         </span>
       </div>
     </footer>

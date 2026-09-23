@@ -1,25 +1,29 @@
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import type { MarketDataService } from '../../services/market/MarketDataService';
+import type { InstrumentId } from '../../types/instruments';
 import type { Timeframe } from '../../types/market';
 import type { ChartController } from './ChartController';
 
 /**
- * Binds a timeframe's candle stream to a ChartController. React only learns
+ * Binds one instrument + timeframe candle stream to a ChartController. Changing
+ * either tears the chart down, so bars from one instrument can never remain
+ * on screen for another. React only learns
  * whether data exists (to toggle the empty state); bar updates bypass React.
  */
 export function useChartController(
   market: MarketDataService,
+  instrumentId: InstrumentId,
   timeframe: Timeframe,
   priceDecimals: number,
   containerRef: RefObject<HTMLDivElement | null>,
 ): { barCount: number } {
-  const [barCount, setBarCount] = useState(() => market.getCandles(timeframe).length);
+  const [barCount, setBarCount] = useState(() => market.getCandles(instrumentId, timeframe).length);
   const controllerRef = useRef<ChartController | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     let loading: Promise<ChartController | null> | null = null;
-    setBarCount(market.getCandles(timeframe).length);
+    setBarCount(market.getCandles(instrumentId, timeframe).length);
 
     const ensure = () => {
       if (controllerRef.current) return Promise.resolve(controllerRef.current);
@@ -33,7 +37,7 @@ export function useChartController(
       return loading;
     };
 
-    const unsubscribe = market.subscribeCandles(timeframe, (candles, mode) => {
+    const unsubscribe = market.subscribeCandles(instrumentId, timeframe, (candles, mode) => {
       setBarCount(candles.length);
       if (!candles.length) return;
       void ensure().then((ctl) => {
@@ -44,7 +48,7 @@ export function useChartController(
       });
     });
 
-    const existing = market.getCandles(timeframe);
+    const existing = market.getCandles(instrumentId, timeframe);
     if (existing.length) void ensure().then((ctl) => ctl?.setData(existing));
 
     return () => {
@@ -53,7 +57,7 @@ export function useChartController(
       controllerRef.current?.destroy();
       controllerRef.current = null;
     };
-  }, [market, timeframe, priceDecimals, containerRef]);
+  }, [market, instrumentId, timeframe, priceDecimals, containerRef]);
 
   return { barCount };
 }

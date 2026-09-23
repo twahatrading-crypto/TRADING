@@ -1,6 +1,7 @@
 import { HeartPulse } from 'lucide-react';
 import { useServices } from '../../app/servicesContext';
 import { ENGINES } from '../../config/engines';
+import { useActiveInstrument, useMarket } from '../../hooks/useMarket';
 import { useOnline } from '../../hooks/useOnline';
 import { buildSystemStatus, STATUS_TONE } from '../../services/status/systemStatus';
 import { useStore } from '../../store/createStore';
@@ -31,15 +32,21 @@ export function StatusList({ items }: { items: SystemStatusItem[] }) {
 export function SystemStatusPanel() {
   const services = useServices();
   const online = useOnline();
-  const connection = useStore(services.market.store, (s) => s.connection);
-  const marketError = useStore(services.market.store, (s) => s.error);
+  const symbol = useMarket((s) => s.instrument.symbol);
+  const connection = useMarket((s) => s.connection);
+  const priceError = useMarket((s) => s.error);
+  const def = useActiveInstrument();
+  const depth = useMarket((s) => s.depth);
   const ai = useStore(services.ai.store, (s) => s.status);
   const news = useStore(services.news.store, (s) => s.status);
   const calendar = useStore(services.calendar.store, (s) => s.status);
 
   const items = buildSystemStatus({
     browserOnline: online,
-    market: { connection, error: marketError },
+    instrument: symbol,
+    // A category with no mappings (e.g. NASDAQ) has no price source until a variant is chosen.
+    price: { connection, error: priceError, supported: def.providerMappings.some((m) => m.role === 'price') },
+    depth: { connection: depth.connection, error: depth.error, supported: depth.supported },
     ai,
     database: services.databaseStatus,
     news,

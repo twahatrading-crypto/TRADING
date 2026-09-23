@@ -1,22 +1,27 @@
-import type { Candle, ConnectionState, InstrumentInfo, ProviderInfo, Quote, Timeframe } from '../../types/market';
+import type { DataCapability, InstrumentDefinition, InstrumentId, ProviderFamily, ProviderMapping } from '../../types/instruments';
+import type { Candle, ConnectionState, ProviderInfo, Quote, Timeframe } from '../../types/market';
 
-/** Callbacks a provider uses to push raw data into the normalization layer. */
+/** Callbacks a price adapter uses to push data. Every call names the canonical instrument. */
 export interface MarketDataSink {
-  connection(state: ConnectionState, error?: string | null): void;
-  /** Partial quote update; omitted fields keep their previous value. */
-  quote(update: Partial<Quote>, instrument?: Partial<Pick<InstrumentInfo, 'contract'>>): void;
-  candles(timeframe: Timeframe, candles: Candle[], mode: 'replace' | 'upsert'): void;
+  connection(instrumentId: InstrumentId, state: ConnectionState, error?: string | null): void;
+  /** Capabilities the provider actually supplies right now (intersected with the mapping). */
+  capabilities(instrumentId: InstrumentId, caps: DataCapability[]): void;
+  /** Partial quote update, already in canonical orientation. Omitted fields keep their value. */
+  quote(instrumentId: InstrumentId, update: Partial<Quote>, meta?: { contract?: string | null }): void;
+  candles(instrumentId: InstrumentId, timeframe: Timeframe, candles: Candle[], mode: 'replace' | 'upsert'): void;
 }
 
 /**
- * Contract every market-data adapter implements (broker, exchange, vendor).
- * Adapters must only report LIVE/DELAYED when the upstream feed says so.
+ * Price-feed adapter contract (quotes / candles / trades): MT5, a futures
+ * vendor, a crypto exchange… Adapters resolve their own provider symbols via
+ * `resolveProviderSymbol` and must only report LIVE/DELAYED when upstream does.
  */
 export interface MarketDataProvider {
-  /** Null when no provider is configured. */
-  readonly info: ProviderInfo | null;
-  connect(symbol: string, sink: MarketDataSink): void;
+  readonly info: ProviderInfo;
+  readonly family: ProviderFamily;
+  connect(sink: MarketDataSink): void;
   disconnect(): void;
-  /** Ask for history on a timeframe; data arrives through `sink.candles`. */
-  requestCandles(timeframe: Timeframe): void;
+  subscribe(instrument: InstrumentDefinition, mapping: ProviderMapping): void;
+  unsubscribe(instrumentId: InstrumentId): void;
+  requestCandles(instrumentId: InstrumentId, timeframe: Timeframe): void;
 }

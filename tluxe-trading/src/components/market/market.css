@@ -35,6 +35,7 @@
 .mbar__conn { grid-area: conn; }
 .hclock { grid-area: clock; }
 
+.mbar__instrument { padding-top: 4px !important; padding-bottom: 4px !important; }
 .mbar__inst-name {
   display: flex;
   align-items: baseline;
@@ -140,6 +141,21 @@
   color: var(--text-2);
   font-weight: 600;
 }
+.mbar__conn {
+  display: grid !important;
+  grid-template-columns: auto auto;
+  grid-template-rows: auto auto;
+  align-content: center;
+  column-gap: 14px;
+  row-gap: 3px;
+}
+.mbar__conn .pill { justify-self: start; }
+.mbar__hours {
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  white-space: nowrap;
+}
+.mbar__hours.is-open { color: var(--green); }
 
 .hclock {
   text-align: right;
@@ -152,7 +168,7 @@
 .hclock__zone { font-size: var(--fs-2xs); color: var(--text-3); margin-top: 1px; }
 
 /* Laptop: quote fields become a second strip */
-@media (max-width: 1439px) {
+@media (max-width: 1599px) {
   .mbar__inner {
     grid-template-columns: auto auto minmax(0, 1fr) auto auto;
     grid-template-areas:
@@ -171,15 +187,17 @@
   }
   .mbar__field:first-child { padding-left: 0; }
   .mbar__value { font-size: var(--fs-md); }
+  .mbar__unavail { white-space: normal; line-height: 1.15; }
 }
 
-/* Tablet */
-@media (max-width: 1023px) {
+/* Tablet (768–1199): brand/clock, then instrument + price, then status, then fields */
+@media (max-width: 1199px) {
   .mbar__inner {
     grid-template-columns: auto minmax(0, 1fr) auto;
     grid-template-areas:
-      'brand  price  clock'
-      'inst   inst   conn'
+      'brand  brand  clock'
+      'inst   price  price'
+      'conn   conn   conn'
       'fields fields fields';
   }
   .mbar__instrument {
@@ -187,12 +205,18 @@
     border-top: 1px solid var(--border);
     padding-left: 0 !important;
   }
+  .mbar__price { border-top: 1px solid var(--border); }
+  .mbar__unavail { white-space: normal; }
   .mbar__conn {
+    border-left: 0 !important;
     border-top: 1px solid var(--border);
-    flex-direction: row !important;
+    grid-template-columns: repeat(4, auto) !important;
+    grid-template-rows: auto !important;
+    justify-content: start;
     align-items: center;
-    gap: 10px;
+    padding-left: 0 !important;
   }
+  .hclock__date { display: none; }
 }
 
 /* Mobile: stacked quote card */
@@ -217,7 +241,7 @@
   .hclock__time { font-size: 16px; }
   .mbar__instrument { border-top: 1px solid var(--border); padding-bottom: 2px !important; }
   .mbar__price { padding-top: 0 !important; }
-  .mbar__conn { border-top: 1px solid var(--border); justify-content: space-between; }
+  .mbar__conn { border-top: 1px solid var(--border); grid-template-columns: auto 1fr !important; grid-template-rows: auto auto !important; }
   .mbar__unavail { font-size: 18px; white-space: normal; }
   .mbar__subtle { white-space: normal; }
   .mbar__fields {

@@ -3,9 +3,19 @@ import type { ConnectionState } from '../../types/market';
 import type { ProviderStatus } from '../../types/providers';
 import type { StatusTone, StatusValue, SystemStatusItem } from '../../types/status';
 
+export interface FeedInput {
+  connection: ConnectionState;
+  error: string | null;
+  /** Whether any source of this kind is mapped for the instrument. */
+  supported: boolean;
+}
+
 export interface StatusInputs {
   browserOnline: boolean;
-  market: { connection: ConnectionState; error: string | null };
+  /** Symbol of the active instrument, e.g. "XAUUSD". */
+  instrument: string;
+  price: FeedInput;
+  depth: FeedInput;
   ai: ProviderStatus;
   database: ProviderStatus;
   news: ProviderStatus;
@@ -13,7 +23,7 @@ export interface StatusInputs {
   engines: EngineConfig[];
 }
 
-const MARKET_DETAIL: Record<ConnectionState, string> = {
+const FEED_DETAIL: Record<ConnectionState, string> = {
   LIVE: 'Live',
   DELAYED: 'Delayed',
   CONNECTING: 'Connecting…',
@@ -32,10 +42,12 @@ export function providerStatusValue(status: ProviderStatus): StatusValue {
   }
 }
 
-export function marketStatusValue(connection: ConnectionState, error: string | null): StatusValue {
-  if (error) return 'ERROR';
-  return connection === 'LIVE' || connection === 'DELAYED' ? 'CONNECTED' : 'NOT CONNECTED';
+export function feedStatusValue(feed: FeedInput): StatusValue {
+  if (!feed.supported) return 'UNSUPPORTED';
+  if (feed.error) return 'ERROR';
+  return feed.connection === 'LIVE' || feed.connection === 'DELAYED' ? 'CONNECTED' : 'NOT CONNECTED';
 }
+
 
 export function buildSystemStatus(i: StatusInputs): SystemStatusItem[] {
   const provider = (id: string, label: string, s: ProviderStatus): SystemStatusItem => ({
@@ -44,14 +56,16 @@ export function buildSystemStatus(i: StatusInputs): SystemStatusItem[] {
     value: providerStatusValue(s),
     detail: s === 'CONNECTING' ? 'Connecting…' : undefined,
   });
+  const feed = (id: string, label: string, f: FeedInput, unsupported: string): SystemStatusItem => ({
+    id,
+    label: `${label} · ${i.instrument}`,
+    value: feedStatusValue(f),
+    detail: !f.supported ? unsupported : (f.error ?? FEED_DETAIL[f.connection]),
+  });
   return [
     { id: 'app', label: 'Application', value: i.browserOnline ? 'ONLINE' : 'OFFLINE', detail: i.browserOnline ? undefined : 'Browser offline' },
-    {
-      id: 'market',
-      label: 'Market Data',
-      value: marketStatusValue(i.market.connection, i.market.error),
-      detail: i.market.error ?? MARKET_DETAIL[i.market.connection],
-    },
+    feed('price', 'Price Data', i.price, 'No price source mapped for this instrument'),
+    feed('depth', 'Depth Data', i.depth, 'No depth / order-book source exists for this instrument'),
     provider('ai', 'AI', i.ai),
     provider('database', 'Database', i.database),
     provider('news', 'News', i.news),
@@ -73,4 +87,5 @@ export const STATUS_TONE: Record<StatusValue, StatusTone> = {
   ERROR: 'bad',
   'NOT CONNECTED': 'warn',
   DISABLED: 'off',
+  UNSUPPORTED: 'off',
 };

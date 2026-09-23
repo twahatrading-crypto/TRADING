@@ -18,17 +18,31 @@ No provider is connected yet. Every provider slot uses a `Null*` implementation 
 reports "not connected" and emits nothing. Unknown values are `null` and render as `—`.
 Nothing is simulated.
 
+## Instruments
+
+Canonical registry: `src/config/instruments.ts` — GC, SI (COMEX futures), XAUUSD,
+XAGUSD (MT5 spot/CFD), EURUSD, GBPUSD, AUDUSD, USDCAD (MT5), BTCUSD, ETHUSD, SOLUSD
+(provider-dependent), DXY and the NASDAQ category. Internal ids are never assumed to
+equal a provider's symbol: mappings carry discovery hints only, and
+`services/market/symbolMapping.ts` resolves the real symbol (override → fixed →
+discovered from the provider's list; ambiguity is reported, reciprocal FX pairs such
+as CADUSD are mapped onto USDCAD as inverted).
+
+Every instrument has its own market state with independent **price** and **depth**
+feed status. The selected instrument is persisted and drives the whole dashboard.
+
 ## Connecting a real provider later
 
-Implement the interface and swap it in `src/services/registry.ts` (`defaultProviders`):
+Implement the interface and add it in `src/services/registry.ts` (`defaultProviders`):
 
-| Slot     | Interface                                              |
-| -------- | ------------------------------------------------------ |
-| Market   | `services/market/MarketDataProvider.ts`                |
-| News     | `services/news/NewsProvider.ts` (`FeedProvider<NewsItem>`) |
+| Slot     | Interface                                                              |
+| -------- | ---------------------------------------------------------------------- |
+| Price    | `services/market/MarketDataProvider.ts` (family: `mt5`, `futures-feed`, `crypto-feed`, `index-feed`) |
+| Depth    | `services/market/DepthProvider.ts` (family: `depth-feed`, e.g. Bookmap) |
+| News     | `services/news/NewsProvider.ts` (`FeedProvider<NewsItem>`)             |
 | Calendar | `services/calendar/CalendarProvider.ts` (`FeedProvider<EconomicEvent>`) |
-| AI       | `services/ai/AiProvider.ts`                            |
+| AI       | `services/ai/AiProvider.ts` (requests carry `instrumentId`)             |
 
-Flow: provider → normalization (`normalize.ts`, feed `normalize*`) → store → UI.
-Candles bypass React and go straight to `components/chart/ChartController.ts`, which
-also defines `setOverlays()` for future engine output (`types/overlays.ts`).
+Providers can only update instruments routed to them, and only with capabilities
+their mapping declares. Future engines implement `types/engine.ts` and run through
+`services/engines/runEngine.ts`, which requires an explicit `instrumentId`.

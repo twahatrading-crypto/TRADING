@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { ENGINES } from '../../config/engines';
-import { buildSystemStatus, marketStatusValue, STATUS_TONE, type StatusInputs } from './systemStatus';
+import { buildSystemStatus, feedStatusValue, STATUS_TONE, type StatusInputs } from './systemStatus';
 
 const phase1: StatusInputs = {
   browserOnline: true,
-  market: { connection: 'UNAVAILABLE', error: null },
+  instrument: 'GC',
+  price: { connection: 'UNAVAILABLE', error: null, supported: true },
+  depth: { connection: 'UNAVAILABLE', error: null, supported: true },
   ai: 'NOT_CONNECTED',
   database: 'NOT_CONNECTED',
   news: 'NOT_CONNECTED',
@@ -18,7 +20,8 @@ describe('buildSystemStatus — Phase 1 defaults', () => {
   it('matches the truthful Phase 1 state', () => {
     expect(byLabel(phase1)).toEqual({
       Application: 'ONLINE',
-      'Market Data': 'NOT CONNECTED',
+      'Price Data · GC': 'NOT CONNECTED',
+      'Depth Data · GC': 'NOT CONNECTED',
       AI: 'NOT CONNECTED',
       Database: 'NOT CONNECTED',
       News: 'NOT CONNECTED',
@@ -36,20 +39,38 @@ describe('buildSystemStatus — Phase 1 defaults', () => {
   });
 });
 
+describe('price and depth are reported independently per instrument', () => {
+  it('MT5-style price connected does not imply depth', () => {
+    const v = byLabel({ ...phase1, instrument: 'GC', price: { connection: 'LIVE', error: null, supported: true } });
+    expect(v['Price Data · GC']).toBe('CONNECTED');
+    expect(v['Depth Data · GC']).toBe('NOT CONNECTED');
+  });
+
+  it('instruments without any depth source report UNSUPPORTED, not NOT CONNECTED', () => {
+    const v = byLabel({ ...phase1, instrument: 'EURUSD', depth: { connection: 'UNAVAILABLE', error: null, supported: false } });
+    expect(v['Depth Data · EURUSD']).toBe('UNSUPPORTED');
+  });
+
+  it('labels rows with the active instrument', () => {
+    expect(Object.keys(byLabel({ ...phase1, instrument: 'XAUUSD' }))).toContain('Price Data · XAUUSD');
+  });
+});
+
 describe('status mapping', () => {
   it('application follows browser connectivity', () => {
     expect(byLabel({ ...phase1, browserOnline: false }).Application).toBe('OFFLINE');
   });
 
   it.each([
-    ['LIVE', null, 'CONNECTED'],
-    ['DELAYED', null, 'CONNECTED'],
-    ['CONNECTING', null, 'NOT CONNECTED'],
-    ['DISCONNECTED', null, 'NOT CONNECTED'],
-    ['UNAVAILABLE', null, 'NOT CONNECTED'],
-    ['LIVE', 'auth failed', 'ERROR'],
-  ] as const)('market %s / error=%s → %s', (conn, err, out) => {
-    expect(marketStatusValue(conn, err)).toBe(out);
+    ['LIVE', null, true, 'CONNECTED'],
+    ['DELAYED', null, true, 'CONNECTED'],
+    ['CONNECTING', null, true, 'NOT CONNECTED'],
+    ['DISCONNECTED', null, true, 'NOT CONNECTED'],
+    ['UNAVAILABLE', null, true, 'NOT CONNECTED'],
+    ['LIVE', 'auth failed', true, 'ERROR'],
+    ['LIVE', null, false, 'UNSUPPORTED'],
+  ] as const)('feed %s / error=%s / supported=%s → %s', (connection, error, supported, out) => {
+    expect(feedStatusValue({ connection, error, supported })).toBe(out);
   });
 
   it('provider errors surface as ERROR', () => {
@@ -64,6 +85,7 @@ describe('status mapping', () => {
   it('maps every value to a tone', () => {
     expect(STATUS_TONE['NOT CONNECTED']).toBe('warn');
     expect(STATUS_TONE.DISABLED).toBe('off');
+    expect(STATUS_TONE.UNSUPPORTED).toBe('off');
     expect(STATUS_TONE.CONNECTED).toBe('ok');
   });
 });

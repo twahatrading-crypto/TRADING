@@ -2,6 +2,8 @@ import { CalendarDays, CalendarX2 } from 'lucide-react';
 import { useState } from 'react';
 import { useServices } from '../../app/servicesContext';
 import { useDisplayTimeZone } from '../../hooks/useDisplayTimeZone';
+import { useActiveInstrument } from '../../hooks/useMarket';
+import { eventsForInstrument } from '../../utils/instrumentContext';
 import { useStore } from '../../store/createStore';
 import type { EconomicEvent, EventImportance } from '../../types/calendar';
 import { formatHm24, formatShortDate, UNKNOWN } from '../../utils/format';
@@ -64,14 +66,16 @@ export function CalendarPanel() {
   const snap = useStore(calendar.store, (s) => s);
   const tz = useDisplayTimeZone();
   const [filter, setFilter] = useState<Filter>('ALL');
+  const def = useActiveInstrument();
   const connected = snap.status === 'CONNECTED';
-  const events = filter === 'ALL' ? snap.items : snap.items.filter((e) => e.importance === filter);
+  const relevant = eventsForInstrument(snap.items, def);
+  const events = filter === 'ALL' ? relevant : relevant.filter((e) => e.importance === filter);
 
   return (
     <Panel
       id="calendar"
       title="Economic Calendar"
-      subtitle={connected ? `Source: ${snap.providerName}` : 'Provider: Not Connected'}
+      subtitle={`${def.shortName} · ${def.calendarCurrencies.join(', ')} releases · ${connected ? `Source: ${snap.providerName}` : 'Provider: Not Connected'}`}
       icon={<CalendarDays size={18} />}
       className="cal-panel"
     >

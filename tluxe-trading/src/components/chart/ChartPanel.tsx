@@ -2,7 +2,7 @@ import { ChartCandlestick, Unplug } from 'lucide-react';
 import { useRef } from 'react';
 import { useServices } from '../../app/servicesContext';
 import { DEFAULT_TIMEFRAME, TIMEFRAMES } from '../../config/instrument';
-import { useMarket } from '../../hooks/useMarket';
+import { useActiveInstrument, useMarket } from '../../hooks/useMarket';
 import { usePersistentState } from '../../hooks/usePersistentState';
 import type { Timeframe } from '../../types/market';
 import type { OverlayKind } from '../../types/overlays';
@@ -40,20 +40,28 @@ export function TimeframeTabs({ value, onChange }: { value: Timeframe; onChange:
 }
 
 export function ChartPanel() {
+  const def = useActiveInstrument();
+  // Remount per instrument: timeframe preference and chart state are per symbol.
+  return <InstrumentChart key={def.id} />;
+}
+
+function InstrumentChart() {
   const { market } = useServices();
+  const def = useActiveInstrument();
   const instrument = useMarket((s) => s.instrument);
   const providerName = useMarket((s) => s.provider?.name ?? null);
-  const [tf, setTf] = usePersistentState<Timeframe>('tluxe.chart.tf', DEFAULT_TIMEFRAME, isTimeframe);
+  const [tf, setTf] = usePersistentState<Timeframe>(`tluxe.chart.tf.${def.id}`, DEFAULT_TIMEFRAME, isTimeframe);
   const containerRef = useRef<HTMLDivElement>(null);
-  const { barCount } = useChartController(market, tf, instrument.priceDecimals, containerRef);
+  const { barCount } = useChartController(market, def.id, tf, instrument.priceDecimals, containerRef);
   const empty = barCount === 0;
+  const where = instrument.exchange ?? instrument.venue;
 
   return (
     <Panel
       id="chart"
       className="chart-panel"
-      title="GC Price Chart"
-      subtitle={`${instrument.name} · ${instrument.contract ?? 'front month'} · ${tf}`}
+      title={`${instrument.symbol} Price Chart`}
+      subtitle={`${instrument.name} · ${where}${instrument.contract ? ` · ${instrument.contract}` : ''} · ${tf}`}
       icon={<ChartCandlestick size={18} />}
       actions={<TimeframeTabs value={tf} onChange={setTf} />}
       bodyClassName="chart-body"
@@ -76,7 +84,11 @@ export function ChartPanel() {
             <EmptyState
               icon={<Unplug size={18} />}
               title="MARKET DATA NOT CONNECTED"
-              message="Connect a market-data provider to stream GC OHLCV candles. No simulated candles are displayed."
+              message={
+                def.tradable
+                  ? `Connect a market-data provider to stream ${instrument.symbol} OHLCV candles. No simulated candles are displayed.`
+                  : `${instrument.symbol} is a category. Candles appear once a provider maps it to a specific instrument (${(def.variants ?? []).map((v) => v.label).join(', ')}).`
+              }
               meta={`Provider: ${providerName ?? 'Not Connected'} · Timeframe: ${tf}`}
             />
           </div>

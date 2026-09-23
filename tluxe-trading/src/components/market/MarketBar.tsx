@@ -1,12 +1,15 @@
 import { QUOTE_STALE_AFTER_MS } from '../../config/instrument';
-import { useMarket } from '../../hooks/useMarket';
+import { UPCOMING_WINDOW_MS } from '../../config/sessions';
+import { useActiveInstrument, useMarket } from '../../hooks/useMarket';
 import { CONNECTION_LABEL, getQuoteDisplayMode, type QuoteDisplayMode } from '../../services/market/normalize';
 import { useNow } from '../../store/clock';
 import type { ConnectionState, MarketState } from '../../types/market';
 import { directionOf, formatPercent, formatPrice, formatSigned, formatVolume, UNKNOWN } from '../../utils/format';
 import { Logo } from '../branding/Logo';
 import { StatusPill } from '../ui/StatusPill';
+import { getSessionState } from '../../utils/sessions';
 import { HeaderClock } from './HeaderClock';
+import { SymbolSelector } from './SymbolSelector';
 import './market.css';
 
 const CONNECTION_TONE: Record<ConnectionState, 'ok' | 'warn' | 'bad' | 'off' | 'info'> = {
@@ -33,7 +36,9 @@ export function QuoteBlock({ state, mode }: { state: MarketState; mode: QuoteDis
   if (mode === 'unavailable' || mode === 'connecting') {
     return (
       <div className="mbar__price mbar__price--empty" data-testid="quote-unavailable">
-        <span className="mbar__unavail">{mode === 'connecting' ? 'GC CONNECTING…' : 'GC DATA UNAVAILABLE'}</span>
+        <span className="mbar__unavail">
+          {instrument.symbol} {mode === 'connecting' ? 'CONNECTING…' : 'DATA UNAVAILABLE'}
+        </span>
         <span className="mbar__subtle">{mode === 'connecting' ? 'Waiting for first quote' : 'Awaiting market-data provider'}</span>
       </div>
     );
@@ -50,33 +55,49 @@ export function QuoteBlock({ state, mode }: { state: MarketState; mode: QuoteDis
   );
 }
 
+/** Market hours for the active instrument, from its own schedule (never assumed). */
+export function MarketHours({ now }: { now: number }) {
+  const def = useActiveInstrument();
+  if (def.tradingHours === '24/7') return <span className="mbar__hours is-open">Market open · 24/7</span>;
+  if (def.tradingHours === null) return <span className="mbar__hours">Hours: provider-dependent</span>;
+  const st = getSessionState(def.tradingHours, now, UPCOMING_WINDOW_MS);
+  const open = st.status === 'OPEN';
+  return (
+    <span className={`mbar__hours ${open ? 'is-open' : ''}`} title={def.tradingHours.rule}>
+      Market {open ? 'open' : 'closed'} · regular hours
+    </span>
+  );
+}
+
+const DEPTH_LABEL: Record<ConnectionState, string> = {
+  LIVE: 'Connected',
+  DELAYED: 'Delayed',
+  CONNECTING: 'Connecting',
+  DISCONNECTED: 'Disconnected',
+  UNAVAILABLE: 'Not connected',
+};
+
 export function MarketBar() {
   const state = useMarket((s) => s);
   const now = useNow('second');
   const mode = getQuoteDisplayMode(state, now, QUOTE_STALE_AFTER_MS);
-  const { quote, instrument, provider, connection } = state;
+  const { quote, instrument, provider, connection, depth } = state;
   const d = instrument.priceDecimals;
 
   return (
-    <header className="mbar" aria-label="GC market bar">
+    <header className="mbar" aria-label="Market bar">
       <div className="mbar__inner">
         <div className="mbar__brand">
           <Logo />
         </div>
 
         <div className="mbar__instrument">
-          <div className="mbar__inst-name">
-            <span className="mbar__sym">{instrument.symbol}</span>
-            <span className="mbar__inst-title">{instrument.name}</span>
-          </div>
-          <div className="mbar__inst-meta">
-            {instrument.exchange} • {instrument.currency} • Contract {instrument.contract ?? '—'}
-          </div>
+          <SymbolSelector />
         </div>
 
-        <QuoteBlock state={state} mode={mode} />
+        <QuoteBlock key={instrument.id} state={state} mode={mode} />
 
-        <div className="mbar__fields">
+        <div className="mbar__fields" key={`f-${instrument.id}`}>
           <Field label="Bid" value={formatPrice(quote.bid, d)} />
           <Field label="Ask" value={formatPrice(quote.ask, d)} />
           <Field label="High" value={formatPrice(quote.high, d)} />
@@ -94,6 +115,10 @@ export function MarketBar() {
           <span className="mbar__provider">
             Provider: <strong>{provider?.name ?? 'Not Connected'}</strong>
           </span>
+          <span className="mbar__provider mbar__depth" data-testid="depth-status">
+            Depth: <strong>{depth.supported ? DEPTH_LABEL[depth.connection] : 'Unsupported'}</strong>
+          </span>
+          <MarketHours now={now} />
         </div>
 
         <HeaderClock />

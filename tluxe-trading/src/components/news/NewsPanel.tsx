@@ -3,7 +3,9 @@ import { useState } from 'react';
 import { useServices } from '../../app/servicesContext';
 import { useDisplayTimeZone } from '../../hooks/useDisplayTimeZone';
 import { useStore } from '../../store/createStore';
-import { NEWS_CATEGORIES, type NewsCategory, type NewsItem } from '../../types/news';
+import { useActiveInstrument } from '../../hooks/useMarket';
+import type { NewsCategory, NewsItem } from '../../types/news';
+import { newsForInstrument } from '../../utils/instrumentContext';
 import { formatHm24 } from '../../utils/format';
 import { EmptyState } from '../ui/EmptyState';
 import { Panel } from '../ui/Panel';
@@ -34,20 +36,24 @@ export function NewsPanel() {
   const { news } = useServices();
   const snap = useStore(news.store, (s) => s);
   const tz = useDisplayTimeZone();
-  const [cat, setCat] = useState<NewsCategory | null>(null);
+  const def = useActiveInstrument();
+  const [picked, setCat] = useState<NewsCategory | null>(null);
+  // A topic picked for another instrument does not carry over.
+  const cat = picked && def.newsTopics.includes(picked) ? picked : null;
   const connected = snap.status === 'CONNECTED';
-  const items = cat ? snap.items.filter((n) => n.categories.includes(cat)) : snap.items;
+  const relevant = newsForInstrument(snap.items, def);
+  const items = cat ? relevant.filter((n) => n.categories.includes(cat)) : relevant;
 
   return (
     <Panel
       id="news"
       title="Latest Market News"
-      subtitle={connected ? `Source: ${snap.providerName}` : 'Provider: Not Connected'}
+      subtitle={`${def.shortName} context · ${connected ? `Source: ${snap.providerName}` : 'Provider: Not Connected'}`}
       icon={<Newspaper size={18} />}
       className="news-panel"
     >
       <div className="news__cats" role="group" aria-label="News categories">
-        {NEWS_CATEGORIES.map((c) => (
+        {def.newsTopics.map((c) => (
           <button key={c} type="button" className="chip" aria-pressed={cat === c} disabled={!connected} onClick={() => setCat(cat === c ? null : c)}>
             {c}
           </button>
@@ -64,7 +70,7 @@ export function NewsPanel() {
         <EmptyState
           icon={<Newspaper size={18} />}
           title={connected ? 'NO HEADLINES' : 'NEWS PROVIDER NOT CONNECTED'}
-          message={connected ? 'No headlines in this category yet.' : 'Gold, USD, Fed, rates, inflation, geopolitics and COMEX headlines appear here once a news provider is connected.'}
+          message={connected ? `No ${def.shortName} headlines in this category yet.` : `${def.shortName}-relevant headlines appear here once a news provider is connected. No placeholder stories are shown.`}
         />
       )}
     </Panel>

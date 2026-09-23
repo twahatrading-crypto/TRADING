@@ -4,7 +4,9 @@ export type StatusValue =
   | 'CONNECTED'
   | 'NOT CONNECTED'
   | 'DISABLED'
-  | 'ERROR';
+  | 'ERROR'
+  /** The instrument has no source of this kind at all (e.g. no depth for OTC FX). */
+  | 'UNSUPPORTED';
 
 export type StatusTone = 'ok' | 'warn' | 'bad' | 'off';
 

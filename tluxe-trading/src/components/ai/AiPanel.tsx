@@ -13,6 +13,7 @@ import {
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useServices } from '../../app/servicesContext';
 import { useDisplayTimeZone } from '../../hooks/useDisplayTimeZone';
+import { useActiveInstrument, useMarket } from '../../hooks/useMarket';
 import { AI_ACTION_LABELS } from '../../services/ai/AiService';
 import { useStore } from '../../store/createStore';
 import type { AiActionId, AiTab } from '../../types/ai';
@@ -63,9 +64,10 @@ const TAB_INTRO: Record<AiTab, { title: string; items: string[]; placeholder: st
 };
 
 export function AiPanel() {
-  const { ai, market } = useServices();
+  const { ai } = useServices();
   const state = useStore(ai.store, (s) => s);
-  const marketConnection = useStore(market.store, (s) => s.connection);
+  const instrument = useActiveInstrument();
+  const marketConnection = useMarket((s) => s.connection);
   const tz = useDisplayTimeZone();
   const [tab, setTab] = useState<AiTab>('chat');
   const [draft, setDraft] = useState('');
@@ -73,6 +75,8 @@ export function AiPanel() {
   const connected = state.status === 'CONNECTED';
   const marketLive = marketConnection === 'LIVE' || marketConnection === 'DELAYED';
   const intro = TAB_INTRO[tab];
+
+  useEffect(() => ai.setInstrument(instrument.id), [ai, instrument.id]);
 
   useEffect(() => {
     const el = logRef.current;
@@ -134,8 +138,12 @@ export function AiPanel() {
               <dd className={connected ? 'is-ok' : 'is-warn'}>{connected ? state.providerName : 'Not connected'}</dd>
             </div>
             <div>
-              <dt>Market context</dt>
-              <dd className={marketLive ? 'is-ok' : 'is-warn'}>{marketLive ? 'GC live feed' : 'Not connected'}</dd>
+              <dt>Instrument</dt>
+              <dd className="is-ctx" data-testid="ai-instrument">{instrument.shortName}</dd>
+            </div>
+            <div>
+              <dt>{instrument.shortName} data</dt>
+              <dd className={marketLive ? 'is-ok' : 'is-warn'}>{marketLive ? 'Live feed' : 'Not connected'}</dd>
             </div>
             <div>
               <dt>Engine access</dt>
@@ -164,7 +172,7 @@ export function AiPanel() {
             id="ai-input"
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
-            placeholder={intro.placeholder}
+            placeholder={`${intro.placeholder.replace('…', '')} (${instrument.shortName})…`}
             autoComplete="off"
           />
           <button type="submit" className="ai__send" aria-label="Send" disabled={!draft.trim() || state.pending}>

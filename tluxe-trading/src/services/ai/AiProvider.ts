@@ -2,6 +2,8 @@ import type { AiActionId, AiTab } from '../../types/ai';
 import type { ProviderStatus } from '../../types/providers';
 
 export interface AiRequest {
+  /** Instrument the request is about. Explicit — never assumed. Null only if no context is set. */
+  instrumentId: string | null;
   tab: AiTab;
   action: AiActionId | null;
   text: string;

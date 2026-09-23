@@ -5,7 +5,11 @@ export type NewsCategory =
   | 'RATES'
   | 'INFLATION'
   | 'GEOPOLITICS'
-  | 'COMEX';
+  | 'COMEX'
+  | 'SILVER'
+  | 'FX'
+  | 'CRYPTO'
+  | 'EQUITIES';
 
 export interface NewsItem {
   id: string;
@@ -14,6 +18,10 @@ export interface NewsItem {
   url: string | null;
   publishedAt: number;
   categories: NewsCategory[];
+  /** Canonical instrument ids the provider tagged, if any. */
+  instruments?: string[];
 }
 
-export const NEWS_CATEGORIES: readonly NewsCategory[] = ['GOLD', 'USD', 'FED', 'RATES', 'INFLATION', 'GEOPOLITICS', 'COMEX'];
+export const NEWS_CATEGORIES: readonly NewsCategory[] = [
+  'GOLD', 'SILVER', 'USD', 'FED', 'RATES', 'INFLATION', 'GEOPOLITICS', 'COMEX', 'FX', 'CRYPTO', 'EQUITIES',
+];
