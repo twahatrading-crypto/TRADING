@@ -16,15 +16,43 @@ export function useChartController(
   timeframe: Timeframe,
   priceDecimals: number,
   containerRef: RefObject<HTMLDivElement | null>,
+  /**
+   * Replay: when non-null the chart shows ONLY these bars and ignores the live
+   * stream (live chart advancement is frozen for the replay session).
+   */
+  override: readonly Candle[] | null = null,
 ): { barCount: number; controller: ChartController | null; lastBar: Candle | null } {
   const [barCount, setBarCount] = useState(() => market.getCandles(instrumentId, timeframe).length);
   const [lastBar, setLastBar] = useState<Candle | null>(() => market.getCandles(instrumentId, timeframe).at(-1) ?? null);
   const controllerRef = useRef<ChartController | null>(null);
   const [controller, setController] = useState<ChartController | null>(null);
 
+  const replay = override !== null;
+  const overrideRef = useRef(override);
+  const shownRef = useRef<readonly Candle[] | null>(null);
+
   useEffect(() => {
     let cancelled = false;
     let loading: Promise<ChartController | null> | null = null;
+    if (replay) {
+      // Replay mode: no live subscription at all.
+      void (async () => {
+        const [lib, mod] = await Promise.all([import('lightweight-charts'), import('./ChartController')]);
+        if (cancelled || !containerRef.current) return;
+        controllerRef.current = new mod.ChartController(lib, containerRef.current, priceDecimals);
+        const bars = overrideRef.current ?? [];
+        controllerRef.current.setData(bars);
+        shownRef.current = bars;
+        setController(controllerRef.current);
+      })();
+      return () => {
+        cancelled = true;
+        controllerRef.current?.destroy();
+        controllerRef.current = null;
+        shownRef.current = null;
+        setController(null);
+      };
+    }
     setBarCount(market.getCandles(instrumentId, timeframe).length);
     setLastBar(market.getCandles(instrumentId, timeframe).at(-1) ?? null);
 
@@ -63,7 +91,20 @@ export function useChartController(
       controllerRef.current = null;
       setController(null);
     };
-  }, [market, instrumentId, timeframe, priceDecimals, containerRef]);
+  }, [market, instrumentId, timeframe, priceDecimals, containerRef, replay]);
 
+  // Replay bars → chart. One revealed bar = one upsert; anything else (step back, seek, TF switch) = full redraw.
+  useEffect(() => {
+    overrideRef.current = override;
+    const ctl = controllerRef.current;
+    if (!override || !ctl) return;
+    const prev = shownRef.current;
+    const appendedOne = prev && override.length === prev.length + 1 && (prev.length === 0 || override[prev.length - 1] === prev[prev.length - 1]);
+    if (appendedOne && override.length) ctl.upsert(override[override.length - 1]!);
+    else ctl.setData(override);
+    shownRef.current = override;
+  }, [override, controller]);
+
+  if (override) return { barCount: override.length, controller, lastBar: override.at(-1) ?? null };
   return { barCount, controller, lastBar };
 }

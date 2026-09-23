@@ -27,10 +27,12 @@ export function srViewState(opts: {
   tradable: boolean;
   connection: ConnectionState;
   snapshots: readonly (SRSnapshot | undefined)[];
+  /** Historical replay: zones come from frozen history, so the live connection state does not apply. */
+  replay?: boolean;
 }): SRViewState {
   if (!opts.tradable) return 'CATEGORY';
   const snaps = opts.snapshots.filter((s): s is SRSnapshot => !!s);
-  const live = opts.connection === 'LIVE' || opts.connection === 'DELAYED';
+  const live = opts.replay === true || opts.connection === 'LIVE' || opts.connection === 'DELAYED';
   if (snaps.some((s) => s.state === 'READY')) return live ? 'READY' : 'STALE';
   if (snaps.some((s) => s.barsProcessed > 0)) return 'INSUFFICIENT_HISTORY';
   return live ? 'INSUFFICIENT_HISTORY' : 'NOT_CONNECTED';

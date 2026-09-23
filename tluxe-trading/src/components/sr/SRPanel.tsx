@@ -39,6 +39,8 @@ interface PanelProps {
   onSettings: (patch: Partial<SRSettings>) => void;
   onResetSettings: () => void;
   symbol: string;
+  /** Replay: pill/subtitle describe the replay instead of the live feed. */
+  replayLabel?: string | null;
 }
 
 const TABS: { id: SRTab; label: string }[] = [
@@ -61,8 +63,14 @@ export function SRPanel(p: PanelProps) {
           </span>
         </h2>
         <div className="srpanel__status">
-          <StatusPill tone={ready ? 'ok' : 'warn'} label={PILL[p.viewState]} compact />
-          <span className="srpanel__sub">{zonesShown ? `${p.multi?.zones.length ?? 0} zones · ${p.symbol}${ready ? '' : ' · from last received candles'}` : 'No live data available'}</span>
+          <StatusPill tone={p.replayLabel ? 'info' : ready ? 'ok' : 'warn'} label={p.replayLabel && ready ? 'S&R REPLAY' : PILL[p.viewState]} compact />
+          <span className="srpanel__sub">
+            {p.replayLabel
+              ? `${p.multi?.zones.length ?? 0} zones · ${p.symbol} · ${p.replayLabel}`
+              : zonesShown
+                ? `${p.multi?.zones.length ?? 0} zones · ${p.symbol}${ready ? '' : ' · from last received candles'}`
+                : 'No live data available'}
+          </span>
         </div>
       </header>
       <div className="srtabs" role="tablist" aria-label="S&R views">

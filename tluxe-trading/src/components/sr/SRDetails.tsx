@@ -5,6 +5,7 @@ import type { ScoreComponentKey, SRConfluence, SRZone } from '../../engines/sr/t
 import { useDisplayTimeZone } from '../../hooks/useDisplayTimeZone';
 import { useNow } from '../../store/clock';
 import { formatPrice, formatSigned } from '../../utils/format';
+import { zoneLifecycle } from '../../engines/sr/lifecycle';
 import { formatAge, roleLabel, STATUS_CLASS } from './srView';
 
 const fmtTime = (sec: number | null, tz: string) =>
@@ -16,9 +17,21 @@ function Empty({ text }: { text: string }) {
   return <p className="srdetail__empty">{text}</p>;
 }
 
-export function ZoneDetails({ zone, decimals, emptyText }: { zone: SRZone | null; decimals: number; emptyText: string }) {
+export function ZoneDetails({
+  zone,
+  decimals,
+  emptyText,
+  clockMs = null,
+}: {
+  zone: SRZone | null;
+  decimals: number;
+  emptyText: string;
+  /** Replay clock (ms). Ages are measured from it instead of the wall clock. */
+  clockMs?: number | null;
+}) {
   const tz = useDisplayTimeZone();
-  const now = useNow('minute');
+  const wall = useNow('minute');
+  const now = clockMs ?? wall;
   const [open, setOpen] = useState(false);
   return (
     <section className="panel srdetail" aria-labelledby="zd-title">
@@ -43,8 +56,8 @@ export function ZoneDetails({ zone, decimals, emptyText }: { zone: SRZone | null
             <div><dt>Score</dt><dd className="num srkv__score">{zone.score.total} <span>/ 100</span></dd></div>
             <div><dt>Touches</dt><dd className="num">{zone.touchCount} <span className="srmuted">({zone.rejectionCount} rej · {zone.sweepCount} sweep)</span></dd></div>
             <div><dt>Status</dt><dd><span className={`srstatus ${STATUS_CLASS[zone.status]}`}>{zone.status}</span></dd></div>
-            <div><dt>Created</dt><dd>{fmtTime(zone.createdAt, tz)}</dd></div>
-            <div><dt>Confirmed</dt><dd>{fmtTime(zone.confirmedAt, tz)}</dd></div>
+            <div><dt>Swing bar</dt><dd>{fmtTime(zone.createdAt, tz)}</dd></div>
+            <div><dt>Confirmed (known)</dt><dd>{fmtTime(zone.confirmedAt, tz)}</dd></div>
             <div><dt>Last Touch</dt><dd>{fmtTime(zone.lastInteractionAt, tz)}</dd></div>
             <div><dt>Age</dt><dd>{formatAge(zone.confirmedAt, now)}</dd></div>
             <div>
@@ -58,23 +71,30 @@ export function ZoneDetails({ zone, decimals, emptyText }: { zone: SRZone | null
             {zone.flippedAt && <div><dt>Flipped</dt><dd>{fmtTime(zone.flippedAt, tz)} → {roleLabel(zone)}</dd></div>}
           </dl>
           <button type="button" className="srhist__toggle" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
-            {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />} Interaction history ({zone.interactions.length})
+            {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />} Zone lifecycle ({zoneLifecycle(zone).length} events)
           </button>
           {open && (
-            <ol className="srhist">
-              {zone.interactions.length === 0 && <li className="srmuted">No interactions since confirmation.</li>}
-              {zone.interactions.map((it) => (
-                <li key={it.id}>
-                  <span className="srhist__time">{fmtTime(it.startTime, tz)}</span>
-                  <span className={`srhist__out out-${it.outcome}`}>{it.outcome}</span>
-                  <span className="srmuted">
-                    {it.role} · pen {(it.penetrationRatio * 100).toFixed(0)}% · move {it.rejectionAtr.toFixed(2)} ATR
-                    {it.barsToRejection !== null && ` in ${it.barsToRejection} bars`}
-                    {it.phase === 'retest' && ' · retest'}
-                  </span>
-                </li>
-              ))}
-            </ol>
+            <div className="srlife" data-testid="zone-lifecycle">
+              <p className="srlife__id">
+                <span className="srmuted">ID</span> <code>{zone.id}</code> · <span className="srmuted">source</span> {zone.timeframe} ·{' '}
+                <span className="srmuted">original bounds</span>{' '}
+                <span className="num">
+                  {formatPrice(zone.zoneLow, decimals)} – {formatPrice(zone.zoneHigh, decimals)}
+                </span>{' '}
+                · <span className="srmuted">role</span> {zone.role} · <span className="srmuted">state</span> {zone.status}
+              </p>
+              <ol className="srhist">
+                {zoneLifecycle(zone).map((e, k) => (
+                  <li key={`${e.kind}-${e.barTime}-${k}`}>
+                    <span className="srhist__time">{fmtTime(e.barTime, tz)}</span>
+                    <span className={`srhist__out life-${e.kind}`}>{e.kind}</span>
+                    <span className="srmuted">
+                      {e.detail} · known {fmtTime(e.knownAt, tz)}
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            </div>
           )}
         </>
       )}

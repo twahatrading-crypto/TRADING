@@ -26,6 +26,8 @@ export class ChartController {
   private volume: ISeriesApi<'Histogram'>;
   private priceLines: IPriceLine[] = [];
   private zonesPrimitive: ZonesPrimitive | null = null;
+  /** After destroy() every call is a no-op (React cleanups may run after the chart is gone). */
+  private disposed = false;
 
   constructor(lib: ChartLib, container: HTMLElement, priceDecimals: number) {
     this.chart = lib.createChart(container, {
@@ -77,18 +79,21 @@ export class ChartController {
   }
 
   setData(candles: readonly Candle[]): void {
+    if (this.disposed) return;
     this.candles.setData(candles.map(ChartController.bar));
     this.volume.setData(candles.map(ChartController.vol));
   }
 
   /** Update or append the most recent bar. */
   upsert(candle: Candle): void {
+    if (this.disposed) return;
     this.candles.update(ChartController.bar(candle));
     this.volume.update(ChartController.vol(candle));
   }
 
   /** Phase 1 renders level overlays only; zones/markers are defined but not drawn yet. */
   setOverlays(overlays: readonly ChartOverlay[]): void {
+    if (this.disposed) return;
     this.priceLines.forEach((l) => this.candles.removePriceLine(l));
     this.priceLines = overlays
       .filter((o) => o.shape === 'level')
@@ -99,6 +104,7 @@ export class ChartController {
 
   /** Draw S&R zones (engine output prepared by the UI) as bands behind the candles. */
   setZones(zones: ZoneDrawable[]): void {
+    if (this.disposed) return;
     if (!this.zonesPrimitive) {
       this.zonesPrimitive = new ZonesPrimitive();
       this.candles.attachPrimitive(this.zonesPrimitive);
@@ -111,12 +117,24 @@ export class ChartController {
     ts.applyOptions({ rightOffset: zones.length ? Math.ceil(margin / ts.options().barSpacing) : 0 });
   }
 
+  /** Click on the chart → open time of the clicked bar (null outside the bars). Returns an unsubscribe. */
+  onBarClick(cb: (time: number | null) => void): () => void {
+    const handler = (p: { time?: unknown }) => cb(typeof p.time === 'number' ? p.time : null);
+    if (this.disposed) return () => {};
+    this.chart.subscribeClick(handler);
+    return () => {
+      if (!this.disposed) this.chart.unsubscribeClick(handler);
+    };
+  }
+
   /** PNG snapshot of the chart canvas. */
   screenshot(): HTMLCanvasElement {
     return this.chart.takeScreenshot();
   }
 
   destroy(): void {
+    if (this.disposed) return;
+    this.disposed = true;
     this.chart.remove();
   }
 }

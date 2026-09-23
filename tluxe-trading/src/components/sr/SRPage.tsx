@@ -1,4 +1,6 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useServices } from '../../app/servicesContext';
+import type { SRReplaySession } from '../../services/sr/SRReplay';
 import { DEFAULT_TIMEFRAME, TIMEFRAMES } from '../../config/instrument';
 import { useActiveInstrument, useMarket } from '../../hooks/useMarket';
 import { usePersistentState } from '../../hooks/usePersistentState';
@@ -8,7 +10,7 @@ import { SRChart } from './SRChart';
 import { ConfluencePanel, ScoreComponentsPanel, ZoneDetails } from './SRDetails';
 import { SRPanel, type SRTab } from './SRPanel';
 import { SR_VIEW_TITLE, srViewState, type SortSpec, type ZoneFilters } from './srView';
-import { useSRSettings, useSRState } from './useSR';
+import { useOptionalStore, useSRSettings, useSRState } from './useSR';
 import './sr.css';
 
 const isTf = (v: unknown): v is Timeframe => TIMEFRAMES.includes(v as Timeframe);
@@ -36,11 +38,33 @@ function SRWorkspace() {
   const def = useActiveInstrument();
   const decimals = useMarket((s) => s.instrument.priceDecimals);
   const connection = useMarket((s) => s.connection);
-  const multi = useSRState((s) => s.multi);
-  const byTf = useSRState((s) => s.byTimeframe);
+  const { sr } = useServices();
+  const liveMulti = useSRState((s) => s.multi);
+  const liveByTf = useSRState((s) => s.byTimeframe);
   const [settings, setSettings, resetSettings] = useSRSettings();
 
-  const [chartTf, setChartTf] = usePersistentState<Timeframe>(`tluxe.sr.chartTf.${def.id}`, DEFAULT_TIMEFRAME, isTf);
+  const [chartTf, setChartTfState] = usePersistentState<Timeframe>(`tluxe.sr.chartTf.${def.id}`, DEFAULT_TIMEFRAME, isTf);
+
+  // Replay: its own session + engines; the live S&R service keeps running untouched.
+  const [replay, setReplay] = useState<SRReplaySession | null>(null);
+  useEffect(() => () => replay?.dispose(), [replay]);
+  const replayMulti = useOptionalStore(replay?.store, (s) => s.multi, null);
+  const replayByTf = useOptionalStore(replay?.store, (s) => s.byTimeframe, null);
+  const replayTime = useOptionalStore(replay?.store, (s) => s.knowledgeTime, null);
+  const multi = replay ? replayMulti : liveMulti;
+  const byTf = (replay ? replayByTf : liveByTf) ?? {};
+  const setChartTf = (tf: Timeframe) => {
+    setChartTfState(tf);
+    replay?.setTimeframe(tf);
+  };
+  const startReplay = () => {
+    const session = sr.createReplay(chartTf);
+    if (session && session.store.getState().total > 0) setReplay(session);
+  };
+  const exitReplay = () => {
+    replay?.dispose();
+    setReplay(null);
+  };
   const [filters, setFilters] = useState<ZoneFilters>({ type: 'all', tf: 'ALL', status: 'ALL' });
   const [sort, setSort] = useState<SortSpec>({ key: 'score', dir: 'desc' });
   const [showAll, setShowAll] = useState(false);
@@ -55,7 +79,10 @@ function SRWorkspace() {
     tradable: def.tradable,
     connection,
     snapshots: filters.tf === 'ALL' ? TIMEFRAMES.map((tf) => byTf[tf]) : [byTf[filters.tf]],
+    replay: !!replay,
   });
+  const chartViewState = srViewState({ tradable: def.tradable, connection, snapshots: [byTf[chartTf]], replay: !!replay });
+  const replayLabel = replay && replayTime !== null ? `replay as of ${new Date(replayTime * 1000).toISOString().replace('T', ' ').slice(0, 16)} UTC` : null;
   const zone = zones.find((z) => z.id === selectedZoneId) ?? null;
   const confluence =
     confluences.find((c) => c.id === selectedConfluenceId) ?? (zone ? (confluences.find((c) => c.zoneIds.includes(zone.id)) ?? null) : null);
@@ -87,6 +114,11 @@ function SRWorkspace() {
             selectedZoneId={selectedZoneId}
             confluence={selectedConfluenceId ? confluence : null}
             onOpenSettings={() => setTab('settings')}
+            snapshot={byTf[chartTf]}
+            viewState={chartViewState}
+            replay={replay}
+            onStartReplay={startReplay}
+            onExitReplay={exitReplay}
           />
         </div>
         <div className="sr-area-panel">
@@ -113,10 +145,11 @@ function SRWorkspace() {
             onSettings={setSettings}
             onResetSettings={resetSettings}
             symbol={def.shortName}
+            replayLabel={replayLabel}
           />
         </div>
         <div className="sr-area-details">
-          <ZoneDetails zone={zone} decimals={decimals} emptyText={emptyText} />
+          <ZoneDetails zone={zone} decimals={decimals} emptyText={emptyText} clockMs={replayTime === null ? null : replayTime * 1000} />
           <ScoreComponentsPanel zone={zone} />
           <ConfluencePanel confluences={confluences} selected={confluence} zones={zones} decimals={decimals} onSelect={selectConfluence} />
         </div>

@@ -579,8 +579,12 @@ export class SRTimeframeEngine {
       it.swept = false;
       it.sweepTime = null;
       it.endTime = bar.time;
-      if (it.rejected === null) it.rejected = false;
-      it.resolvedTime = bar.time;
+      // Resolve only if still undecided: a rejection decided earlier keeps its own decision time
+      // (the break time is recorded in endTime / breakEvidence). Never rewrite past records.
+      if (it.rejected === null) {
+        it.rejected = false;
+        it.resolvedTime = bar.time;
+      }
       it.outcome = 'break';
       z.episode = null;
       return { brokeNow: true, evidence };

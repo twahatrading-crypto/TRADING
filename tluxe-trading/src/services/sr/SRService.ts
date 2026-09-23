@@ -1,6 +1,8 @@
 import { TIMEFRAMES } from '../../config/instrument';
 import { tickSizeOf } from '../../config/instruments';
 import { buildMultiSnapshot } from '../../engines/sr/confluence';
+import { closedBarsOnly, type ReplayDataset } from '../../engines/sr/knowledge';
+import { SRReplaySession } from './SRReplay';
 import { SRTimeframeEngine } from '../../engines/sr/engine';
 import { sanitizeSettings, settingsKey, type SRSettings } from '../../engines/sr/settings';
 import type { SRMultiSnapshot, SRSnapshot } from '../../engines/sr/types';
@@ -110,6 +112,21 @@ export class SRService {
       this.detach();
       this.attach(id);
     }
+  }
+
+  /**
+   * Start a historical replay of the active instrument from a frozen copy of the
+   * REAL candles currently loaded (closed bars only). The replay owns its own
+   * engines; live engines, stores and provider subscriptions are not touched.
+   */
+  createReplay(timeframe: Timeframe, startIndex?: number): SRReplaySession | null {
+    const def = this.instruments.get(this.instruments.store.getState().activeId);
+    if (!def) return null;
+    const candles: ReplayDataset['candles'] = {};
+    for (const tf of TIMEFRAMES) {
+      candles[tf] = Object.freeze(closedBarsOnly(this.market.getCandles(def.id, tf)).map((c) => Object.freeze({ ...c })));
+    }
+    return new SRReplaySession({ instrumentId: def.id, tickSize: tickSizeOf(def), settings: this.settings, candles }, timeframe, { startIndex });
   }
 
   resetSettings(): void {
