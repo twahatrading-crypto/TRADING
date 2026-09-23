@@ -13,7 +13,7 @@ import '@fontsource/cormorant-garamond/600.css';
 import '../styles/tokens.css';
 import '../styles/global.css';
 import { App } from '../app/App';
-import { ServicesProvider } from '../app/ServicesContext';
+import { ServicesProvider } from '../app/ServicesProvider';
 import { randomWalk } from '../engines/sr/fixtures/builders';
 import type { MarketDataProvider, MarketDataSink } from '../services/market/MarketDataProvider';
 import { connectServices, createServices, defaultProviders } from '../services/registry';

@@ -1,6 +1,6 @@
 import { render } from '@testing-library/react';
 import type { ReactElement } from 'react';
-import { ServicesProvider } from '../app/ServicesContext';
+import { ServicesProvider } from '../app/ServicesProvider';
 import {
   connectServices,
   createServices,
