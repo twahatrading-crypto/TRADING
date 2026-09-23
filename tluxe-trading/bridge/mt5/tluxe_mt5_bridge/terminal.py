@@ -75,6 +75,7 @@ class Terminal:
                     code, msg = self.mt5.last_error()
                     self.state = "NOT_RUNNING"
                     self.last_error = {"code": "MT5_NOT_RUNNING", "message": f"initialize() failed: {code} {msg}"}
+                    log.warning("Cannot attach to MT5 terminal (%s %s); retrying in %.0fs", code, msg, self._backoff)
                     self._next_attempt = time.time() + self._backoff
                     self._backoff = min(self._backoff * 2, 30.0)
                     return
