@@ -1,6 +1,5 @@
 import { ArrowLeft, Construction } from 'lucide-react';
 import type { ModuleConfig } from '../../config/modules';
-import { MarketBar } from '../market/MarketBar';
 import { EmptyState } from '../ui/EmptyState';
 import { MODULE_ICONS } from './moduleIcons';
 import './dashboard.css';
@@ -9,8 +8,7 @@ import './dashboard.css';
 export function ModulePage({ module }: { module: ModuleConfig }) {
   const Icon = MODULE_ICONS[module.icon];
   return (
-    <div className="app">
-      <MarketBar />
+    <>
       <main className="module-page">
         <a className="btn-ghost module-page__back" href="#/">
           <ArrowLeft size={14} /> Dashboard
@@ -30,6 +28,6 @@ export function ModulePage({ module }: { module: ModuleConfig }) {
           />
         </div>
       </main>
-    </div>
+    </>
   );
 }

@@ -1,98 +1,115 @@
 import {
-  BarChart3,
-  BookOpen,
-  BrainCircuit,
-  CalendarDays,
-  ChevronDown,
-  Cpu,
+  ArrowLeftRight,
+  Boxes,
+  ChevronRight,
+  Droplets,
+  Layers,
   LayoutDashboard,
   LineChart,
-  Newspaper,
   Settings,
-  ShieldCheck,
   type LucideIcon,
 } from 'lucide-react';
+import { SETTINGS_ROUTE } from '../../config/modules';
+import { DASHBOARD_ROUTE, STRATEGY_NAV, type StrategyIcon } from '../../config/navigation';
 import { useHashRoute } from '../../hooks/useHashRoute';
+import { usePersistentState } from '../../hooks/usePersistentState';
+import { LogoMark } from '../branding/Logo';
+import { BRAND } from '../../config/branding';
 import './nav.css';
 
-interface NavItem {
-  label: string;
-  icon?: LucideIcon;
-  /** Hash path; undefined = not built yet (rendered disabled). */
-  href?: string;
+const STRATEGY_ICONS: Record<StrategyIcon, LucideIcon> = {
+  sr: Layers,
+  liquidity: Droplets,
+  orderBlocks: Boxes,
+  sweep: ArrowLeftRight,
+};
+
+const isBool = (v: unknown): v is boolean => typeof v === 'boolean';
+
+function NavLink({ route, current, icon: Icon, label, nested }: { route: string; current: string; icon: LucideIcon; label: string; nested?: boolean }) {
+  const active = route === current;
+  return (
+    <a
+      className={`snav__item ${nested ? 'snav__item--nested' : ''} ${active ? 'is-active' : ''}`}
+      href={`#${route}`}
+      aria-current={active ? 'page' : undefined}
+      title={label}
+    >
+      <Icon size={nested ? 15 : 17} aria-hidden="true" />
+      <span className="snav__label">{label}</span>
+    </a>
+  );
 }
 
-const MAIN: NavItem[] = [
-  { label: 'Dashboard', icon: LayoutDashboard, href: '#/' },
-  { label: 'Market', icon: LineChart, href: '#/market-overview' },
-  { label: 'Analysis', icon: BarChart3 },
-];
-
-const ENGINE_ITEMS: NavItem[] = [
-  { label: 'Support & Resistance', href: '#/engines/support-resistance' },
-  { label: 'Liquidity' },
-  { label: 'Order Blocks' },
-  { label: 'FVG' },
-  { label: 'Market Structure' },
-  { label: 'Sessions' },
-  { label: 'Multi-Timeframe' },
-  { label: 'Backtest' },
-];
-
-const SECONDARY: NavItem[] = [
-  { label: 'Journal', icon: BookOpen, href: '#/trading-journal' },
-  { label: 'Risk Management', icon: ShieldCheck, href: '#/risk-management' },
-  { label: 'Calendar', icon: CalendarDays, href: '#/economic-calendar' },
-  { label: 'News', icon: Newspaper },
-  { label: 'AI Assistant', icon: BrainCircuit },
-  { label: 'Settings', icon: Settings, href: '#/settings' },
-];
-
-function Item({ item, current, nested }: { item: NavItem; current: string; nested?: boolean }) {
-  const Icon = item.icon;
-  const active = item.href === `#${current}`;
-  const body = (
-    <>
-      {Icon && <Icon size={17} aria-hidden="true" />}
-      <span className="snav__label">{item.label}</span>
-      {!item.href && <span className="snav__soon">Soon</span>}
-    </>
-  );
-  const cls = `snav__item ${nested ? 'snav__item--nested' : ''} ${active ? 'is-active' : ''}`;
-  return item.href ? (
-    <a className={cls} href={item.href} aria-current={active ? 'page' : undefined} title={item.label}>
-      {body}
-    </a>
-  ) : (
-    <span className={`${cls} is-disabled`} aria-disabled="true" title={`${item.label} — not built yet`}>
-      {body}
+/** A strategy that is not built yet: visible, never navigable. */
+function SoonItem({ icon: Icon, label }: { icon: LucideIcon; label: string }) {
+  return (
+    <span className="snav__item snav__item--nested is-disabled" aria-disabled="true" title={`${label} — not built yet`}>
+      <Icon size={15} aria-hidden="true" />
+      <span className="snav__label">{label}</span>
+      <span className="snav__soon">Soon</span>
     </span>
   );
 }
 
+/**
+ * Primary application navigation (permanent left sidebar).
+ * Desktop: full sidebar · mid widths: icon rail · small screens: drawer.
+ */
 export function SideNav({ open, onNavigate }: { open?: boolean; onNavigate?: () => void }) {
   const route = useHashRoute();
-  const inEngines = route.startsWith('/engines');
+  const [expanded, setExpanded] = usePersistentState('tluxe.nav.strategy.open', true, isBool);
+  const inStrategy = STRATEGY_NAV.some((s) => s.route === route);
+
   return (
-    <nav className={`snav ${open ? 'is-open' : ''}`} aria-label="Main navigation" onClick={(e) => (e.target as HTMLElement).closest('a') && onNavigate?.()}>
-      {MAIN.map((i) => (
-        <Item key={i.label} item={i} current={route} />
-      ))}
-      <div className={`snav__group ${inEngines ? 'is-active' : ''}`}>
-        <div className="snav__item snav__group-head" title="Engines">
-          <Cpu size={17} aria-hidden="true" />
-          <span className="snav__label">Engines</span>
-          <ChevronDown size={14} className="snav__chev" aria-hidden="true" />
-        </div>
-        <div className="snav__sub">
-          {ENGINE_ITEMS.map((i) => (
-            <Item key={i.label} item={i} current={route} nested />
-          ))}
+    <nav
+      id="main-nav"
+      className={`snav ${open ? 'is-open' : ''}`}
+      aria-label="Main navigation"
+      onClick={(e) => (e.target as HTMLElement).closest('a') && onNavigate?.()}
+    >
+      <a className="snav__brand" href="#/" aria-label={`${BRAND.logoPrimary} ${BRAND.logoSecondary} — dashboard`}>
+        <LogoMark size={30} />
+        <span className="snav__brand-text">
+          <span className="snav__brand-primary">{BRAND.logoPrimary}</span>
+          <span className="snav__brand-sep" aria-hidden="true">|</span>
+          <span className="snav__brand-secondary">{BRAND.logoSecondary}</span>
+        </span>
+      </a>
+
+      <div className="snav__list">
+        <NavLink route={DASHBOARD_ROUTE} current={route} icon={LayoutDashboard} label="Dashboard" />
+
+        <div className={`snav__group ${inStrategy ? 'has-active' : ''}`}>
+          <button
+            type="button"
+            className="snav__item snav__group-head"
+            aria-expanded={expanded}
+            aria-controls="snav-strategy"
+            onClick={() => setExpanded(!expanded)}
+            title="Trading Strategy"
+          >
+            <LineChart size={17} aria-hidden="true" />
+            <span className="snav__label">Trading Strategy</span>
+            <ChevronRight size={14} className="snav__chev" aria-hidden="true" />
+          </button>
+          {expanded && (
+            <div className="snav__sub" id="snav-strategy" role="group" aria-label="Trading Strategy">
+              {STRATEGY_NAV.map((s) =>
+                s.route ? (
+                  <NavLink key={s.id} route={s.route} current={route} icon={STRATEGY_ICONS[s.icon]} label={s.label} nested />
+                ) : (
+                  <SoonItem key={s.id} icon={STRATEGY_ICONS[s.icon]} label={s.label} />
+                ),
+              )}
+            </div>
+          )}
         </div>
       </div>
-      {SECONDARY.map((i) => (
-        <Item key={i.label} item={i} current={route} />
-      ))}
+
+      <div className="snav__foot">
+        <NavLink route={SETTINGS_ROUTE} current={route} icon={Settings} label="Settings" />
+      </div>
     </nav>
   );
 }

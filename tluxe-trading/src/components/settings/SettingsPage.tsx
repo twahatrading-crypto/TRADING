@@ -10,7 +10,6 @@ import type { Mt5Provider, Mt5ProviderState } from '../../services/mt5/Mt5Provid
 import { useNow } from '../../store/clock';
 import { useStore } from '../../store/createStore';
 import { formatPrice, UNKNOWN } from '../../utils/format';
-import { MarketBar } from '../market/MarketBar';
 import { Panel } from '../ui/Panel';
 import { StatusPill } from '../ui/StatusPill';
 import './settings.css';
@@ -57,8 +56,7 @@ function Row({ k, v, testId }: { k: string; v: string; testId?: string }) {
 export function SettingsPage() {
   const { mt5 } = useServices();
   return (
-    <div className="app">
-      <MarketBar />
+    <>
       <main className="module-page settings">
         <a className="btn-ghost module-page__back" href="#/">
           <ArrowLeft size={14} /> Dashboard
@@ -76,7 +74,7 @@ export function SettingsPage() {
           {mt5 && <DiscoveryPanel provider={mt5} />}
         </div>
       </main>
-    </div>
+    </>
   );
 }
 

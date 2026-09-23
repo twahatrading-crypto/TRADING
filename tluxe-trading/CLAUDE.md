@@ -33,3 +33,7 @@ Live-preview maintenance is part of EVERY development task. Do it without being 
 
 ## Checks before committing
 `npm run check` (typecheck, lint, tests, build) and `python -m unittest discover -s tests` in `bridge/mt5`.
+
+## Navigation
+- `AppShell` (permanent left sidebar + market header) wraps every page and stays mounted across routes.
+- New strategy pages: add an entry to `src/config/navigation.ts` (`route: null` = disabled "Soon") and a route in `App.tsx`.

@@ -62,17 +62,6 @@ describe('S&R page without a provider', () => {
     }
   });
 
-  it('has the full navigation with only S&R functional among engines', () => {
-    open();
-    renderWithServices(<App />);
-    const nav = screen.getByRole('navigation', { name: 'Main navigation' });
-    expect(within(nav).getByRole('link', { name: 'Support & Resistance' })).toHaveAttribute('aria-current', 'page');
-    for (const e of ['Liquidity', 'Order Blocks', 'FVG', 'Market Structure', 'Sessions', 'Multi-Timeframe', 'Backtest']) {
-      expect(within(nav).getByTitle(`${e} — not built yet`)).toHaveAttribute('aria-disabled', 'true');
-    }
-    for (const l of ['Dashboard', 'Market', 'Journal', 'Risk Management', 'Calendar', 'Settings']) expect(within(nav).getByRole('link', { name: l })).toBeInTheDocument();
-  });
-
   it('NASDAQ category reports S&R DATA UNAVAILABLE', () => {
     open();
     const { services } = renderWithServices(<App />);

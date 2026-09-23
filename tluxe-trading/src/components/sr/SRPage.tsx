@@ -1,12 +1,9 @@
-import { Menu } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { DEFAULT_TIMEFRAME, TIMEFRAMES } from '../../config/instrument';
 import { useActiveInstrument, useMarket } from '../../hooks/useMarket';
 import { usePersistentState } from '../../hooks/usePersistentState';
 import type { Timeframe } from '../../types/market';
 import { BrandHero } from '../branding/BrandHero';
-import { MarketBar } from '../market/MarketBar';
-import { SideNav } from '../navigation/SideNav';
 import { SRChart } from './SRChart';
 import { ConfluencePanel, ScoreComponentsPanel, ZoneDetails } from './SRDetails';
 import { SRPanel, type SRTab } from './SRPanel';
@@ -19,16 +16,10 @@ const isTf = (v: unknown): v is Timeframe => TIMEFRAMES.includes(v as Timeframe)
 /** Engines → Support & Resistance. All zones come from the S&R service (engine snapshots). */
 export function SRPage() {
   const def = useActiveInstrument();
-  const [navOpen, setNavOpen] = useState(false);
   return (
-    <div className="app srapp">
-      <MarketBar />
-      <div className="srlayout">
-        <SideNav open={navOpen} onNavigate={() => setNavOpen(false)} />
-        {navOpen && <button type="button" className="srnav-scrim" aria-label="Close menu" onClick={() => setNavOpen(false)} />}
-        {/* Keyed by instrument: selections/filters reset, so no zone from another symbol can linger. */}
-        <SRWorkspace key={def.id} onMenu={() => setNavOpen(true)} />
-      </div>
+    <div className="srapp">
+      {/* Keyed by instrument: selections/filters reset, so no zone from another symbol can linger. */}
+      <SRWorkspace key={def.id} />
       <footer className="foot srfoot">
         <div className="foot__inner">
           <span className="foot__brand">TLUXE | TRADING</span>
@@ -41,7 +32,7 @@ export function SRPage() {
   );
 }
 
-function SRWorkspace({ onMenu }: { onMenu: () => void }) {
+function SRWorkspace() {
   const def = useActiveInstrument();
   const decimals = useMarket((s) => s.instrument.priceDecimals);
   const connection = useMarket((s) => s.connection);
@@ -80,9 +71,6 @@ function SRWorkspace({ onMenu }: { onMenu: () => void }) {
   return (
     <main className="srmain">
       <div className="srmain__top">
-        <button type="button" className="srmenu" onClick={onMenu} aria-label="Open navigation">
-          <Menu size={18} />
-        </button>
         <div className="srhero-wrap">
           <BrandHero />
         </div>

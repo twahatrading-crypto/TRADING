@@ -1,3 +1,4 @@
+import { Menu } from 'lucide-react';
 import { QUOTE_STALE_AFTER_MS } from '../../config/instrument';
 import { UPCOMING_WINDOW_MS } from '../../config/sessions';
 import { useActiveInstrument, useMarket } from '../../hooks/useMarket';
@@ -79,7 +80,7 @@ const DEPTH_LABEL: Record<ConnectionState, string> = {
   UNAVAILABLE: 'Not connected',
 };
 
-export function MarketBar() {
+export function MarketBar({ onMenu, menuOpen }: { onMenu?: () => void; menuOpen?: boolean } = {}) {
   const state = useMarket((s) => s);
   const now = useNow('second');
   const mode = getQuoteDisplayMode(state, now, QUOTE_STALE_AFTER_MS);
@@ -90,6 +91,11 @@ export function MarketBar() {
     <header className="mbar" aria-label="Market bar">
       <div className="mbar__inner">
         <div className="mbar__brand">
+          {onMenu && (
+            <button type="button" className="mbar__menu" onClick={onMenu} aria-label="Open navigation" aria-expanded={!!menuOpen} aria-controls="main-nav">
+              <Menu size={18} />
+            </button>
+          )}
           <Logo />
         </div>
 

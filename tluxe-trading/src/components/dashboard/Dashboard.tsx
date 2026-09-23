@@ -3,7 +3,6 @@ import { BrandHero } from '../branding/BrandHero';
 import { CalendarPanel } from '../calendar/CalendarPanel';
 import { ChartPanel } from '../chart/ChartPanel';
 import { WorldClock } from '../clocks/WorldClock';
-import { MarketBar } from '../market/MarketBar';
 import { NewsPanel } from '../news/NewsPanel';
 import { SessionsPanel } from '../sessions/SessionsPanel';
 import { SystemStatusPanel } from '../status/SystemStatusPanel';
@@ -19,8 +18,7 @@ import './dashboard.css';
  */
 export function Dashboard() {
   return (
-    <div className="app">
-      <MarketBar />
+    <>
       <BrandHero />
       <main className="dash">
         <div className="dash__col dash__col--main">
@@ -40,6 +38,6 @@ export function Dashboard() {
       </main>
       <Footer />
       <MobileNav />
-    </div>
+    </>
   );
 }
