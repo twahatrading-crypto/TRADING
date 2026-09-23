@@ -1,0 +1,251 @@
+.mbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: rgba(8, 11, 16, 0.94);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--border);
+}
+.mbar__inner {
+  display: grid;
+  grid-template-columns: auto minmax(170px, auto) minmax(200px, auto) minmax(0, 1fr) auto auto auto;
+  grid-template-areas: 'brand inst price fields conn bell clock';
+  align-items: center;
+  gap: 0;
+  max-width: 2480px;
+  margin: 0 auto;
+  padding: 0 clamp(12px, 1.4vw, 24px);
+  min-height: 72px;
+}
+.mbar__inner > * {
+  padding: 10px clamp(10px, 1vw, 20px);
+  min-width: 0;
+}
+.mbar__inner > * + * {
+  border-left: 1px solid var(--border);
+}
+.mbar__brand { grid-area: brand; padding-left: 0; }
+.mbar__instrument { grid-area: inst; }
+.mbar__price { grid-area: price; }
+.mbar__fields { grid-area: fields; }
+.mbar__conn { grid-area: conn; }
+.mbar__icon-btn { grid-area: bell; }
+.hclock { grid-area: clock; }
+
+.mbar__inst-name {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  white-space: nowrap;
+}
+.mbar__sym {
+  font-weight: 800;
+  color: var(--gold-bright);
+  font-size: var(--fs-lg);
+  letter-spacing: 0.04em;
+}
+.mbar__inst-title {
+  font-weight: 600;
+  font-size: var(--fs-md);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mbar__inst-meta {
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  margin-top: 2px;
+  white-space: nowrap;
+}
+
+.mbar__price {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.mbar__last {
+  font-size: clamp(22px, 1.7vw, 32px);
+  font-weight: 600;
+  line-height: 1.05;
+  letter-spacing: -0.01em;
+}
+.mbar__chg { font-size: var(--fs-sm); font-weight: 500; }
+.mbar__chg--up { color: var(--green); }
+.mbar__chg--down { color: var(--red); }
+.mbar__chg--flat,
+.mbar__chg--unknown { color: var(--text-3); }
+.mbar__price--stale .mbar__last { color: var(--text-3); }
+.mbar__tag {
+  align-self: flex-start;
+  font-size: var(--fs-2xs);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+.mbar__tag--stale { color: var(--amber); background: var(--amber-soft); }
+.mbar__tag--delayed { color: var(--blue); background: var(--blue-soft); }
+
+.mbar__unavail {
+  font-size: clamp(14px, 1.05vw, 19px);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--amber);
+  white-space: nowrap;
+}
+.mbar__subtle {
+  font-size: var(--fs-2xs);
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.mbar__fields {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(64px, 120px));
+  justify-content: start;
+  gap: 4px clamp(12px, 1.4vw, 32px);
+}
+.mbar__field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.mbar__label {
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+}
+.mbar__value {
+  font-size: var(--fs-lg);
+  font-weight: 500;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.mbar__conn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+}
+.mbar__provider {
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  white-space: nowrap;
+}
+.mbar__provider strong {
+  color: var(--text-2);
+  font-weight: 600;
+}
+
+.mbar__icon-btn {
+  display: grid;
+  place-items: center;
+  align-self: stretch;
+  background: transparent;
+  border: 0;
+  border-left: 1px solid var(--border);
+  color: var(--text-3);
+  padding: 0 clamp(12px, 1vw, 18px) !important;
+}
+.mbar__icon-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.hclock {
+  text-align: right;
+  white-space: nowrap;
+  padding-right: 0 !important;
+}
+.hclock__date { font-size: var(--fs-xs); color: var(--text-2); }
+.hclock__time { font-size: clamp(17px, 1.3vw, 24px); font-weight: 600; line-height: 1.2; }
+.hclock__zone { font-size: var(--fs-2xs); color: var(--text-3); }
+
+/* Laptop: fields drop to a second row */
+@media (max-width: 1439px) {
+  .mbar__inner {
+    grid-template-columns: auto minmax(0, auto) minmax(0, 1fr) auto auto;
+    grid-template-areas:
+      'brand inst price conn clock'
+      'fields fields fields fields fields';
+  }
+  .mbar__icon-btn { display: none !important; }
+  .mbar__fields {
+    border-left: 0 !important;
+    border-top: 1px solid var(--border);
+    padding: 8px 0 !important;
+  }
+  .mbar__fields { grid-template-columns: repeat(5, auto); column-gap: clamp(24px, 4vw, 56px); }
+  .mbar__field {
+    flex-direction: row;
+    align-items: baseline;
+    gap: 8px;
+  }
+  .mbar__value { font-size: var(--fs-md); }
+}
+
+/* Tablet */
+@media (max-width: 1023px) {
+  .mbar__inner {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas:
+      'brand price clock'
+      'inst  inst  conn'
+      'fields fields fields';
+  }
+  .mbar__instrument {
+    border-left: 0 !important;
+    border-top: 1px solid var(--border);
+    padding-left: 0 !important;
+  }
+  .mbar__conn {
+    border-top: 1px solid var(--border);
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+  }
+}
+
+/* Mobile: deliberate stacked quote card */
+@media (max-width: 767px) {
+  .mbar { position: static; }
+  .mbar__inner {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      'brand clock'
+      'inst  inst'
+      'price price'
+      'conn  conn'
+      'fields fields';
+    padding: 0 16px;
+  }
+  .mbar__inner > * {
+    border-left: 0 !important;
+    padding: 8px 0;
+  }
+  .mbar__inner > .hclock { padding-left: 8px; }
+  .hclock__date { display: none; }
+  .hclock__time { font-size: 16px; }
+  .mbar__instrument, .mbar__price, .mbar__conn, .mbar__fields {
+    border-top: 1px solid var(--border);
+  }
+  .mbar__instrument { padding-bottom: 4px !important; border-top: 1px solid var(--border); }
+  .mbar__price { border-top: 0; padding-top: 0 !important; }
+  .mbar__unavail { font-size: 18px; white-space: normal; }
+  .mbar__subtle { white-space: normal; }
+  .mbar__conn {
+    flex-direction: row;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .mbar__fields {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px 12px;
+  }
+  .mbar__field {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+  }
+  .logo__text { font-size: 13px; letter-spacing: 0.12em; }
+}

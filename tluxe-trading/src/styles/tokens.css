@@ -1,0 +1,79 @@
+:root {
+  color-scheme: dark;
+
+  /* Surfaces */
+  --bg: #06080c;
+  --bg-raised: #0a0e14;
+  --panel: #0c1119;
+  --panel-2: #10161f;
+  --panel-hover: #141b26;
+  --border: #1b2330;
+  --border-strong: #273142;
+  --border-gold: rgba(212, 169, 79, 0.42);
+
+  /* Text */
+  --text: #e8eaef;
+  --text-2: #a5adba;
+  --text-3: #6d7686;
+  --text-4: #4a5261;
+
+  /* Accents */
+  --gold: #d4a94f;
+  --gold-bright: #efcd84;
+  --gold-soft: rgba(212, 169, 79, 0.12);
+  --gold-glow: rgba(212, 169, 79, 0.28);
+  --green: #3fcf7c;
+  --green-soft: rgba(63, 207, 124, 0.12);
+  --red: #ef5d5d;
+  --red-soft: rgba(239, 93, 93, 0.12);
+  --amber: #e5a33b;
+  --amber-soft: rgba(229, 163, 59, 0.12);
+  --blue: #5b8def;
+  --blue-soft: rgba(91, 141, 239, 0.14);
+
+  /* Session palette */
+  --s-asia: #c77dff;
+  --s-london: #3fcf7c;
+  --s-new-york: #5b8def;
+  --s-globex: #d4a94f;
+
+  /* Type */
+  --font-sans: 'Inter Variable', 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-serif: 'Cormorant Garamond', 'Times New Roman', Georgia, serif;
+  --fs-2xs: 10px;
+  --fs-xs: 11px;
+  --fs-sm: 12px;
+  --fs-md: 13px;
+  --fs-lg: 15px;
+
+  /* Geometry */
+  --radius: 8px;
+  --radius-sm: 6px;
+  --gap: 12px;
+  --pad: 14px;
+  --shadow: 0 1px 0 rgba(255, 255, 255, 0.02) inset, 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+@media (min-width: 1920px) {
+  :root {
+    --fs-2xs: 11px;
+    --fs-xs: 12px;
+    --fs-sm: 13px;
+    --fs-md: 14px;
+    --fs-lg: 16px;
+    --gap: 14px;
+    --pad: 16px;
+  }
+}
+
+@media (min-width: 2400px) {
+  :root {
+    --fs-2xs: 12px;
+    --fs-xs: 13px;
+    --fs-sm: 14px;
+    --fs-md: 15px;
+    --fs-lg: 18px;
+    --gap: 16px;
+    --pad: 18px;
+  }
+}

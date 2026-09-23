@@ -29,6 +29,7 @@ export const SESSIONS: SessionDefinition[] = [
   {
     id: 'new-york',
     name: 'New York',
+    shortName: 'NY',
     timeZone: 'America/New_York',
     open: { hour: 8, minute: 0 },
     close: { hour: 17, minute: 0 },
@@ -39,6 +40,7 @@ export const SESSIONS: SessionDefinition[] = [
     // CME Globex metals: Sun–Fri 17:00–16:00 CT with a daily 60-minute break.
     id: 'globex',
     name: 'COMEX / Globex',
+    shortName: 'Globex',
     timeZone: 'America/Chicago',
     open: { hour: 17, minute: 0 },
     close: { hour: 16, minute: 0 },

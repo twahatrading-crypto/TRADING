@@ -15,3 +15,5 @@ export interface NewsItem {
   publishedAt: number;
   categories: NewsCategory[];
 }
+
+export const NEWS_CATEGORIES: readonly NewsCategory[] = ['GOLD', 'USD', 'FED', 'RATES', 'INFLATION', 'GEOPOLITICS', 'COMEX'];

@@ -8,6 +8,8 @@ export interface WallTime {
 export interface SessionDefinition {
   id: string;
   name: string;
+  /** Compact label for narrow layouts. */
+  shortName?: string;
   /** IANA zone whose wall clock defines the session (DST follows this zone). */
   timeZone: string;
   open: WallTime;
