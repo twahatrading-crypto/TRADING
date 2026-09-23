@@ -35,7 +35,7 @@ class BridgeConfig:
     token: str
     host: str = "127.0.0.1"
     port: int = 8765
-    allowed_origins: tuple[str, ...] = ("http://localhost:5180", "http://127.0.0.1:5180")
+    allowed_origins: tuple[str, ...] = ("http://localhost:5180", "http://127.0.0.1:5180", "http://localhost:4180", "http://127.0.0.1:4180")
     server_timezone: str | None = None
     terminal_path: str | None = None
     login: int | None = None
@@ -59,7 +59,7 @@ def from_env(env: dict[str, str] | None = None) -> BridgeConfig:
     if host in ("0.0.0.0", "::") and e.get("TLUXE_BRIDGE_ALLOW_ALL_INTERFACES") != "1":
         raise ConfigError("Refusing to listen on all interfaces. Bind to 127.0.0.1 or a private address, "
                           "or set TLUXE_BRIDGE_ALLOW_ALL_INTERFACES=1 if you really mean it.")
-    origins = tuple(o.strip() for o in e.get("TLUXE_BRIDGE_ALLOWED_ORIGINS", "http://localhost:5180,http://127.0.0.1:5180").split(",") if o.strip())
+    origins = tuple(o.strip() for o in e.get("TLUXE_BRIDGE_ALLOWED_ORIGINS", "http://localhost:5180,http://127.0.0.1:5180,http://localhost:4180,http://127.0.0.1:4180").split(",") if o.strip())
     login_raw = e.get("TLUXE_MT5_LOGIN", "").strip()
     return BridgeConfig(
         token=token,

@@ -12,6 +12,9 @@ export interface ModuleConfig {
 /** Engines → Support & Resistance page. */
 export const SR_ROUTE = '/engines/support-resistance';
 
+/** Settings → Data Providers page. */
+export const SETTINGS_ROUTE = '/settings';
+
 export const MODULES: ModuleConfig[] = [
   { id: 'market-overview', title: 'Market Overview', description: 'Prices, charts and markets', icon: 'overview', path: '/market-overview' },
   { id: 'economic-calendar', title: 'Economic Calendar', description: 'Releases and market impact', icon: 'calendar', path: '/economic-calendar' },

@@ -80,3 +80,17 @@ export const FEED_LABEL: Record<FeedStatusCode, string> = {
   STALE: 'STALE',
   ERROR: 'ERROR',
 };
+
+export const FEED_TONE: Record<FeedStatusCode, 'ok' | 'warn' | 'bad' | 'off' | 'info'> = {
+  LIVE: 'ok',
+  MT5_CONNECTED: 'info',
+  MT5_CONNECTING: 'info',
+  INSUFFICIENT_HISTORY: 'warn',
+  MARKET_CLOSED: 'warn',
+  STALE: 'warn',
+  SYMBOL_NOT_FOUND: 'warn',
+  AMBIGUOUS_SYMBOL: 'warn',
+  MT5_BRIDGE_OFFLINE: 'bad',
+  MT5_NOT_RUNNING: 'bad',
+  ERROR: 'bad',
+};

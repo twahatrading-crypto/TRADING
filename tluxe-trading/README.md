@@ -14,8 +14,10 @@ npm run preview    # serve dist/ at http://localhost:4180
 
 ## Data integrity
 
-No provider is connected yet. Every provider slot uses a `Null*` implementation that
-reports "not connected" and emits nothing. Unknown values are `null` and render as `—`.
+Out of the box no provider is connected: every slot reports "not connected" and emits
+nothing. Real prices come only from a real provider — currently **MetaTrader 5** via the
+private bridge in [`bridge/mt5`](bridge/mt5/README.md), enabled in **Settings**. See
+[`docs/MT5_DATA.md`](docs/MT5_DATA.md) for the data pipeline and time handling. Unknown values are `null` and render as `—`.
 Nothing is simulated.
 
 ## Instruments

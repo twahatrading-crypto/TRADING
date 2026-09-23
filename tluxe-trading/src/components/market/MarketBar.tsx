@@ -2,9 +2,9 @@ import { QUOTE_STALE_AFTER_MS } from '../../config/instrument';
 import { UPCOMING_WINDOW_MS } from '../../config/sessions';
 import { useActiveInstrument, useMarket } from '../../hooks/useMarket';
 import { CONNECTION_LABEL, getQuoteDisplayMode, type QuoteDisplayMode } from '../../services/market/normalize';
-import { FEED_LABEL } from '../../services/mt5/freshness';
+import { FEED_LABEL, FEED_TONE } from '../../services/mt5/freshness';
 import { useNow } from '../../store/clock';
-import type { ConnectionState, FeedStatusCode, MarketState } from '../../types/market';
+import type { ConnectionState, MarketState } from '../../types/market';
 import { directionOf, formatPercent, formatPrice, formatSigned, formatVolume, UNKNOWN } from '../../utils/format';
 import { Logo } from '../branding/Logo';
 import { StatusPill } from '../ui/StatusPill';
@@ -70,19 +70,6 @@ export function MarketHours({ now }: { now: number }) {
   );
 }
 
-const FEED_TONE: Record<FeedStatusCode, 'ok' | 'warn' | 'bad' | 'off' | 'info'> = {
-  LIVE: 'ok',
-  MT5_CONNECTED: 'info',
-  MT5_CONNECTING: 'info',
-  INSUFFICIENT_HISTORY: 'warn',
-  MARKET_CLOSED: 'warn',
-  STALE: 'warn',
-  SYMBOL_NOT_FOUND: 'warn',
-  AMBIGUOUS_SYMBOL: 'warn',
-  MT5_BRIDGE_OFFLINE: 'bad',
-  MT5_NOT_RUNNING: 'bad',
-  ERROR: 'bad',
-};
 
 const DEPTH_LABEL: Record<ConnectionState, string> = {
   LIVE: 'Connected',
