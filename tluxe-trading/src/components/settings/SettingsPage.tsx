@@ -174,6 +174,12 @@ function BridgePanel({ provider }: { provider: Mt5Provider }) {
         <Row k="Reconnects" v={String(st.reconnects)} />
         {st.error && <Row k="Last error" v={`${st.error.code}: ${st.error.message}`} />}
       </dl>
+      {bridgeLabel === 'OFFLINE' && (
+        <p className="sform__note settings__hint" data-testid="origin-hint">
+          If the bridge window is running, its <code>TLUXE_BRIDGE_ALLOWED_ORIGINS</code> must include <strong>{window.location.origin}</strong>. A
+          browser page that is not allowed looks exactly like an offline bridge.
+        </p>
+      )}
     </Panel>
   );
 }

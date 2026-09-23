@@ -77,3 +77,5 @@
   .kv__row { grid-template-columns: 1fr; gap: 2px; }
   .module-page__title { font-size: 28px; }
 }
+.settings__hint { margin-top: 10px; display: block; }
+.settings__hint code { color: var(--text-2); }

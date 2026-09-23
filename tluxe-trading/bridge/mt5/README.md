@@ -35,7 +35,7 @@ Then open `.env` in a text editor and set:
 | --- | --- |
 | `TLUXE_BRIDGE_TOKEN` | The random string printed above (at least 32 characters). |
 | `TLUXE_MT5_SERVER_TIMEZONE` | Your broker's trade-server timezone as an IANA name. Many brokers use `Europe/Athens` or `Asia/Nicosia` (GMT+2/+3 with DST); others use `UTC`. Ask your broker if you're unsure. |
-| `TLUXE_BRIDGE_ALLOWED_ORIGINS` | Leave the default unless you serve the app from another address. |
+| `TLUXE_BRIDGE_ALLOWED_ORIGINS` | Leave the default (`localhost`/`127.0.0.1` on ports 5181 and 4181). If the bridge logs `Rejected browser origin ...`, add that origin here and restart the bridge. |
 | `TLUXE_MT5_TERMINAL_PATH` | Optional. Only needed if several terminals are installed, e.g. `C:\Program Files\MetaTrader 5\terminal64.exe`. |
 | `TLUXE_MT5_LOGIN` / `PASSWORD` / `SERVER` | **Leave empty.** The bridge uses the session already logged in to the terminal. |
 
@@ -49,7 +49,7 @@ Then open `.env` in a text editor and set:
    python run_bridge.py
    ```
    It should log `TLUXE MT5 bridge listening on http://127.0.0.1:8765`.
-3. Start the app on the same PC (`npm install` once, then `npm run dev` in `tluxe-trading`) and open `http://localhost:5180`.
+3. Start the app on the same PC (`npm install` once, then `npm run dev` in `tluxe-trading`) and open `http://localhost:5181`.
 4. In the app, go to **Settings**:
    - Tick **Enable MT5 market data**.
    - Set the bridge URL to `http://127.0.0.1:8765`.

@@ -29,6 +29,7 @@ describe('Settings → Data Providers', () => {
     renderWithServices(<App />, { price: [mt5] }, { storage: memoryStorage({ 'tluxe.instrument.v1': 'XAUUSD' }) });
     await act(() => mt5.pollHealth());
     expect(screen.getByTestId('bridge-state')).toHaveTextContent('OFFLINE');
+    expect(screen.getByTestId('origin-hint')).toHaveTextContent(window.location.origin);
     expect(screen.getAllByText('MT5 BRIDGE OFFLINE').length).toBeGreaterThan(0);
     expect(screen.queryByText('MT5 · LIVE')).toBeNull();
     expect(screen.getByTestId('quote-unavailable')).toBeInTheDocument();

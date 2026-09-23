@@ -252,11 +252,14 @@ class HttpTests(unittest.TestCase):
         self.assertIn("heartbeatAtMs", body["bridge"])
 
     def test_cors_only_for_allowed_origins(self):
-        _, h, _ = self.req("/v1/health", origin="http://localhost:5180")
-        self.assertEqual(h.get("Access-Control-Allow-Origin"), "http://localhost:5180")
+        _, h, _ = self.req("/v1/health", origin="http://localhost:5181")
+        self.assertEqual(h.get("Access-Control-Allow-Origin"), "http://localhost:5181")
         _, h, _ = self.req("/v1/health", origin="https://evil.example")
         self.assertIsNone(h.get("Access-Control-Allow-Origin"))
-        status, h, _ = self.req("/v1/health", token=None, origin="http://localhost:5180", method="OPTIONS",
+        # The old project's dev port is not authorised by default.
+        _, h, _ = self.req("/v1/health", origin="http://localhost:5180")
+        self.assertIsNone(h.get("Access-Control-Allow-Origin"))
+        status, h, _ = self.req("/v1/health", token=None, origin="http://localhost:5181", method="OPTIONS",
                                 extra={"Access-Control-Request-Private-Network": "true"})
         self.assertEqual(status, 204)
         self.assertEqual(h.get("Access-Control-Allow-Private-Network"), "true")

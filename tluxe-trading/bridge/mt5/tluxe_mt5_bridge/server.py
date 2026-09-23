@@ -18,6 +18,7 @@ log = logging.getLogger("tluxe.bridge")
 
 def make_handler(cfg: BridgeConfig, term: Terminal, started_at: float):
     token = cfg.token.encode()
+    rejected: set[str] = set()
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "TLUXE-MT5-Bridge/" + __version__
@@ -28,6 +29,9 @@ def make_handler(cfg: BridgeConfig, term: Terminal, started_at: float):
         # ---------------------------------------------------------------- CORS
         def _cors(self) -> None:
             origin = self.headers.get("Origin")
+            if origin and origin not in cfg.allowed_origins and origin not in rejected:
+                rejected.add(origin)
+                log.warning("Rejected browser origin %s - add it to TLUXE_BRIDGE_ALLOWED_ORIGINS in .env and restart", origin)
             if origin and origin in cfg.allowed_origins:
                 self.send_header("Access-Control-Allow-Origin", origin)
                 self.send_header("Vary", "Origin")
