@@ -67,6 +67,8 @@ export interface InstrumentDefinition {
   venue: string;
   currency: string;
   pricePrecision: number;
+  /** Minimum price increment when known (exchange contract spec). Otherwise 10^-pricePrecision is used. */
+  tickSize?: number;
   /** False for categories that are not themselves a tradable instrument. */
   tradable: boolean;
   aliases: string[];

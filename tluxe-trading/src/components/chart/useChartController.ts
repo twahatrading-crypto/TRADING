@@ -16,9 +16,10 @@ export function useChartController(
   timeframe: Timeframe,
   priceDecimals: number,
   containerRef: RefObject<HTMLDivElement | null>,
-): { barCount: number } {
+): { barCount: number; controller: ChartController | null } {
   const [barCount, setBarCount] = useState(() => market.getCandles(instrumentId, timeframe).length);
   const controllerRef = useRef<ChartController | null>(null);
+  const [controller, setController] = useState<ChartController | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -31,6 +32,7 @@ export function useChartController(
         loading = Promise.all([import('lightweight-charts'), import('./ChartController')]).then(([lib, mod]) => {
           if (cancelled || !containerRef.current) return null;
           controllerRef.current = new mod.ChartController(lib, containerRef.current, priceDecimals);
+          setController(controllerRef.current);
           return controllerRef.current;
         });
       }
@@ -56,8 +58,9 @@ export function useChartController(
       unsubscribe();
       controllerRef.current?.destroy();
       controllerRef.current = null;
+      setController(null);
     };
   }, [market, instrumentId, timeframe, priceDecimals, containerRef]);
 
-  return { barCount };
+  return { barCount, controller };
 }

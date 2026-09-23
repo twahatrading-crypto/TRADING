@@ -241,7 +241,8 @@
   .hclock__time { font-size: 16px; }
   .mbar__instrument { border-top: 1px solid var(--border); padding-bottom: 2px !important; }
   .mbar__price { padding-top: 0 !important; }
-  .mbar__conn { border-top: 1px solid var(--border); grid-template-columns: auto 1fr !important; grid-template-rows: auto auto !important; }
+  .mbar__conn { border-top: 1px solid var(--border); grid-template-columns: auto minmax(0, 1fr) !important; grid-template-rows: auto auto !important; }
+  .mbar__conn .mbar__provider, .mbar__conn .mbar__hours { white-space: normal; min-width: 0; overflow-wrap: anywhere; }
   .mbar__unavail { font-size: 18px; white-space: normal; }
   .mbar__subtle { white-space: normal; }
   .mbar__fields {

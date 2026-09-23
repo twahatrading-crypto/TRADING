@@ -1,9 +1,10 @@
 import { useEffect } from 'react';
-import { MODULES } from '../config/modules';
+import { MODULES, SR_ROUTE } from '../config/modules';
 import { useHashRoute } from '../hooks/useHashRoute';
 import { connectServices } from '../services/registry';
 import { Dashboard } from '../components/dashboard/Dashboard';
 import { ModulePage } from '../components/dashboard/ModulePage';
+import { SRPage } from '../components/sr/SRPage';
 import { useServices } from './servicesContext';
 
 export function App() {
@@ -12,6 +13,7 @@ export function App() {
 
   useEffect(() => connectServices(services), [services]);
 
+  if (route === SR_ROUTE) return <SRPage />;
   const module = MODULES.find((m) => m.path === route);
   return module ? <ModulePage module={module} /> : <Dashboard />;
 }

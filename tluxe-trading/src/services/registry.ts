@@ -12,6 +12,7 @@ import type { DepthProvider } from './market/DepthProvider';
 import { MarketDataService } from './market/MarketDataService';
 import type { MarketDataProvider } from './market/MarketDataProvider';
 import { createNewsService, type NewsProvider, type NewsService } from './news/NewsProvider';
+import { SRService } from './sr/SRService';
 
 export interface Services {
   instruments: InstrumentSelection;
@@ -19,6 +20,8 @@ export interface Services {
   news: NewsService;
   calendar: CalendarService;
   ai: AiService;
+  /** Support & Resistance engine runtime (real candles only). */
+  sr: SRService;
   /** Phase 1 has no persistence layer. */
   databaseStatus: ProviderStatus;
 }
@@ -55,14 +58,26 @@ export function defaultProviders(): ProviderSet {
 
 export function createServices(providers: ProviderSet = defaultProviders(), opts: ServiceOptions = {}): Services {
   const instruments = opts.instruments ?? INSTRUMENTS;
+  const selection = new InstrumentSelection(instruments, opts.storage);
+  const market = new MarketDataService({ instruments, price: providers.price, depth: providers.depth });
+  const storage = opts.storage === undefined ? browserStorage() : opts.storage;
   return {
-    instruments: new InstrumentSelection(instruments, opts.storage),
-    market: new MarketDataService({ instruments, price: providers.price, depth: providers.depth }),
+    instruments: selection,
+    market,
     news: createNewsService(providers.news),
     calendar: createCalendarService(providers.calendar),
     ai: new AiService(providers.ai),
+    sr: new SRService(market, selection, storage),
     databaseStatus: 'NOT_CONNECTED',
   };
+}
+
+function browserStorage(): Pick<Storage, 'getItem' | 'setItem'> | null {
+  try {
+    return typeof localStorage === 'undefined' ? null : localStorage;
+  } catch {
+    return null;
+  }
 }
 
 /** Connects providers and keeps the market subscription on the selected instrument. */
@@ -72,8 +87,10 @@ export function connectServices(s: Services): () => void {
   s.calendar.connect();
   s.market.activate(s.instruments.store.getState().activeId);
   const stop = s.instruments.store.subscribe(() => s.market.activate(s.instruments.store.getState().activeId));
+  const stopSR = s.sr.start();
   return () => {
     stop();
+    stopSR();
     s.market.disconnect();
     s.news.disconnect();
     s.calendar.disconnect();

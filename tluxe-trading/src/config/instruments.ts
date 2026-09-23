@@ -118,6 +118,7 @@ export const INSTRUMENTS: readonly InstrumentDefinition[] = [
     venue: 'CME Globex (COMEX)',
     currency: 'USD',
     pricePrecision: 1,
+    tickSize: 0.1,
     tradable: true,
     aliases: ['gold', 'gold futures'],
     providerMappings: [
@@ -139,6 +140,7 @@ export const INSTRUMENTS: readonly InstrumentDefinition[] = [
     venue: 'CME Globex (COMEX)',
     currency: 'USD',
     pricePrecision: 3,
+    tickSize: 0.005,
     tradable: true,
     aliases: ['silver', 'silver futures'],
     providerMappings: [
@@ -257,6 +259,11 @@ const BY_ID = new Map(INSTRUMENTS.map((i) => [i.id, i]));
 
 export function getInstrument(id: InstrumentId): InstrumentDefinition | undefined {
   return BY_ID.get(id);
+}
+
+/** Tick size for distance floors: contract tick when known, else display precision. */
+export function tickSizeOf(def: InstrumentDefinition): number {
+  return def.tickSize ?? 10 ** -def.pricePrecision;
 }
 
 export function isInstrumentId(v: unknown): v is InstrumentId {

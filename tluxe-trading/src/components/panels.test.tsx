@@ -94,7 +94,8 @@ describe('SystemStatusPanel', () => {
     const value = (id: string) => screen.getByTestId(`status-${id}`).textContent;
     expect(value('app')).toContain('ONLINE');
     for (const id of ['price', 'depth', 'ai', 'database', 'news', 'calendar']) expect(value(id)).toContain('NOT CONNECTED');
-    for (const id of ['order-block', 'liquidity', 'support-resistance', 'sweep-reversal']) expect(value(`engine-${id}`)).toContain('DISABLED');
+    for (const id of ['order-block', 'liquidity', 'sweep-reversal']) expect(value(`engine-${id}`)).toContain('DISABLED');
+    expect(value('engine-support-resistance')).toContain('NOT CONNECTED');
     expect(screen.getByText('1/7 online')).toBeInTheDocument();
     expect(screen.getByText('Price Data · GC')).toBeInTheDocument();
   });

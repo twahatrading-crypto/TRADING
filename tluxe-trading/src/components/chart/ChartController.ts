@@ -2,6 +2,7 @@ import type * as LightweightCharts from 'lightweight-charts';
 import type { IChartApi, IPriceLine, ISeriesApi, UTCTimestamp } from 'lightweight-charts';
 import type { Candle } from '../../types/market';
 import type { ChartOverlay } from '../../types/overlays';
+import { COMPACT_LABEL_WIDTH, ZONE_LABEL_MARGIN_MAX_SHARE, ZONE_LABEL_MARGIN_PX, ZonesPrimitive, type ZoneDrawable } from './ZonesPrimitive';
 
 type ChartLib = typeof LightweightCharts;
 
@@ -24,6 +25,7 @@ export class ChartController {
   private candles: ISeriesApi<'Candlestick'>;
   private volume: ISeriesApi<'Histogram'>;
   private priceLines: IPriceLine[] = [];
+  private zonesPrimitive: ZonesPrimitive | null = null;
 
   constructor(lib: ChartLib, container: HTMLElement, priceDecimals: number) {
     this.chart = lib.createChart(container, {
@@ -39,6 +41,8 @@ export class ChartController {
       rightPriceScale: { borderColor: COLORS.border },
       timeScale: { borderColor: COLORS.border, timeVisible: true, secondsVisible: false },
       crosshair: { mode: lib.CrosshairMode.Normal },
+      // Explicit locale: some environments report tags like "en-US@posix" that Intl rejects.
+      localization: { locale: 'en-US' },
     });
     const minMove = 1 / 10 ** priceDecimals;
     this.candles = this.chart.addSeries(lib.CandlestickSeries, {
@@ -89,6 +93,25 @@ export class ChartController {
       .map((o) =>
         this.candles.createPriceLine({ price: o.price, color: COLORS.gold, lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: o.label ?? '' }),
       );
+  }
+
+  /** Draw S&R zones (engine output prepared by the UI) as bands behind the candles. */
+  setZones(zones: ZoneDrawable[]): void {
+    if (!this.zonesPrimitive) {
+      this.zonesPrimitive = new ZonesPrimitive();
+      this.candles.attachPrimitive(this.zonesPrimitive);
+    }
+    this.zonesPrimitive.setZones(zones);
+    // Reserve empty bars on the right so labels never sit on top of recent candles.
+    const ts = this.chart.timeScale();
+    const width = ts.width();
+    const margin = Math.min(width < COMPACT_LABEL_WIDTH ? 110 : ZONE_LABEL_MARGIN_PX, width * ZONE_LABEL_MARGIN_MAX_SHARE);
+    ts.applyOptions({ rightOffset: zones.length ? Math.ceil(margin / ts.options().barSpacing) : 0 });
+  }
+
+  /** PNG snapshot of the chart canvas. */
+  screenshot(): HTMLCanvasElement {
+    return this.chart.takeScreenshot();
   }
 
   destroy(): void {

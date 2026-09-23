@@ -28,7 +28,7 @@ describe('buildSystemStatus — Phase 1 defaults', () => {
       'Economic Calendar': 'NOT CONNECTED',
       'Order Block Engine': 'DISABLED',
       'Liquidity Engine': 'DISABLED',
-      'Support & Resistance Engine': 'DISABLED',
+      'Support & Resistance Engine': 'NOT CONNECTED',
       'Sweep/Reversal Engine': 'DISABLED',
     });
   });
@@ -75,6 +75,13 @@ describe('status mapping', () => {
 
   it('provider errors surface as ERROR', () => {
     expect(byLabel({ ...phase1, news: 'ERROR' }).News).toBe('ERROR');
+  });
+
+  it('the implemented S&R engine is ONLINE only while analysing real data', () => {
+    const waiting = buildSystemStatus(phase1).find((i) => i.id === 'engine-support-resistance')!;
+    expect(waiting).toMatchObject({ value: 'NOT CONNECTED', detail: 'Waiting for GC market data' });
+    const running = buildSystemStatus({ ...phase1, engineRuntime: { 'support-resistance': 'running' } }).find((i) => i.id === 'engine-support-resistance')!;
+    expect(running).toMatchObject({ value: 'ONLINE', detail: 'Analysing GC' });
   });
 
   it('an enabled engine without an implementation is an ERROR, not ONLINE', () => {

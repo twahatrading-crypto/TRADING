@@ -21,6 +21,8 @@ export interface StatusInputs {
   news: ProviderStatus;
   calendar: ProviderStatus;
   engines: EngineConfig[];
+  /** Runtime state of implemented engines: 'running' = analysing real data for the active instrument. */
+  engineRuntime?: Record<string, 'running' | 'waiting'>;
 }
 
 const FEED_DETAIL: Record<ConnectionState, string> = {
@@ -70,13 +72,19 @@ export function buildSystemStatus(i: StatusInputs): SystemStatusItem[] {
     provider('database', 'Database', i.database),
     provider('news', 'News', i.news),
     provider('calendar', 'Economic Calendar', i.calendar),
-    ...i.engines.map<SystemStatusItem>((e) => ({
-      id: `engine-${e.id}`,
-      label: e.label,
-      // Enabled engines have no implementation in Phase 1, so they can never report ONLINE.
-      value: e.enabled ? 'ERROR' : 'DISABLED',
-      detail: e.enabled ? 'Not implemented' : undefined,
-    })),
+    ...i.engines.map<SystemStatusItem>((e) => {
+      const id = `engine-${e.id}`;
+      if (!e.enabled) return { id, label: e.label, value: 'DISABLED' };
+      // An enabled engine with no implementation can never report ONLINE.
+      if (!e.implemented) return { id, label: e.label, value: 'ERROR', detail: 'Not implemented' };
+      const running = i.engineRuntime?.[e.id] === 'running';
+      return {
+        id,
+        label: e.label,
+        value: running ? 'ONLINE' : 'NOT CONNECTED',
+        detail: running ? `Analysing ${i.instrument}` : `Waiting for ${i.instrument} market data`,
+      };
+    }),
   ];
 }
 

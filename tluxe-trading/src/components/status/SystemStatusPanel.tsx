@@ -40,6 +40,7 @@ export function SystemStatusPanel() {
   const ai = useStore(services.ai.store, (s) => s.status);
   const news = useStore(services.news.store, (s) => s.status);
   const calendar = useStore(services.calendar.store, (s) => s.status);
+  const srRunning = useStore(services.sr.store(def.id), (s) => Object.values(s.byTimeframe).some((t) => t?.state === 'READY'));
 
   const items = buildSystemStatus({
     browserOnline: online,
@@ -52,6 +53,7 @@ export function SystemStatusPanel() {
     news,
     calendar,
     engines: ENGINES,
+    engineRuntime: { 'support-resistance': srRunning ? 'running' : 'waiting' },
   });
   const core = items.filter((i) => !i.id.startsWith('engine-'));
   const engines = items.filter((i) => i.id.startsWith('engine-'));
