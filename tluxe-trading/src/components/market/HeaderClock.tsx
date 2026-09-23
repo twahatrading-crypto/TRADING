@@ -7,9 +7,9 @@ export function HeaderClock() {
   const tz = useDisplayTimeZone();
   return (
     <div className="hclock" aria-label="Current date and time">
-      <div className="hclock__date">{formatLongDate(now, tz)}</div>
       <div className="hclock__time num">{formatClockTime(now, tz, true)}</div>
       <div className="hclock__zone num">
+        <span className="hclock__date">{formatLongDate(now, tz)} · </span>
         {timeZoneAbbrev(now, tz)} · UTC {formatHm24(now, 'UTC')}
       </div>
     </div>

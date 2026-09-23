@@ -7,8 +7,8 @@
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 11px 12px;
+  gap: 6px;
+  padding: 9px 12px 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--bg-raised);
@@ -16,7 +16,7 @@
 }
 .clock__head {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 8px;
 }
 .clock__place {
@@ -51,7 +51,7 @@
 }
 .clock__remove:hover { color: var(--red); border-color: var(--red); }
 .clock__time {
-  font-size: clamp(20px, 1.45vw, 28px);
+  font-size: clamp(20px, 1.3vw, 26px);
   font-weight: 600;
   line-height: 1;
   letter-spacing: -0.01em;
@@ -64,14 +64,27 @@
   margin-left: 4px;
   letter-spacing: 0.04em;
 }
+.clock__body {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 8px;
+}
 .clock__meta {
   display: flex;
-  justify-content: space-between;
-  gap: 6px;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
   font-size: var(--fs-2xs);
   color: var(--text-3);
   white-space: nowrap;
 }
+@container (max-width: 150px) {
+  .clock__body { flex-direction: column; align-items: flex-start; gap: 4px; }
+  .clock__meta { flex-direction: row; gap: 8px; }
+}
+.clock { container-type: inline-size; }
+
 .clock--add {
   align-items: center;
   justify-content: center;
@@ -79,7 +92,7 @@
   border-style: dashed;
   cursor: pointer;
   font-size: var(--fs-sm);
-  min-height: 96px;
+  min-height: 64px;
 }
 .clock--add select {
   position: absolute;

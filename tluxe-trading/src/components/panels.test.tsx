@@ -14,7 +14,7 @@ describe('ChartPanel', () => {
     renderWithServices(<ChartPanel />);
     expect(screen.getByText('MARKET DATA NOT CONNECTED')).toBeInTheDocument();
     expect(screen.getByTestId('chart-canvas')).not.toBeVisible();
-    expect(screen.getByText(/0 bars/)).toBeInTheDocument();
+    expect(screen.getByText(/Provider: Not Connected · Timeframe: H1/)).toBeInTheDocument();
   });
 
   it('offers all seven timeframes and switches selection', () => {

@@ -22,9 +22,8 @@ export function ClockCard({ clock, now, editing, onRemove }: ClockCardProps) {
     <article className="clock" aria-label={`${clock.city} local time`}>
       <div className="clock__head">
         <CountryBadge code={clock.country} />
-        <div className="clock__place">
+        <div className="clock__place" title={`${clock.city}, ${clock.region} · ${clock.timeZone}`}>
           <div className="clock__city">{clock.city}</div>
-          <div className="clock__region">{clock.region}</div>
         </div>
         {editing && onRemove ? (
           <button type="button" className="clock__remove" onClick={onRemove} aria-label={`Remove ${clock.city}`}>
@@ -36,13 +35,15 @@ export function ClockCard({ clock, now, editing, onRemove }: ClockCardProps) {
           </span>
         )}
       </div>
-      <div className="clock__time num" data-testid={`clock-time-${clock.id}`}>
-        {String(h12).padStart(2, '0')}:{String(parts.minute).padStart(2, '0')}
-        <span className="clock__ampm">{ampm}</span>
-      </div>
-      <div className="clock__meta num">
-        <span>{offset}</span>
-        <span>{formatShortDate(now, clock.timeZone)}</span>
+      <div className="clock__body">
+        <div className="clock__time num" data-testid={`clock-time-${clock.id}`}>
+          {String(h12).padStart(2, '0')}:{String(parts.minute).padStart(2, '0')}
+          <span className="clock__ampm">{ampm}</span>
+        </div>
+        <div className="clock__meta num">
+          <span>{offset}</span>
+          <span>{formatShortDate(now, clock.timeZone)}</span>
+        </div>
       </div>
     </article>
   );

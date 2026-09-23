@@ -19,16 +19,18 @@ export function SessionCard({ def, state, tz }: { def: SessionDefinition; state:
       <div className="sess__head">
         <span className="sess__swatch" aria-hidden="true" />
         <span className="sess__name">{def.name}</span>
+        <span className={`sess__status sess__status--${state.status.toLowerCase()}`} data-testid={`session-status-${def.id}`}>
+          {STATUS_LABEL[state.status]}
+        </span>
       </div>
-      <div className="sess__hours num" title={def.rule}>
-        {formatHm24(iv.open, tz)} – {formatHm24(iv.close, tz)}
-      </div>
-      <div className={`sess__status sess__status--${state.status.toLowerCase()}`} data-testid={`session-status-${def.id}`}>
-        {STATUS_LABEL[state.status]}
-      </div>
-      <div className="sess__count num">
-        {isOpen ? 'Closes in ' : 'Opens in '}
-        <strong>{formatCountdown(state.countdownMs)}</strong>
+      <div className="sess__line num">
+        <span className="sess__hours" title={def.rule}>
+          {formatHm24(iv.open, tz)} – {formatHm24(iv.close, tz)}
+        </span>
+        <span className="sess__count">
+          {isOpen ? 'Closes in ' : 'Opens in '}
+          <strong>{formatCountdown(state.countdownMs)}</strong>
+        </span>
       </div>
       {isOpen && state.progress !== null && (
         <div className="sess__progress" aria-hidden="true">
@@ -49,7 +51,14 @@ export function SessionsPanel() {
     <Panel
       id="sessions"
       title="Trading Sessions"
-      subtitle={`Times in ${timeZoneAbbrev(now, tz)} (${tz}) · regular hours, holidays not modelled`}
+      subtitle={
+        <>
+          Times in {timeZoneAbbrev(now, tz)} ({tz}) ·{' '}
+          <span className="sess-rth" title="Regular trading hours. Exchange holidays and early closes are not yet modelled.">
+            regular hours
+          </span>
+        </>
+      }
       icon={<Activity size={18} />}
       actions={
         <span className="sess-live">

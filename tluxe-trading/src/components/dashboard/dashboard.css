@@ -4,7 +4,8 @@
   flex-direction: column;
 }
 
-/* ---------- Desktop (≥1600): three columns ---------- */
+/* ---------- Desktop (≥1600): three columns ----------
+   main (clocks, sessions, chart, modules) | feeds (calendar, news) | AI + status */
 .dash {
   flex: 1;
   width: 100%;
@@ -12,7 +13,7 @@
   margin: 0 auto;
   padding: var(--gap) clamp(12px, 1.4vw, 24px) calc(var(--gap) * 1.5);
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 330px 390px;
+  grid-template-columns: minmax(0, 1fr) 400px 340px;
   gap: var(--gap);
   align-items: stretch;
 }
@@ -40,13 +41,13 @@
   container-type: inline-size;
 }
 .area-ai > .ai {
-  min-height: 640px;
+  min-height: 560px;
 }
 @media (min-width: 1920px) {
-  .dash { grid-template-columns: minmax(0, 1fr) 380px 440px; }
+  .dash { grid-template-columns: minmax(0, 1fr) 440px 380px; }
 }
 @media (min-width: 2400px) {
-  .dash { grid-template-columns: minmax(0, 1fr) 460px 520px; }
+  .dash { grid-template-columns: minmax(0, 1fr) 540px 460px; }
 }
 
 /* Below desktop, the column wrappers dissolve so panels join one grid. */
@@ -67,7 +68,7 @@
 /* ---------- Laptop (1200–1599): main 2/3 + AI 1/3, feeds row below ---------- */
 @media (max-width: 1599px) and (min-width: 1200px) {
   .dash {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 340px;
     grid-template-areas:
       'clocks   clocks   ai'
       'sessions sessions ai'
@@ -118,57 +119,67 @@
   [id] { scroll-margin-top: 12px; }
 }
 
-/* ---------- Module cards ---------- */
+/* ---------- Module cards: identical geometry ---------- */
 .modules {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-auto-rows: 1fr;
   gap: 10px;
 }
 .module {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
+  display: grid;
+  grid-template-rows: 40px auto auto;
+  justify-items: center;
+  align-content: start;
+  row-gap: 7px;
+  height: 100%;
+  padding: 14px 12px;
   text-align: center;
-  gap: 6px;
-  padding: 16px 10px 14px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: linear-gradient(180deg, var(--panel-2), var(--panel));
   min-width: 0;
-  transition: border-color 0.15s, transform 0.15s;
+  transition: border-color 0.15s, background 0.15s;
 }
 .module:hover {
   border-color: var(--border-gold);
-  transform: translateY(-1px);
+  background: linear-gradient(180deg, var(--panel-hover), var(--panel));
 }
 .module__icon {
   display: grid;
   place-items: center;
-  width: 44px;
-  height: 44px;
+  width: 40px;
+  height: 40px;
   border-radius: 10px;
   color: var(--gold-bright);
   background: var(--gold-soft);
   border: 1px solid var(--border-gold);
-  margin-bottom: 2px;
   flex: none;
 }
 .module__title {
+  max-width: 100%;
   font-weight: 600;
   font-size: var(--fs-md);
   line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .module__desc {
   font-size: var(--fs-xs);
   color: var(--text-3);
-  line-height: 1.3;
+  line-height: 1.35;
+  min-height: calc(2 * 1.35em);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 @media (max-width: 1023px) {
   .modules { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 @media (max-width: 767px) {
   .modules { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-  .module { padding: 14px 8px 12px; }
 }
 
 /* ---------- Footer ---------- */

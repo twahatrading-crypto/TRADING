@@ -53,13 +53,18 @@ export function NewsPanel() {
           </button>
         ))}
       </div>
+      <div className="news__head" aria-hidden="true">
+        <span>Time</span>
+        <span>Headline</span>
+        <span>Category</span>
+      </div>
       {connected && items.length > 0 ? (
         <NewsList items={items} tz={tz} />
       ) : (
         <EmptyState
           icon={<Newspaper size={18} />}
           title={connected ? 'NO HEADLINES' : 'NEWS PROVIDER NOT CONNECTED'}
-          message={connected ? 'No headlines in this category yet.' : 'Headlines appear here once a news provider is connected. No placeholder stories are shown.'}
+          message={connected ? 'No headlines in this category yet.' : 'Gold, USD, Fed, rates, inflation, geopolitics and COMEX headlines appear here once a news provider is connected.'}
         />
       )}
     </Panel>

@@ -32,10 +32,10 @@ export function Dashboard() {
         <div className="dash__col dash__col--side">
           <div className="area-calendar"><CalendarPanel /></div>
           <div className="area-news"><NewsPanel /></div>
-          <div className="area-status"><SystemStatusPanel /></div>
         </div>
         <div className="dash__col dash__col--ai">
           <div className="area-ai"><AiPanel /></div>
+          <div className="area-status"><SystemStatusPanel /></div>
         </div>
       </main>
       <Footer />

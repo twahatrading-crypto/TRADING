@@ -63,13 +63,15 @@ const TAB_INTRO: Record<AiTab, { title: string; items: string[]; placeholder: st
 };
 
 export function AiPanel() {
-  const { ai } = useServices();
+  const { ai, market } = useServices();
   const state = useStore(ai.store, (s) => s);
+  const marketConnection = useStore(market.store, (s) => s.connection);
   const tz = useDisplayTimeZone();
   const [tab, setTab] = useState<AiTab>('chat');
   const [draft, setDraft] = useState('');
   const logRef = useRef<HTMLDivElement>(null);
   const connected = state.status === 'CONNECTED';
+  const marketLive = marketConnection === 'LIVE' || marketConnection === 'DELAYED';
   const intro = TAB_INTRO[tab];
 
   useEffect(() => {
@@ -87,7 +89,7 @@ export function AiPanel() {
     <section id="ai" className="panel ai" aria-labelledby="ai-title">
       <header className="ai__head">
         <div className="ai__brand">
-          <span className="ai__mark" aria-hidden="true"><BrainCircuit size={20} /></span>
+          <span className="ai__mark" aria-hidden="true"><BrainCircuit size={19} /></span>
           <div className="ai__titles">
             <h2 id="ai-title" className="ai__title">TLUXE AI</h2>
             <div className="ai__subtitle">Trading Research &amp; Development Assistant</div>
@@ -109,22 +111,42 @@ export function AiPanel() {
         ))}
       </div>
 
+      <div className="ai__actions" aria-label="Quick actions">
+        {ACTIONS.map(({ id, icon: Icon }) => (
+          <button key={id} type="button" className="ai__action" onClick={() => void ai.runAction(tab, id)} disabled={state.pending}>
+            <Icon size={15} />
+            <span>{AI_ACTION_LABELS[id]}</span>
+          </button>
+        ))}
+      </div>
+
       <div className="ai__log" ref={logRef} aria-live="polite">
-        <div className="ai__intro">
-          <span className="ai__avatar" aria-hidden="true"><BrainCircuit size={16} /></span>
-          <div className="ai__bubble ai__bubble--intro">
-            <p className="ai__intro-title">{intro.title}</p>
-            <ul className="ai__caps">
-              {intro.items.map((i) => (
-                <li key={i}>{i}</li>
-              ))}
-            </ul>
-            {!connected && (
-              <p className="ai__offline" role="note">
-                AI provider not connected. The workspace is ready, but requests are not sent anywhere and no responses are generated until a provider is configured.
-              </p>
-            )}
-          </div>
+        <div className="ai__card">
+          <p className="ai__intro-title">{intro.title}</p>
+          <ul className="ai__caps">
+            {intro.items.map((i) => (
+              <li key={i}>{i}</li>
+            ))}
+          </ul>
+          <dl className="ai__ws">
+            <div>
+              <dt>AI provider</dt>
+              <dd className={connected ? 'is-ok' : 'is-warn'}>{connected ? state.providerName : 'Not connected'}</dd>
+            </div>
+            <div>
+              <dt>Market context</dt>
+              <dd className={marketLive ? 'is-ok' : 'is-warn'}>{marketLive ? 'GC live feed' : 'Not connected'}</dd>
+            </div>
+            <div>
+              <dt>Engine access</dt>
+              <dd className="is-off">Disabled · Phase 1</dd>
+            </div>
+          </dl>
+          {!connected && (
+            <p className="ai__offline" role="note">
+              Requests are not sent and no responses are generated until an AI provider is configured.
+            </p>
+          )}
         </div>
         {state.messages.map((m) => (
           <div key={m.id} className={`ai__msg ai__msg--${m.role}`}>
@@ -135,29 +157,22 @@ export function AiPanel() {
         {state.pending && <div className="ai__msg ai__msg--assistant"><div className="ai__bubble">…</div></div>}
       </div>
 
-      <div className="ai__actions">
-        {ACTIONS.map(({ id, icon: Icon }) => (
-          <button key={id} type="button" className="ai__action" onClick={() => void ai.runAction(tab, id)} disabled={state.pending}>
-            <Icon size={15} />
-            <span>{AI_ACTION_LABELS[id]}</span>
+      <div className="ai__composer">
+        <form className="ai__input" onSubmit={submit}>
+          <label htmlFor="ai-input" className="sr-only">Message TLUXE AI</label>
+          <input
+            id="ai-input"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder={intro.placeholder}
+            autoComplete="off"
+          />
+          <button type="submit" className="ai__send" aria-label="Send" disabled={!draft.trim() || state.pending}>
+            <Send size={16} />
           </button>
-        ))}
+        </form>
+        <p className="ai__foot">{connected ? `Model: ${state.providerName}` : 'Offline — messages are not sent while the AI provider is disconnected.'}</p>
       </div>
-
-      <form className="ai__input" onSubmit={submit}>
-        <label htmlFor="ai-input" className="sr-only">Message TLUXE AI</label>
-        <input
-          id="ai-input"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          placeholder={intro.placeholder}
-          autoComplete="off"
-        />
-        <button type="submit" className="ai__send" aria-label="Send" disabled={!draft.trim() || state.pending}>
-          <Send size={16} />
-        </button>
-      </form>
-      <p className="ai__foot">{connected ? `Model: ${state.providerName}` : 'Messages are not sent while the AI provider is disconnected.'}</p>
     </section>
   );
 }

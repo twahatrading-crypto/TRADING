@@ -14,9 +14,9 @@
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding: 11px var(--pad) 10px;
+  padding: 9px var(--pad) 8px;
   border-bottom: 1px solid var(--border);
-  min-height: 46px;
+  min-height: 44px;
 }
 
 .panel__title-wrap {
@@ -65,7 +65,7 @@
 }
 
 .panel__body {
-  padding: var(--pad);
+  padding: 12px var(--pad) var(--pad);
   min-width: 0;
   flex: 1;
   display: flex;
@@ -157,9 +157,9 @@ button.chip:hover {
   display: inline-block;
 }
 .dot--ok { background: var(--green); box-shadow: 0 0 8px rgba(63, 207, 124, 0.6); }
-.dot--warn { background: var(--red); box-shadow: 0 0 6px rgba(239, 93, 93, 0.45); }
+.dot--warn { background: transparent; border: 2px solid var(--amber); }
 .dot--bad { background: var(--red); box-shadow: 0 0 8px rgba(239, 93, 93, 0.7); }
-.dot--off { background: var(--text-4); }
+.dot--off { background: transparent; border: 2px solid var(--text-4); }
 .dot--info { background: var(--blue); box-shadow: 0 0 8px rgba(91, 141, 239, 0.6); }
 .dot--pulse { animation: dot-pulse 1.6s ease-in-out infinite; }
 
@@ -186,7 +186,7 @@ button.chip:hover {
   gap: 6px;
 }
 .pill--ok { color: var(--green); border-color: rgba(63, 207, 124, 0.3); background: var(--green-soft); }
-.pill--warn { color: #f08a8a; border-color: rgba(239, 93, 93, 0.3); background: var(--red-soft); }
+.pill--warn { color: var(--amber); border-color: rgba(229, 163, 59, 0.35); background: var(--amber-soft); }
 .pill--bad { color: var(--red); border-color: rgba(239, 93, 93, 0.4); background: var(--red-soft); }
 .pill--off { color: var(--text-3); }
 .pill--info { color: var(--blue); border-color: rgba(91, 141, 239, 0.3); background: var(--blue-soft); }

@@ -1,10 +1,9 @@
-import { Bell } from 'lucide-react';
 import { QUOTE_STALE_AFTER_MS } from '../../config/instrument';
 import { useMarket } from '../../hooks/useMarket';
 import { CONNECTION_LABEL, getQuoteDisplayMode, type QuoteDisplayMode } from '../../services/market/normalize';
 import { useNow } from '../../store/clock';
 import type { ConnectionState, MarketState } from '../../types/market';
-import { directionOf, formatPercent, formatPrice, formatSigned, formatVolume } from '../../utils/format';
+import { directionOf, formatPercent, formatPrice, formatSigned, formatVolume, UNKNOWN } from '../../utils/format';
 import { Logo } from '../branding/Logo';
 import { StatusPill } from '../ui/StatusPill';
 import { HeaderClock } from './HeaderClock';
@@ -18,11 +17,12 @@ const CONNECTION_TONE: Record<ConnectionState, 'ok' | 'warn' | 'bad' | 'off' | '
   UNAVAILABLE: 'warn',
 };
 
-function Field({ label, value, className }: { label: string; value: string; className?: string }) {
+function Field({ label, value }: { label: string; value: string }) {
+  const unknown = value === UNKNOWN;
   return (
-    <div className={`mbar__field ${className ?? ''}`}>
+    <div className={`mbar__field ${unknown ? 'is-unknown' : ''}`}>
       <span className="mbar__label">{label}</span>
-      <span className="mbar__value num">{value}</span>
+      <span className="mbar__value num" title={unknown ? 'Not supplied — no provider connected' : undefined}>{value}</span>
     </div>
   );
 }
@@ -34,7 +34,7 @@ export function QuoteBlock({ state, mode }: { state: MarketState; mode: QuoteDis
     return (
       <div className="mbar__price mbar__price--empty" data-testid="quote-unavailable">
         <span className="mbar__unavail">{mode === 'connecting' ? 'GC CONNECTING…' : 'GC DATA UNAVAILABLE'}</span>
-        <span className="mbar__subtle">No price is shown until a provider supplies one</span>
+        <span className="mbar__subtle">{mode === 'connecting' ? 'Waiting for first quote' : 'Awaiting market-data provider'}</span>
       </div>
     );
   }
@@ -95,10 +95,6 @@ export function MarketBar() {
             Provider: <strong>{provider?.name ?? 'Not Connected'}</strong>
           </span>
         </div>
-
-        <button className="mbar__icon-btn" type="button" disabled title="Alerts — available once market data is connected" aria-label="Alerts (unavailable)">
-          <Bell size={17} />
-        </button>
 
         <HeaderClock />
       </div>

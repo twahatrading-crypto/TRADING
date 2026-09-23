@@ -22,6 +22,20 @@ function Value({ label, v }: { label: string; v: string | null }) {
   );
 }
 
+export function CalendarHeader() {
+  return (
+    <div className="cal__head" aria-hidden="true">
+      <span>Time</span>
+      <span>Cty</span>
+      <span>Event</span>
+      <span>Impact</span>
+      <span className="cal__num">Prev</span>
+      <span className="cal__num">Fcst</span>
+      <span className="cal__num">Actual</span>
+    </div>
+  );
+}
+
 export function CalendarList({ events, tz }: { events: EconomicEvent[]; tz: string }) {
   return (
     <ul className="cal__list">
@@ -31,17 +45,13 @@ export function CalendarList({ events, tz }: { events: EconomicEvent[]; tz: stri
             <span className="cal__time">{formatHm24(e.time, tz)}</span>
             <span className="cal__date">{formatShortDate(e.time, tz)}</span>
           </div>
-          <div className="cal__main">
-            <div className="cal__top">
-              <CountryBadge code={e.country} />
-              <span className="cal__event">{e.event}</span>
-              <span className={`cal__imp cal__imp--${e.importance.toLowerCase()}`}>{e.importance}</span>
-            </div>
-            <div className="cal__vals">
-              <Value label="Prev" v={e.previous} />
-              <Value label="Fcst" v={e.forecast} />
-              <Value label="Actual" v={e.actual} />
-            </div>
+          <CountryBadge code={e.country} />
+          <span className="cal__event">{e.event}</span>
+          <span className={`cal__imp cal__imp--${e.importance.toLowerCase()}`}>{e.importance}</span>
+          <div className="cal__vals">
+            <Value label="Prev" v={e.previous} />
+            <Value label="Fcst" v={e.forecast} />
+            <Value label="Actual" v={e.actual} />
           </div>
         </li>
       ))}
@@ -79,6 +89,7 @@ export function CalendarPanel() {
           </button>
         ))}
       </div>
+      <CalendarHeader />
       {connected && events.length > 0 ? (
         <CalendarList events={events} tz={tz} />
       ) : (
@@ -88,9 +99,8 @@ export function CalendarPanel() {
           message={
             connected
               ? 'No scheduled releases match this filter.'
-              : 'Scheduled releases with previous, forecast and actual values will appear once a calendar provider is connected.'
+              : 'Scheduled releases with previous, forecast and actual values appear here once a calendar provider is connected.'
           }
-          meta="Time · Country · Event · Impact · Prev · Fcst · Actual"
         />
       )}
     </Panel>

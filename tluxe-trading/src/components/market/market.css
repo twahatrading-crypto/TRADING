@@ -1,24 +1,28 @@
+/* One continuous quote strip:
+   brand | GC | price | bid ask high low volume | provider/status | clock */
 .mbar {
   position: sticky;
   top: 0;
   z-index: 20;
-  background: rgba(8, 11, 16, 0.94);
+  background: rgba(8, 11, 16, 0.95);
   backdrop-filter: blur(10px);
   border-bottom: 1px solid var(--border);
 }
 .mbar__inner {
   display: grid;
-  grid-template-columns: auto minmax(170px, auto) minmax(200px, auto) minmax(0, 1fr) auto auto auto;
-  grid-template-areas: 'brand inst price fields conn bell clock';
-  align-items: center;
-  gap: 0;
+  grid-template-columns: auto auto minmax(210px, auto) minmax(0, 1fr) auto auto;
+  grid-template-areas: 'brand inst price fields conn clock';
+  align-items: stretch;
   max-width: 2480px;
   margin: 0 auto;
   padding: 0 clamp(12px, 1.4vw, 24px);
-  min-height: 72px;
+  min-height: 64px;
 }
 .mbar__inner > * {
-  padding: 10px clamp(10px, 1vw, 20px);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 8px clamp(12px, 1.1vw, 22px);
   min-width: 0;
 }
 .mbar__inner > * + * {
@@ -29,7 +33,6 @@
 .mbar__price { grid-area: price; }
 .mbar__fields { grid-area: fields; }
 .mbar__conn { grid-area: conn; }
-.mbar__icon-btn { grid-area: bell; }
 .hclock { grid-area: clock; }
 
 .mbar__inst-name {
@@ -47,8 +50,6 @@
 .mbar__inst-title {
   font-weight: 600;
   font-size: var(--fs-md);
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 .mbar__inst-meta {
   font-size: var(--fs-xs);
@@ -57,13 +58,9 @@
   white-space: nowrap;
 }
 
-.mbar__price {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
+.mbar__price { gap: 2px; }
 .mbar__last {
-  font-size: clamp(22px, 1.7vw, 32px);
+  font-size: clamp(22px, 1.55vw, 30px);
   font-weight: 600;
   line-height: 1.05;
   letter-spacing: -0.01em;
@@ -84,9 +81,8 @@
 }
 .mbar__tag--stale { color: var(--amber); background: var(--amber-soft); }
 .mbar__tag--delayed { color: var(--blue); background: var(--blue-soft); }
-
 .mbar__unavail {
-  font-size: clamp(14px, 1.05vw, 19px);
+  font-size: clamp(14px, 0.95vw, 18px);
   font-weight: 700;
   letter-spacing: 0.08em;
   color: var(--amber);
@@ -98,20 +94,25 @@
   white-space: nowrap;
 }
 
+/* Quote fields: equal cells separated by hairlines */
 .mbar__fields {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(64px, 120px));
-  justify-content: start;
-  gap: 4px clamp(12px, 1.4vw, 32px);
+  display: grid !important;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  padding: 0 !important;
 }
 .mbar__field {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  justify-content: center;
+  gap: 4px;
+  padding: 8px clamp(12px, 1vw, 20px);
   min-width: 0;
 }
+.mbar__field + .mbar__field { border-left: 1px solid rgba(255, 255, 255, 0.04); }
 .mbar__label {
-  font-size: var(--fs-xs);
+  font-size: var(--fs-2xs);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
   color: var(--text-3);
 }
 .mbar__value {
@@ -120,10 +121,13 @@
   white-space: nowrap;
   color: var(--text);
 }
+.mbar__field.is-unknown .mbar__value {
+  color: var(--text-4);
+  font-weight: 400;
+  cursor: help;
+}
 
 .mbar__conn {
-  display: flex;
-  flex-direction: column;
   align-items: flex-start;
   gap: 5px;
 }
@@ -137,50 +141,35 @@
   font-weight: 600;
 }
 
-.mbar__icon-btn {
-  display: grid;
-  place-items: center;
-  align-self: stretch;
-  background: transparent;
-  border: 0;
-  border-left: 1px solid var(--border);
-  color: var(--text-3);
-  padding: 0 clamp(12px, 1vw, 18px) !important;
-}
-.mbar__icon-btn:disabled {
-  cursor: not-allowed;
-  opacity: 0.7;
-}
-
 .hclock {
   text-align: right;
+  align-items: flex-end;
   white-space: nowrap;
   padding-right: 0 !important;
 }
-.hclock__date { font-size: var(--fs-xs); color: var(--text-2); }
-.hclock__time { font-size: clamp(17px, 1.3vw, 24px); font-weight: 600; line-height: 1.2; }
-.hclock__zone { font-size: var(--fs-2xs); color: var(--text-3); }
+.hclock__date { color: var(--text-2); }
+.hclock__time { font-size: clamp(17px, 1.2vw, 23px); font-weight: 600; line-height: 1.2; }
+.hclock__zone { font-size: var(--fs-2xs); color: var(--text-3); margin-top: 1px; }
 
-/* Laptop: fields drop to a second row */
+/* Laptop: quote fields become a second strip */
 @media (max-width: 1439px) {
   .mbar__inner {
-    grid-template-columns: auto minmax(0, auto) minmax(0, 1fr) auto auto;
+    grid-template-columns: auto auto minmax(0, 1fr) auto auto;
     grid-template-areas:
-      'brand inst price conn clock'
+      'brand  inst   price  conn   clock'
       'fields fields fields fields fields';
   }
-  .mbar__icon-btn { display: none !important; }
   .mbar__fields {
     border-left: 0 !important;
     border-top: 1px solid var(--border);
-    padding: 8px 0 !important;
   }
-  .mbar__fields { grid-template-columns: repeat(5, auto); column-gap: clamp(24px, 4vw, 56px); }
   .mbar__field {
     flex-direction: row;
     align-items: baseline;
-    gap: 8px;
+    gap: 10px;
+    padding: 7px 16px;
   }
+  .mbar__field:first-child { padding-left: 0; }
   .mbar__value { font-size: var(--fs-md); }
 }
 
@@ -189,8 +178,8 @@
   .mbar__inner {
     grid-template-columns: auto minmax(0, 1fr) auto;
     grid-template-areas:
-      'brand price clock'
-      'inst  inst  conn'
+      'brand  price  clock'
+      'inst   inst   conn'
       'fields fields fields';
   }
   .mbar__instrument {
@@ -200,22 +189,22 @@
   }
   .mbar__conn {
     border-top: 1px solid var(--border);
-    flex-direction: row;
+    flex-direction: row !important;
     align-items: center;
     gap: 10px;
   }
 }
 
-/* Mobile: deliberate stacked quote card */
+/* Mobile: stacked quote card */
 @media (max-width: 767px) {
   .mbar { position: static; }
   .mbar__inner {
     grid-template-columns: minmax(0, 1fr) auto;
     grid-template-areas:
-      'brand clock'
-      'inst  inst'
-      'price price'
-      'conn  conn'
+      'brand  clock'
+      'inst   inst'
+      'price  price'
+      'conn   conn'
       'fields fields';
     padding: 0 16px;
   }
@@ -226,26 +215,23 @@
   .mbar__inner > .hclock { padding-left: 8px; }
   .hclock__date { display: none; }
   .hclock__time { font-size: 16px; }
-  .mbar__instrument, .mbar__price, .mbar__conn, .mbar__fields {
-    border-top: 1px solid var(--border);
-  }
-  .mbar__instrument { padding-bottom: 4px !important; border-top: 1px solid var(--border); }
-  .mbar__price { border-top: 0; padding-top: 0 !important; }
+  .mbar__instrument { border-top: 1px solid var(--border); padding-bottom: 2px !important; }
+  .mbar__price { padding-top: 0 !important; }
+  .mbar__conn { border-top: 1px solid var(--border); justify-content: space-between; }
   .mbar__unavail { font-size: 18px; white-space: normal; }
   .mbar__subtle { white-space: normal; }
-  .mbar__conn {
-    flex-direction: row;
-    justify-content: space-between;
-    align-items: center;
-  }
   .mbar__fields {
     grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 10px 12px;
+    border-top: 1px solid var(--border);
+    padding: 4px 0 8px !important;
   }
   .mbar__field {
     flex-direction: column;
     align-items: flex-start;
     gap: 2px;
+    padding: 6px 0 6px 12px;
+    border-left: 1px solid rgba(255, 255, 255, 0.04) !important;
   }
+  .mbar__field:nth-child(3n + 1) { border-left: 0 !important; padding-left: 0; }
   .logo__text { font-size: 13px; letter-spacing: 0.12em; }
 }
