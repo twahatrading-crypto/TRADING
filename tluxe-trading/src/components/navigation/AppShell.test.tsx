@@ -58,6 +58,7 @@ describe('Left sidebar navigation', () => {
     expect(within(nav()).getByRole('link', { name: 'Liquidity' })).toHaveAttribute('href', '#/engines/liquidity');
     expect(within(nav()).getByRole('link', { name: 'Order Blocks' })).toHaveAttribute('href', '#/engines/order-blocks');
     expect(within(nav()).getByRole('link', { name: 'High / Low Reversal' })).toHaveAttribute('href', '#/engines/high-low-reversal');
+    expect(within(nav()).getByRole('link', { name: 'High / Low Engine' })).toHaveAttribute('href', '#/engines/high-low-engine');
     for (const s of ['Sweep / Reversal']) {
       const item = within(nav()).getByTitle(`${s} — not built yet`);
       expect(item).toHaveAttribute('aria-disabled', 'true');

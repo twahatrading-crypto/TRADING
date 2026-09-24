@@ -56,8 +56,8 @@ Open ONLY the newest preview. Leave exactly one TLUXE preview running.
   The hosted preview cannot reach the user's MT5, so it shows DATA UNAVAILABLE. Never use fake candles or prices to make it look connected.
 
 ## 9. Sidebar (all pages, via `AppShell`)
-Dashboard · Trading Strategy (Support & Resistance · Liquidity · Order Blocks · High / Low Reversal · Sweep / Reversal SOON) · Settings.
-Support & Resistance, Liquidity, Order Blocks and High / Low Reversal open their real pages. Entries live in `src/config/navigation.ts` (`route: null` = disabled SOON).
+Dashboard · Trading Strategy (Support & Resistance · Liquidity · Order Blocks · High / Low Reversal · High / Low Engine · Sweep / Reversal SOON) · Settings.
+Support & Resistance, Liquidity, Order Blocks, High / Low Reversal and High / Low Engine open their real pages. Entries live in `src/config/navigation.ts` (`route: null` = disabled SOON).
 
 ## 10. Safety check before any process command
 Before starting or stopping any Node/Vite/Python process, identify its PID, command line, working/project path and port.
@@ -81,8 +81,8 @@ that `git status` shows changes only inside `tluxe-trading/` (old project untouc
 
 ## Always
 No order placement, no auto-trading. Never commit secrets (`bridge/mt5/.env`).
-BUY/SELL setup states with entry zone / SL / TP / R:R appear ONLY on the High / Low Reversal page (explicit user
-request), as descriptive engine analysis — never guaranteed, never executed. All other engines never create trade signals.
+BUY/SELL setup states with entry zone / SL / TP / R:R appear ONLY on the High / Low Reversal and High / Low Engine pages
+(explicit user request), as descriptive engine analysis — never guaranteed, never executed. All other engines never create trade signals.
 
 ## Engines (independent — never mix)
 - S&R v1 is LOCKED (`src/engines/sr`, `src/services/sr`, `src/components/sr`). Do not change its behaviour.
@@ -94,4 +94,9 @@ request), as descriptive engine analysis — never guaranteed, never executed. A
   `/engines/high-low-reversal`): its own engine, state machine, score, replay and anti-repaint audit. It reads the Order
   Blocks engine's public output (own read-only instances) and never changes S&R, Liquidity or Order Blocks.
   Not locked until validated on REAL MT5 data. Dev visual harness: `/hlr-harness.html` (synthetic, bannered, dev only).
+- High / Low Engine (`src/engines/highLowEngine`, `src/services/highLowEngine`, `src/components/highLowEngine`, route
+  `/engines/high-low-engine`): a SECOND, fully separate H/L engine (never merge with High / Low Reversal). PDH/PDL, Asia
+  and major-swing levels, M15 sweep/reclaim, M5 CHOCH/BOS, M1 entry, persistent signal log, one-shot entry alerts.
+  No runner / mailer exists: Engine Status shows NOT CONFIGURED and email is never faked. Not locked until validated on
+  REAL MT5 data. Dev visual harness: `/hle-harness.html` (synthetic, bannered, dev only).
 - Sweep / Reversal is not built yet (disabled SOON in the sidebar).

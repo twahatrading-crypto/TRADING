@@ -16,6 +16,7 @@ import { SRService } from './sr/SRService';
 import { LiquidityService } from './liquidity/LiquidityService';
 import { OrderBlockService } from './orderBlocks/OrderBlockService';
 import { HLRService } from './hlReversal/HLRService';
+import { HighLowEngineService } from './highLowEngine/HighLowEngineService';
 import { loadMt5Config } from './mt5/config';
 import { Mt5Provider } from './mt5/Mt5Provider';
 
@@ -32,6 +33,7 @@ export interface Services {
   /** Order Block Engine v1 runtime (real candles only; independent of S&R and Liquidity). */
   orderBlocks: OrderBlockService;
   hlReversal: HLRService;
+  highLow: HighLowEngineService;
   /** MT5 price provider, when enabled in Settings (null otherwise). */
   mt5: Mt5Provider | null;
   /** Phase 1 has no persistence layer. */
@@ -85,6 +87,7 @@ export function createServices(providers: ProviderSet = defaultProviders(), opts
     liquidity: new LiquidityService(market, selection),
     orderBlocks: new OrderBlockService(market, selection),
     hlReversal: new HLRService(market, selection),
+    highLow: new HighLowEngineService(market, selection, storage),
     mt5: (providers.price.find((p) => p instanceof Mt5Provider) as Mt5Provider | undefined) ?? null,
     databaseStatus: 'NOT_CONNECTED',
   };
@@ -117,6 +120,7 @@ export function connectServices(s: Services): () => void {
   const stopLiquidity = s.liquidity.start();
   const stopOrderBlocks = s.orderBlocks.start();
   const stopHLR = s.hlReversal.start();
+  const stopHighLow = s.highLow.start();
   const teardown = () => {
     if (connected.get(s) !== teardown) return;
     connected.delete(s);
@@ -125,6 +129,7 @@ export function connectServices(s: Services): () => void {
     stopLiquidity();
     stopOrderBlocks();
     stopHLR();
+    stopHighLow();
     s.market.disconnect();
     s.news.disconnect();
     s.calendar.disconnect();

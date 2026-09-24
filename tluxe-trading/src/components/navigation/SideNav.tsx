@@ -3,6 +3,7 @@ import {
   ArrowLeftRight,
   Boxes,
   ChevronRight,
+  Diamond,
   Droplets,
   Layers,
   LayoutDashboard,
@@ -23,6 +24,7 @@ const STRATEGY_ICONS: Record<StrategyIcon, LucideIcon> = {
   liquidity: Droplets,
   orderBlocks: Boxes,
   hlr: ArrowDownUp,
+  hle: Diamond,
   sweep: ArrowLeftRight,
 };
 
