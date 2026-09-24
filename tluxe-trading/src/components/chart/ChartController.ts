@@ -2,6 +2,8 @@ import type * as LightweightCharts from 'lightweight-charts';
 import type { IChartApi, IPriceLine, ISeriesApi, ISeriesMarkersPluginApi, Time, UTCTimestamp } from 'lightweight-charts';
 import type { LiquidityDrawable, LiquidityMarker } from '../liquidity/liquidityView';
 import { LiquidityPrimitive } from './LiquidityPrimitive';
+import type { OBDrawable } from '../orderBlocks/obView';
+import { OrderBlockPrimitive } from './OrderBlockPrimitive';
 import type { Candle } from '../../types/market';
 import type { ChartOverlay } from '../../types/overlays';
 import { COMPACT_LABEL_WIDTH, ZONE_LABEL_MARGIN_MAX_SHARE, ZONE_LABEL_MARGIN_PX, ZonesPrimitive, type ZoneDrawable } from './ZonesPrimitive';
@@ -29,6 +31,7 @@ export class ChartController {
   private priceLines: IPriceLine[] = [];
   private zonesPrimitive: ZonesPrimitive | null = null;
   private liquidityPrimitive: LiquidityPrimitive | null = null;
+  private orderBlockPrimitive: OrderBlockPrimitive | null = null;
   private markers: ISeriesMarkersPluginApi<Time> | null = null;
   private readonly lib: ChartLib;
   /** After destroy() every call is a no-op (React cleanups may run after the chart is gone). */
@@ -141,6 +144,20 @@ export class ChartController {
       this.candles.attachPrimitive(this.liquidityPrimitive);
     }
     this.liquidityPrimitive.setItems(items);
+    const ts = this.chart.timeScale();
+    const width = ts.width();
+    const margin = Math.min(width < COMPACT_LABEL_WIDTH ? 110 : ZONE_LABEL_MARGIN_PX, width * ZONE_LABEL_MARGIN_MAX_SHARE);
+    ts.applyOptions({ rightOffset: items.length ? Math.ceil(margin / ts.options().barSpacing) : 0 });
+  }
+
+  /** Draw Order Block zones (Order Blocks page). Independent of the S&R and Liquidity layers. */
+  setOrderBlocks(items: OBDrawable[]): void {
+    if (this.disposed) return;
+    if (!this.orderBlockPrimitive) {
+      this.orderBlockPrimitive = new OrderBlockPrimitive();
+      this.candles.attachPrimitive(this.orderBlockPrimitive);
+    }
+    this.orderBlockPrimitive.setItems(items);
     const ts = this.chart.timeScale();
     const width = ts.width();
     const margin = Math.min(width < COMPACT_LABEL_WIDTH ? 110 : ZONE_LABEL_MARGIN_PX, width * ZONE_LABEL_MARGIN_MAX_SHARE);

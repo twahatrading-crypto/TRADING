@@ -17,7 +17,7 @@ try {
 }
 
 const BASE = process.env.PREVIEW_URL || 'http://localhost:5181';
-const PAGES = ['/#/', '/#/engines/support-resistance', '/#/settings'];
+const PAGES = ['/#/', '/#/engines/support-resistance', '/#/engines/liquidity', '/#/engines/order-blocks', '/#/settings'];
 const HMR = process.argv.includes('--hmr');
 const HMR_FILE = path.join(__dirname, '../src/components/market/MarketBar.tsx');
 const BRIDGE = 'http://127.0.0.1:8765';

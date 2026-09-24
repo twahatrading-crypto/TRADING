@@ -13,7 +13,7 @@ export default defineConfig({
       output: {
         manualChunks: {
           chart: ['lightweight-charts'],
-          react: ['react', 'react-dom'],
+          react: ['react', 'react-dom', 'react-dom/client', 'scheduler'],
         },
       },
     },

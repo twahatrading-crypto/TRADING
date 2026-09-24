@@ -1,0 +1,132 @@
+/* Order Blocks page — shares the S&R visual system (sr.css) with its own accents. */
+.ob .obdetails { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+@media (max-width: 1599px) {
+  .ob .obdetails { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ob .obdetails > :first-child { grid-column: auto; }
+}
+@media (max-width: 767px) {
+  .ob .obdetails { grid-template-columns: minmax(0, 1fr); }
+}
+
+.obtype {
+  display: inline-block;
+  min-width: 40px;
+  text-align: center;
+  font-size: var(--fs-2xs);
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.obtype--bullish { color: #8fe0b0; background: rgba(63, 207, 124, 0.13); border: 1px solid rgba(63, 207, 124, 0.42); }
+.obtype--bearish { color: #f3a0a0; background: rgba(239, 93, 93, 0.13); border: 1px solid rgba(239, 93, 93, 0.42); }
+
+.obstate {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+.obstate--fresh { color: var(--gold-bright); background: var(--gold-soft); border-color: var(--border-gold); }
+.obstate--active { color: var(--green); background: var(--green-soft); }
+.obstate--tested { color: var(--blue); background: var(--blue-soft); }
+.obstate--mitigated { color: var(--amber); background: var(--panel-2); border-color: var(--border-strong); }
+.obstate--invalidated { color: var(--text-3); background: var(--panel-2); border-color: var(--border); }
+.obstate--expired { color: var(--text-4); background: var(--panel-2); }
+
+.obtable td { white-space: nowrap; }
+.obnote { margin: 8px 0 0; font-size: var(--fs-xs); color: var(--text-3); }
+.obid { font-size: 10px; color: var(--text-3); overflow-wrap: anywhere; }
+.obohlc { display: block; margin-top: 2px; font-size: var(--fs-xs); color: var(--text-3); }
+.obreason { padding-left: 10px; }
+
+.obchart__head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 16px; align-items: flex-start; }
+.obnearwrap { display: flex; flex-wrap: wrap; gap: 8px; }
+.obnear {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--bg-raised);
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+}
+.obnear__label { font-weight: 800; letter-spacing: 0.08em; font-size: 10px; color: var(--text-3); }
+.obnear strong { color: var(--text); }
+.obnear__score { color: var(--gold-bright); font-weight: 700; }
+
+.obconfs { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.obconf {
+  width: 100%;
+  display: grid;
+  grid-template-columns: auto 1fr auto auto auto;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  text-align: left;
+}
+.obconf.is-selected,
+.obconf:hover { border-color: var(--border-gold); }
+.obconf__tfs { color: var(--text-2); }
+.obconf__near { color: var(--text-3); }
+
+.obmini { width: 100%; border-collapse: collapse; font-size: var(--fs-xs); }
+.obmini td { padding: 5px 6px; border-bottom: 1px solid var(--border); cursor: pointer; white-space: nowrap; }
+.obmini tr.is-selected td { background: var(--gold-soft); }
+.obcfbox { margin-top: 10px; }
+
+.obscore { width: 100%; border-collapse: collapse; font-size: var(--fs-xs); table-layout: fixed; }
+.obscore th:first-child { width: 40%; }
+.obscore th { text-align: left; white-space: nowrap; font-weight: 600; color: var(--text-3); padding: 4px 6px; border-bottom: 1px solid var(--border); }
+.obscore td { padding: 5px 6px; border-bottom: 1px solid var(--border); }
+.obscore .num-col,
+.obscore td.num { text-align: right; }
+.obscore tfoot td { border-bottom: 0; color: var(--text-2); font-weight: 700; }
+.obscore tfoot strong { color: var(--gold-bright); font-size: var(--fs-sm); }
+.obscore__bar { display: block; width: 100%; max-width: 90px; height: 3px; margin-top: 3px; border-radius: 2px; background: var(--panel-2); overflow: hidden; }
+.obscore__bar > span { display: block; height: 100%; background: var(--gold); }
+
+.obexcerpt { display: block; width: 100%; height: auto; max-height: 140px; margin-bottom: 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-raised); }
+.obexcerpt__zone--bull { fill: rgba(63, 207, 124, 0.22); stroke: rgba(63, 207, 124, 0.85); stroke-width: 1; }
+.obexcerpt__zone--bear { fill: rgba(239, 93, 93, 0.22); stroke: rgba(239, 93, 93, 0.85); stroke-width: 1; }
+.obexcerpt__up line { stroke: #3fcf7c; }
+.obexcerpt__up rect { fill: #3fcf7c; }
+.obexcerpt__down line { stroke: #ef5d5d; }
+.obexcerpt__down rect { fill: #ef5d5d; }
+.obexcerpt .is-test rect { stroke: var(--gold-bright); stroke-width: 1; }
+.obexcerpt__mark { fill: var(--gold-bright); }
+
+.obfacts,
+.obsettings .srfacts { margin: 0; display: grid; gap: 0; }
+.obfacts .srfact,
+.obsettings .srfact { display: grid; grid-template-columns: minmax(120px, 42%) 1fr; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: var(--fs-sm); }
+.obfacts dt,
+.obsettings dt { color: var(--text-3); }
+.obfacts dd,
+.obsettings dd { margin: 0; overflow-wrap: anywhere; }
+.obsettings__mode { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.obsettings__label { font-size: var(--fs-sm); color: var(--text-2); font-weight: 600; }
+
+.obreplay .replay__read dd.ok { color: var(--green); }
+.obreplay .replay__read dd.bad { color: var(--red); }
+
+.obpanel .srtabs { display: flex; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+.obpanel .srtabs__tab { flex: 1 0 auto; padding-left: 10px; padding-right: 10px; white-space: nowrap; }
+
+/* Details: long values wrap instead of being cut off. */
+.ob .obdetails .srkv dd { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
+.ob .obdetails .obohlc { white-space: normal; }
+.obscore th:not(:first-child) { width: 20%; font-size: 10px; letter-spacing: 0.02em; }
+.obmini { table-layout: auto; }
+.obmini td.obmini__zone { white-space: normal; }

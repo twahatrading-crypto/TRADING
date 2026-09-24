@@ -15,6 +15,9 @@ export const SR_ROUTE = '/engines/support-resistance';
 /** Trading Strategy → Liquidity. */
 export const LIQUIDITY_ROUTE = '/engines/liquidity';
 
+/** Trading Strategy → Order Blocks. */
+export const ORDER_BLOCKS_ROUTE = '/engines/order-blocks';
+
 /** Settings → Data Providers page. */
 export const SETTINGS_ROUTE = '/settings';
 

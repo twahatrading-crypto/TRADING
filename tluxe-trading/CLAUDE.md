@@ -56,8 +56,8 @@ Open ONLY the newest preview. Leave exactly one TLUXE preview running.
   The hosted preview cannot reach the user's MT5, so it shows DATA UNAVAILABLE. Never use fake candles or prices to make it look connected.
 
 ## 9. Sidebar (all pages, via `AppShell`)
-Dashboard · Trading Strategy (Support & Resistance · Liquidity · Order Blocks SOON · Sweep / Reversal SOON) · Settings.
-Support & Resistance and Liquidity open their real pages. Entries live in `src/config/navigation.ts` (`route: null` = disabled SOON).
+Dashboard · Trading Strategy (Support & Resistance · Liquidity · Order Blocks · Sweep / Reversal SOON) · Settings.
+Support & Resistance, Liquidity and Order Blocks open their real pages. Entries live in `src/config/navigation.ts` (`route: null` = disabled SOON).
 
 ## 10. Safety check before any process command
 Before starting or stopping any Node/Vite/Python process, identify its PID, command line, working/project path and port.
@@ -86,3 +86,6 @@ No BUY/SELL signals, no order placement, no auto-trading. Never commit secrets (
 - S&R v1 is LOCKED (`src/engines/sr`, `src/services/sr`, `src/components/sr`). Do not change its behaviour.
 - Liquidity v1 (`src/engines/liquidity`, `src/services/liquidity`, `src/components/liquidity`, route `/engines/liquidity`)
   is independent of S&R: its own engines, stores, settings, score and replay. Liquidity never creates trade signals.
+- Order Blocks v1 (`src/engines/orderBlocks`, `src/services/orderBlocks`, `src/components/orderBlocks`, route `/engines/order-blocks`)
+  is independent of S&R and Liquidity: its own engines, stores, settings, score, MTF confluence and replay. Never creates trade signals.
+- Sweep / Reversal is not built yet (disabled SOON in the sidebar).
