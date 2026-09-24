@@ -1,4 +1,4 @@
-import { SR_ROUTE } from './modules';
+import { LIQUIDITY_ROUTE, SR_ROUTE } from './modules';
 
 /**
  * Trading Strategy pages shown under "Trading Strategy" in the sidebar.
@@ -19,7 +19,7 @@ export interface StrategyNavItem {
 
 export const STRATEGY_NAV: readonly StrategyNavItem[] = [
   { id: 'support-resistance', label: 'Support & Resistance', icon: 'sr', route: SR_ROUTE },
-  { id: 'liquidity', label: 'Liquidity', icon: 'liquidity', route: null },
+  { id: 'liquidity', label: 'Liquidity', icon: 'liquidity', route: LIQUIDITY_ROUTE },
   { id: 'order-blocks', label: 'Order Blocks', icon: 'orderBlocks', route: null },
   { id: 'sweep-reversal', label: 'Sweep / Reversal', icon: 'sweep', route: null },
 ];

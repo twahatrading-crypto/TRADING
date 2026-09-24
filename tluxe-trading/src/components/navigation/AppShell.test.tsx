@@ -50,12 +50,13 @@ describe('Left sidebar navigation', () => {
     expect(within(nav()).getByRole('link', { name: 'Dashboard' })).not.toHaveAttribute('aria-current');
   });
 
-  it('Trading Strategy expands/collapses; only Support & Resistance is enabled', () => {
+  it('Trading Strategy expands/collapses; S&R and Liquidity are enabled, unfinished strategies are not', () => {
     renderWithServices(<App />);
     const head = within(nav()).getByRole('button', { name: 'Trading Strategy' });
     expect(head).toHaveAttribute('aria-expanded', 'true');
     expect(within(nav()).getByRole('link', { name: 'Support & Resistance' })).toHaveAttribute('href', '#/engines/support-resistance');
-    for (const s of ['Liquidity', 'Order Blocks', 'Sweep / Reversal']) {
+    expect(within(nav()).getByRole('link', { name: 'Liquidity' })).toHaveAttribute('href', '#/engines/liquidity');
+    for (const s of ['Order Blocks', 'Sweep / Reversal']) {
       const item = within(nav()).getByTitle(`${s} — not built yet`);
       expect(item).toHaveAttribute('aria-disabled', 'true');
       expect(item.tagName).not.toBe('A');

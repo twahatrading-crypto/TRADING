@@ -56,8 +56,8 @@ Open ONLY the newest preview. Leave exactly one TLUXE preview running.
   The hosted preview cannot reach the user's MT5, so it shows DATA UNAVAILABLE. Never use fake candles or prices to make it look connected.
 
 ## 9. Sidebar (all pages, via `AppShell`)
-Dashboard · Trading Strategy (Support & Resistance · Liquidity SOON · Order Blocks SOON · Sweep / Reversal SOON) · Settings.
-Support & Resistance opens the real S&R page. Entries live in `src/config/navigation.ts` (`route: null` = disabled SOON).
+Dashboard · Trading Strategy (Support & Resistance · Liquidity · Order Blocks SOON · Sweep / Reversal SOON) · Settings.
+Support & Resistance and Liquidity open their real pages. Entries live in `src/config/navigation.ts` (`route: null` = disabled SOON).
 
 ## 10. Safety check before any process command
 Before starting or stopping any Node/Vite/Python process, identify its PID, command line, working/project path and port.
@@ -81,3 +81,8 @@ that `git status` shows changes only inside `tluxe-trading/` (old project untouc
 
 ## Always
 No BUY/SELL signals, no order placement, no auto-trading. Never commit secrets (`bridge/mt5/.env`).
+
+## Engines (independent — never mix)
+- S&R v1 is LOCKED (`src/engines/sr`, `src/services/sr`, `src/components/sr`). Do not change its behaviour.
+- Liquidity v1 (`src/engines/liquidity`, `src/services/liquidity`, `src/components/liquidity`, route `/engines/liquidity`)
+  is independent of S&R: its own engines, stores, settings, score and replay. Liquidity never creates trade signals.

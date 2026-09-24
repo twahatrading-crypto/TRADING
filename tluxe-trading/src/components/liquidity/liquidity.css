@@ -1,0 +1,105 @@
+/* Liquidity page — shares the S&R visual system (sr.css) with its own accents. */
+.lq .lqdetails { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+@media (max-width: 1599px) {
+  .lq .lqdetails { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .lq .lqdetails > :first-child { grid-column: auto; }
+}
+@media (max-width: 767px) {
+  .lq .lqdetails { grid-template-columns: minmax(0, 1fr); }
+}
+
+.lqside {
+  display: inline-block;
+  min-width: 34px;
+  text-align: center;
+  font-size: var(--fs-2xs);
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.lqside--bsl { color: #f2b08a; background: rgba(226, 120, 72, 0.16); border: 1px solid rgba(226, 120, 72, 0.45); }
+.lqside--ssl { color: #86e3d2; background: rgba(45, 196, 170, 0.14); border: 1px solid rgba(45, 196, 170, 0.45); }
+
+.lqstate {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+.lqstate--active { color: var(--green); background: var(--green-soft); }
+.lqstate--tested { color: var(--blue); background: var(--blue-soft); }
+.lqstate--swept { color: var(--gold-bright); background: var(--gold-soft); border-color: var(--border-gold); }
+.lqstate--swept.is-reclaimed { color: #efcd84; }
+.lqstate--consumed { color: var(--text-3); background: var(--panel-2); border-color: var(--border-strong); }
+.lqstate--forming,
+.lqstate--invalidated { color: var(--text-4); background: var(--panel-2); }
+
+.lqsrc { margin-left: 6px; font-size: 10px; color: var(--text-3); letter-spacing: 0.04em; }
+.lqtable td { white-space: nowrap; }
+.lqout--reclaimed { color: var(--gold-bright); }
+.lqout--accepted { color: var(--text-2); }
+.lqout--pending { color: var(--blue); }
+.lqnote { margin: 8px 0 0; font-size: var(--fs-xs); color: var(--text-3); }
+.lqprobe { color: var(--amber); }
+.lqid { font-size: 10px; color: var(--text-3); overflow-wrap: anywhere; }
+
+.lqchart__head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 16px; align-items: flex-start; }
+.lqnearwrap { display: flex; flex-wrap: wrap; gap: 8px; }
+.lqnear {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--bg-raised);
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+}
+.lqnear__label { font-weight: 800; letter-spacing: 0.08em; font-size: 10px; }
+.lqnear--bsl .lqnear__label { color: #f2b08a; }
+.lqnear--ssl .lqnear__label { color: #86e3d2; }
+.lqnear strong { color: var(--text); }
+.lqnear__score { color: var(--gold-bright); font-weight: 700; }
+
+.lqclusters { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.lqcluster {
+  width: 100%;
+  display: grid;
+  grid-template-columns: auto 1fr auto auto auto;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  text-align: left;
+}
+.lqcluster.is-selected,
+.lqcluster:hover { border-color: var(--border-gold); }
+.lqcluster__tfs { color: var(--text-2); }
+.lqcluster__near { color: var(--text-3); }
+
+.lqmini { width: 100%; border-collapse: collapse; font-size: var(--fs-xs); }
+.lqmini td { padding: 5px 6px; border-bottom: 1px solid var(--border); cursor: pointer; }
+.lqmini tr.is-selected td { background: var(--gold-soft); }
+.lqcfbox { margin-top: 10px; }
+
+.lqfacts,
+.lqsettings .srfacts { margin: 0; display: grid; gap: 0; }
+.lqfacts .srfact,
+.lqsettings .srfact { display: grid; grid-template-columns: minmax(120px, 42%) 1fr; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: var(--fs-sm); }
+.lqfacts dt,
+.lqsettings dt { color: var(--text-3); }
+.lqfacts dd,
+.lqsettings dd { margin: 0; overflow-wrap: anywhere; }
+
+.lqpanel .srtabs { display: flex; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+.lqpanel .srtabs__tab { flex: 1 0 auto; padding-left: 10px; padding-right: 10px; white-space: nowrap; }

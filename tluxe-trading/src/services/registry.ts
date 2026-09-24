@@ -13,6 +13,7 @@ import { MarketDataService } from './market/MarketDataService';
 import type { MarketDataProvider } from './market/MarketDataProvider';
 import { createNewsService, type NewsProvider, type NewsService } from './news/NewsProvider';
 import { SRService } from './sr/SRService';
+import { LiquidityService } from './liquidity/LiquidityService';
 import { loadMt5Config } from './mt5/config';
 import { Mt5Provider } from './mt5/Mt5Provider';
 
@@ -24,6 +25,8 @@ export interface Services {
   ai: AiService;
   /** Support & Resistance engine runtime (real candles only). */
   sr: SRService;
+  /** Liquidity Engine v1 runtime (real candles only; independent of S&R). */
+  liquidity: LiquidityService;
   /** MT5 price provider, when enabled in Settings (null otherwise). */
   mt5: Mt5Provider | null;
   /** Phase 1 has no persistence layer. */
@@ -74,6 +77,7 @@ export function createServices(providers: ProviderSet = defaultProviders(), opts
     calendar: createCalendarService(providers.calendar),
     ai: new AiService(providers.ai),
     sr: new SRService(market, selection, storage),
+    liquidity: new LiquidityService(market, selection),
     mt5: (providers.price.find((p) => p instanceof Mt5Provider) as Mt5Provider | undefined) ?? null,
     databaseStatus: 'NOT_CONNECTED',
   };
@@ -103,11 +107,13 @@ export function connectServices(s: Services): () => void {
   s.market.activate(s.instruments.store.getState().activeId);
   const stop = s.instruments.store.subscribe(() => s.market.activate(s.instruments.store.getState().activeId));
   const stopSR = s.sr.start();
+  const stopLiquidity = s.liquidity.start();
   const teardown = () => {
     if (connected.get(s) !== teardown) return;
     connected.delete(s);
     stop();
     stopSR();
+    stopLiquidity();
     s.market.disconnect();
     s.news.disconnect();
     s.calendar.disconnect();

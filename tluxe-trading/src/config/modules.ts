@@ -12,6 +12,9 @@ export interface ModuleConfig {
 /** Engines → Support & Resistance page. */
 export const SR_ROUTE = '/engines/support-resistance';
 
+/** Trading Strategy → Liquidity. */
+export const LIQUIDITY_ROUTE = '/engines/liquidity';
+
 /** Settings → Data Providers page. */
 export const SETTINGS_ROUTE = '/settings';
 

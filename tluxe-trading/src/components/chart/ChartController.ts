@@ -1,5 +1,7 @@
 import type * as LightweightCharts from 'lightweight-charts';
-import type { IChartApi, IPriceLine, ISeriesApi, UTCTimestamp } from 'lightweight-charts';
+import type { IChartApi, IPriceLine, ISeriesApi, ISeriesMarkersPluginApi, Time, UTCTimestamp } from 'lightweight-charts';
+import type { LiquidityDrawable, LiquidityMarker } from '../liquidity/liquidityView';
+import { LiquidityPrimitive } from './LiquidityPrimitive';
 import type { Candle } from '../../types/market';
 import type { ChartOverlay } from '../../types/overlays';
 import { COMPACT_LABEL_WIDTH, ZONE_LABEL_MARGIN_MAX_SHARE, ZONE_LABEL_MARGIN_PX, ZonesPrimitive, type ZoneDrawable } from './ZonesPrimitive';
@@ -26,10 +28,14 @@ export class ChartController {
   private volume: ISeriesApi<'Histogram'>;
   private priceLines: IPriceLine[] = [];
   private zonesPrimitive: ZonesPrimitive | null = null;
+  private liquidityPrimitive: LiquidityPrimitive | null = null;
+  private markers: ISeriesMarkersPluginApi<Time> | null = null;
+  private readonly lib: ChartLib;
   /** After destroy() every call is a no-op (React cleanups may run after the chart is gone). */
   private disposed = false;
 
   constructor(lib: ChartLib, container: HTMLElement, priceDecimals: number) {
+    this.lib = lib;
     this.chart = lib.createChart(container, {
       autoSize: true,
       layout: {
@@ -125,6 +131,35 @@ export class ChartController {
     return () => {
       if (!this.disposed) this.chart.unsubscribeClick(handler);
     };
+  }
+
+  /** Draw Liquidity pools (Liquidity page). Independent of the S&R zone layer. */
+  setLiquidity(items: LiquidityDrawable[]): void {
+    if (this.disposed) return;
+    if (!this.liquidityPrimitive) {
+      this.liquidityPrimitive = new LiquidityPrimitive();
+      this.candles.attachPrimitive(this.liquidityPrimitive);
+    }
+    this.liquidityPrimitive.setItems(items);
+    const ts = this.chart.timeScale();
+    const width = ts.width();
+    const margin = Math.min(width < COMPACT_LABEL_WIDTH ? 110 : ZONE_LABEL_MARGIN_PX, width * ZONE_LABEL_MARGIN_MAX_SHARE);
+    ts.applyOptions({ rightOffset: items.length ? Math.ceil(margin / ts.options().barSpacing) : 0 });
+  }
+
+  /** Small event markers (real engine events only), e.g. "BSL SWEPT" / "RECLAIM". */
+  setEventMarkers(markers: readonly LiquidityMarker[]): void {
+    if (this.disposed) return;
+    const items = markers.map((m) => ({
+      time: m.time as UTCTimestamp,
+      position: m.side === 'BSL' ? ('aboveBar' as const) : ('belowBar' as const),
+      shape: m.kind === 'reclaim' ? ('circle' as const) : m.side === 'BSL' ? ('arrowDown' as const) : ('arrowUp' as const),
+      color: m.kind === 'reclaim' ? COLORS.gold : m.side === 'BSL' ? '#e8925f' : '#3cc9b0',
+      text: m.text,
+      size: 0.8,
+    }));
+    if (!this.markers) this.markers = this.lib.createSeriesMarkers(this.candles, items);
+    else this.markers.setMarkers(items);
   }
 
   /** PNG snapshot of the chart canvas. */
