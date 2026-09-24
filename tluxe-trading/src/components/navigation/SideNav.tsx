@@ -1,4 +1,5 @@
 import {
+  ArrowDownUp,
   ArrowLeftRight,
   Boxes,
   ChevronRight,
@@ -21,6 +22,7 @@ const STRATEGY_ICONS: Record<StrategyIcon, LucideIcon> = {
   sr: Layers,
   liquidity: Droplets,
   orderBlocks: Boxes,
+  hlr: ArrowDownUp,
   sweep: ArrowLeftRight,
 };
 

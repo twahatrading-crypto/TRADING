@@ -18,6 +18,9 @@ export const LIQUIDITY_ROUTE = '/engines/liquidity';
 /** Trading Strategy → Order Blocks. */
 export const ORDER_BLOCKS_ROUTE = '/engines/order-blocks';
 
+/** Trading Strategy → High / Low Reversal. */
+export const HLR_ROUTE = '/engines/high-low-reversal';
+
 /** Settings → Data Providers page. */
 export const SETTINGS_ROUTE = '/settings';
 

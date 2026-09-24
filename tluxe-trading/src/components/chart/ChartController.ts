@@ -4,6 +4,8 @@ import type { LiquidityDrawable, LiquidityMarker } from '../liquidity/liquidityV
 import { LiquidityPrimitive } from './LiquidityPrimitive';
 import type { OBDrawable } from '../orderBlocks/obView';
 import { OrderBlockPrimitive } from './OrderBlockPrimitive';
+import type { HLRDrawable, HLRMarker } from '../hlReversal/hlrView';
+import { HLRPrimitive } from './HLRPrimitive';
 import type { Candle } from '../../types/market';
 import type { ChartOverlay } from '../../types/overlays';
 import { COMPACT_LABEL_WIDTH, ZONE_LABEL_MARGIN_MAX_SHARE, ZONE_LABEL_MARGIN_PX, ZonesPrimitive, type ZoneDrawable } from './ZonesPrimitive';
@@ -32,6 +34,7 @@ export class ChartController {
   private zonesPrimitive: ZonesPrimitive | null = null;
   private liquidityPrimitive: LiquidityPrimitive | null = null;
   private orderBlockPrimitive: OrderBlockPrimitive | null = null;
+  private hlrPrimitive: HLRPrimitive | null = null;
   private markers: ISeriesMarkersPluginApi<Time> | null = null;
   private readonly lib: ChartLib;
   /** After destroy() every call is a no-op (React cleanups may run after the chart is gone). */
@@ -162,6 +165,23 @@ export class ChartController {
     const width = ts.width();
     const margin = Math.min(width < COMPACT_LABEL_WIDTH ? 110 : ZONE_LABEL_MARGIN_PX, width * ZONE_LABEL_MARGIN_MAX_SHARE);
     ts.applyOptions({ rightOffset: items.length ? Math.ceil(margin / ts.options().barSpacing) : 0 });
+  }
+
+  /** High / Low Reversal overlays + event markers (High / Low Reversal page). */
+  setHighLowReversal(items: HLRDrawable[], markers: readonly HLRMarker[]): void {
+    if (this.disposed) return;
+    if (!this.hlrPrimitive) {
+      this.hlrPrimitive = new HLRPrimitive();
+      this.candles.attachPrimitive(this.hlrPrimitive);
+    }
+    this.hlrPrimitive.setItems(items);
+    const ts = this.chart.timeScale();
+    const width = ts.width();
+    const margin = Math.min(width < COMPACT_LABEL_WIDTH ? 110 : 170, width * ZONE_LABEL_MARGIN_MAX_SHARE);
+    ts.applyOptions({ rightOffset: items.length ? Math.ceil(margin / ts.options().barSpacing) : 0 });
+    const m = markers.map((x) => ({ ...x, time: x.time as UTCTimestamp, size: 0.9 }));
+    if (!this.markers) this.markers = this.lib.createSeriesMarkers(this.candles, m);
+    else this.markers.setMarkers(m);
   }
 
   /** Small event markers (real engine events only), e.g. "BSL SWEPT" / "RECLAIM". */
