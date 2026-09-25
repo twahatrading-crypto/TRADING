@@ -56,8 +56,8 @@ Open ONLY the newest preview. Leave exactly one TLUXE preview running.
   The hosted preview cannot reach the user's MT5, so it shows DATA UNAVAILABLE. Never use fake candles or prices to make it look connected.
 
 ## 9. Sidebar (all pages, via `AppShell`)
-Dashboard · Trading Strategy (Support & Resistance · Liquidity · Order Blocks · High / Low Reversal · High / Low Engine · Sweep / Reversal SOON) · Settings.
-Support & Resistance, Liquidity, Order Blocks, High / Low Reversal and High / Low Engine open their real pages. Entries live in `src/config/navigation.ts` (`route: null` = disabled SOON).
+Dashboard · Trading Strategy (Support & Resistance · Liquidity · Order Blocks · High / Low Reversal · High / Low Engine · Liquidity Heatmap · Sweep / Reversal SOON) · Settings.
+Support & Resistance, Liquidity, Order Blocks, High / Low Reversal, High / Low Engine and Liquidity Heatmap open their real pages. Entries live in `src/config/navigation.ts` (`route: null` = disabled SOON).
 
 ## 10. Safety check before any process command
 Before starting or stopping any Node/Vite/Python process, identify its PID, command line, working/project path and port.
@@ -105,6 +105,16 @@ BUY/SELL setup states with entry zone / SL / TP / R:R appear ONLY on the High / 
   (synthetic, bannered, dev only).
 - MT5 bridge process safety: start it with `bridge/mt5/start_bridge.cmd` (pinned venv interpreter). It refuses a
   second instance (lock), a shared port (exclusive bind) and an interpreter without MetaTrader5.
+- Liquidity Heatmap / Order Flow (`src/engines/orderFlow`, `src/services/orderFlow`, `src/providers/orderFlow`,
+  `src/components/orderFlow`, `src/pages/LiquidityHeatmapPage.tsx`, route `/engines/liquidity-heatmap`): a separate
+  module for exchange Level-2 depth + time & sales of a FUTURE (GC — COMEX), never XAUUSD spot/CFD. MT5 is never a
+  source (no exchange book, no aggressor side). Depth and trades come ONLY from `OrderFlowDepthProvider` /
+  `OrderFlowTradeProvider` adapters (Rithmic / T4 / CQG later) via normalized, sequenced messages; gaps → SEQUENCE GAP →
+  snapshot resync → rebuild → LIVE. No real provider exists yet: production shows LEVEL-2 DATA UNAVAILABLE.
+  NO FAKE ORDER-BOOK DATA: synthetic streams live only in `engines/orderFlow/testing` and
+  `providers/orderFlow/testing` (TEST DATA, `info.test = true`, refused by the registry unless `allowTestProviders`).
+  Events are evidence-only (never spoofing / iceberg claims); no trading signals. Dev visual harness:
+  `/orderflow-harness.html` (TEST DATA, bannered, dev only).
 - Sweep / Reversal is not built yet (disabled SOON in the sidebar).
 
 ## Chart navigation (shared by every strategy chart)

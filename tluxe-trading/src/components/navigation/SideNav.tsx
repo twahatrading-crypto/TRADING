@@ -5,6 +5,7 @@ import {
   ChevronRight,
   Diamond,
   Droplets,
+  Flame,
   Layers,
   LayoutDashboard,
   LineChart,
@@ -25,6 +26,7 @@ const STRATEGY_ICONS: Record<StrategyIcon, LucideIcon> = {
   orderBlocks: Boxes,
   hlr: ArrowDownUp,
   hle: Diamond,
+  heatmap: Flame,
   sweep: ArrowLeftRight,
 };
 

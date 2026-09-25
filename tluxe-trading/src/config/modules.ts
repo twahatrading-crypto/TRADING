@@ -24,6 +24,9 @@ export const HLR_ROUTE = '/engines/high-low-reversal';
 /** Trading Strategy → High / Low Engine (separate engine; not the High / Low Reversal page). */
 export const HLE_ROUTE = '/engines/high-low-engine';
 
+/** Trading Strategy → Liquidity Heatmap (order flow; exchange Level-2 + time & sales only). */
+export const HEATMAP_ROUTE = '/engines/liquidity-heatmap';
+
 /** Settings → Data Providers page. */
 export const SETTINGS_ROUTE = '/settings';
 

@@ -9,6 +9,8 @@ import { createCalendarService, type CalendarProvider, type CalendarService } fr
 import { NullFeedProvider } from './feed/FeedProvider';
 import { InstrumentSelection } from './instruments/InstrumentSelection';
 import type { DepthProvider } from './market/DepthProvider';
+import { NO_ORDER_FLOW_PROVIDERS, type OrderFlowProviders } from '../providers/orderFlow/types';
+import { OrderFlowService } from './orderFlow/OrderFlowService';
 import { MarketDataService } from './market/MarketDataService';
 import type { MarketDataProvider } from './market/MarketDataProvider';
 import { createNewsService, type NewsProvider, type NewsService } from './news/NewsProvider';
@@ -34,6 +36,8 @@ export interface Services {
   orderBlocks: OrderBlockService;
   hlReversal: HLRService;
   highLow: HighLowEngineService;
+  /** Order flow / Liquidity Heatmap runtime (exchange Level-2 + time & sales only; never MT5). */
+  orderFlow: OrderFlowService;
   /** MT5 price provider, when enabled in Settings (null otherwise). */
   mt5: Mt5Provider | null;
   /** Phase 1 has no persistence layer. */
@@ -48,11 +52,15 @@ export interface ProviderSet {
   news: NewsProvider;
   calendar: CalendarProvider;
   ai: AiProvider;
+  /** Exchange Level-2 depth + time & sales for futures (e.g. GC). None connected by default. */
+  orderFlow?: OrderFlowProviders;
 }
 
 export interface ServiceOptions {
   instruments?: readonly InstrumentDefinition[];
   storage?: Pick<Storage, 'getItem' | 'setItem'> | null;
+  /** Tests and the dev harness only: allow TEST order-flow providers (refused otherwise). */
+  allowTestProviders?: boolean;
 }
 
 /**
@@ -88,9 +96,17 @@ export function createServices(providers: ProviderSet = defaultProviders(), opts
     orderBlocks: new OrderBlockService(market, selection),
     hlReversal: new HLRService(market, selection),
     highLow: new HighLowEngineService(market, selection, storage),
+    orderFlow: new OrderFlowService(selection, orderFlowProviders(providers.orderFlow, opts.allowTestProviders ?? false)),
     mt5: (providers.price.find((p) => p instanceof Mt5Provider) as Mt5Provider | undefined) ?? null,
     databaseStatus: 'NOT_CONNECTED',
   };
+}
+
+/** Production never runs on TEST order-flow data: a test provider is refused unless explicitly allowed. */
+function orderFlowProviders(p: OrderFlowProviders | undefined, allowTest: boolean): OrderFlowProviders {
+  if (!p) return NO_ORDER_FLOW_PROVIDERS;
+  const ok = (x: { info: { test?: boolean } } | null) => !!x && (!x.info.test || allowTest);
+  return { depth: ok(p.depth) ? p.depth : null, trade: ok(p.trade) ? p.trade : null };
 }
 
 function browserStorage(): Pick<Storage, 'getItem' | 'setItem'> | null {
@@ -121,6 +137,7 @@ export function connectServices(s: Services): () => void {
   const stopOrderBlocks = s.orderBlocks.start();
   const stopHLR = s.hlReversal.start();
   const stopHighLow = s.highLow.start();
+  const stopOrderFlow = s.orderFlow.start();
   const teardown = () => {
     if (connected.get(s) !== teardown) return;
     connected.delete(s);
@@ -130,6 +147,7 @@ export function connectServices(s: Services): () => void {
     stopOrderBlocks();
     stopHLR();
     stopHighLow();
+    stopOrderFlow();
     s.market.disconnect();
     s.news.disconnect();
     s.calendar.disconnect();
