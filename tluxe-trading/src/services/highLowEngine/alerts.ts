@@ -222,8 +222,8 @@ export class HighLowAlerts {
             ? `⚠️ PRE-ENTRY — GET READY (${s.side})`
             : `⚠️ PRE-ENTRY DISCOVERED LATE (${s.side})`;
     const body = s.risk
-      ? `${id} entry ${s.risk.entry} · SL ${s.risk.stop} · TP1 ${s.risk.tp1}${discovery ? ` · not fresh: ${DISCOVERY_TEXT[discovery]}` : ''}`
-      : `${id} M5 ${s.m5?.kind} confirmed · zone ${s.zone?.low} – ${s.zone?.high} · waiting for the M1 pullback (not a signal)`;
+      ? `${id} entry ${s.risk.entry.toFixed(5).replace(/0+$/, '')} · SL ${s.risk.stop.toFixed(5).replace(/0+$/, '')} · TP1 ${s.risk.tp1.toFixed(5).replace(/0+$/, '')}${discovery ? ` · not fresh: ${DISCOVERY_TEXT[discovery]}` : ''}`
+      : `${id} M5 ${s.m5?.kind} confirmed · zone ${s.zone?.low.toFixed(5).replace(/0+$/, '')} – ${s.zone?.high.toFixed(5).replace(/0+$/, '')} · waiting for the M1 pullback (not a signal)`;
     const channels: string[] = [];
     // Independent channels: one failing never stops the others; mute silences only the sound.
     try {

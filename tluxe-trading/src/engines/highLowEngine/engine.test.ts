@@ -292,7 +292,7 @@ describe('M1 entry — Fib band, frozen plan (R1), real targets only', () => {
     const s = pdl(snap)!;
     expect(['NO_TARGET', 'EXPIRED']).toContain(s.state);
     expect(s.risk).toBeNull();
-    expect(snap.events.some((e) => e.type === 'NO_TARGET' && e.setupId === s.id)).toBe(true);
+    expect(snap.events.filter((e) => e.type === 'NO_TARGET' && e.id.includes(s.alertKey!))).toHaveLength(1); // one trade, one row
     expect(mandatoryGates(s).target).toBe(false);
   });
   it('G3 / R5: a confirmed M5 break with no pullback expires after 180 M1 bars (stage 3), logged', () => {
@@ -414,6 +414,13 @@ describe('data integrity, determinism and anti-repaint', () => {
       for (const s of snap.setups.filter((x) => x.state === 'INVALIDATED' || x.state === 'EXPIRED'))
         expect(snap.events.some((e) => e.setupId === s.id && (e.type === 'SETUP_INVALIDATED' || e.type === 'SETUP_EXPIRED'))).toBe(true);
     }
+  });
+  it('one trade confirmed by one M5 break is logged once, even when two levels produced it (evidence-keyed log)', () => {
+    const snap = run(F.buyReversal());
+    const ready = snap.setups.filter((s) => s.state === 'ENTRY_READY');
+    expect(new Set(ready.map((s) => s.alertKey)).size).toBe(1);
+    expect(ready.length).toBeGreaterThan(1);
+    expect(snap.events.filter((e) => e.type === 'ENTRY_READY')).toHaveLength(1);
   });
   it('deterministic, unique event ids; every event carries time / instrument / timeframe / type', () => {
     const a = run(F.buyReversal()).events;

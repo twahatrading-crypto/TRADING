@@ -352,6 +352,34 @@ describe('Mt5Provider — connection states and recovery', () => {
   });
 });
 
+describe('Mt5Provider — deterministic outage recovery', () => {
+  it('after an outage every timeframe reloads enough bars to cover the gap (M1 hole filled), and it is never LIVE while reloading', async () => {
+    const { mt5, state, bridge, services } = setup();
+    await mt5.pollHealth();
+    await mt5.pollQuote();
+    expect(state('XAUUSD').feed!.code).toBe('LIVE');
+    bridge.offline = true;
+    bridge.nowMs += 3 * 3600_000; // 180 M1 bars missed — more than resyncBars (50)
+    await mt5.pollHealth();
+    bridge.offline = false;
+    bridge.calls.length = 0;
+    let release!: () => void;
+    bridge.gate = new Promise<void>((r) => (release = r));
+    const p = mt5.pollHealth();
+    await flush();
+    expect(state('XAUUSD').feed!.code).toBe('STALE'); // reloading after the outage
+    release();
+    bridge.gate = null;
+    await p;
+    await mt5.pollQuote();
+    const m1Calls = bridge.calls.filter((c) => c.tf === 'M1').map((c) => c.count);
+    expect(m1Calls[0]).toBeGreaterThanOrEqual(180);
+    const m1 = services.market.getCandles('XAUUSD', 'M1').filter((c) => c.isClosed);
+    for (let i = 1; i < m1.length; i++) expect(m1[i]!.time - m1[i - 1]!.time).toBe(60); // no hole
+    expect(state('XAUUSD').feed!.code).toBe('LIVE');
+  });
+});
+
 describe('Mt5Provider — instrument isolation', () => {
   it('switching instruments loads the new symbol and never mixes candles', async () => {
     const { mt5, services, state, bridge } = setup();

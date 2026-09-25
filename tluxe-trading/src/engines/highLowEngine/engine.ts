@@ -158,13 +158,18 @@ export class HighLowEngine {
   private gateOpen = false;
   private setups: SetupRt[] = [];
   private events: HLEEvent[] = [];
+  private eventIds = new Set<string>();
   private h4Raw: RawBias | null = null;
   private h1Raw: RawBias | null = null;
   private displayPrice: number | null = null;
+  /** Price text for messages at the instrument's tick precision (values themselves are never rounded). */
+  private readonly px: (x: number) => string;
 
   constructor(o: HLEEngineOptions) {
     this.instrumentId = o.instrumentId;
     this.settings = o.settings ?? { ...DEFAULT_HLE_SETTINGS };
+    const dec = o.tickSize > 0 ? Math.min(8, Math.max(0, Math.ceil(-Math.log10(o.tickSize) - 1e-9))) : 5;
+    this.px = (x: number) => x.toFixed(dec);
     this.reset();
   }
 
@@ -191,6 +196,7 @@ export class HighLowEngine {
     this.gateOpen = false;
     this.setups = [];
     this.events = [];
+    this.eventIds = new Set();
     this.h4Raw = null;
     this.h1Raw = null;
   }
@@ -283,8 +289,12 @@ export class HighLowEngine {
 
   /* -------------------------------- events -------------------------------- */
 
+  /** Evidence-keyed (handoff §13.1): one trade confirmed by the same M5 break is logged once, however many levels it came from. */
   private emit(type: HLEEventType, time: number, tf: HLETimeframe, price: number | null, setupId: string | null, message: string, subject?: string): void {
-    this.events.push({ id: `${this.instrumentId}:${type}:${subject ?? setupId ?? tf}:${time}`, time, instrumentId: this.instrumentId, timeframe: tf, type, price, setupId, message });
+    const id = `${this.instrumentId}:${type}:${subject ?? setupId ?? tf}:${time}`;
+    if (this.eventIds.has(id)) return;
+    this.eventIds.add(id);
+    this.events.push({ id, time, instrumentId: this.instrumentId, timeframe: tf, type, price, setupId, message });
   }
 
   /* --------------------------------- step --------------------------------- */
@@ -367,7 +377,7 @@ export class HighLowEngine {
     const lv: LevelRt = { l, sign, fP: sign * price, h1Cursor: -1, m15Cursor: -1, touchKnownAt: null, setup: null };
     this.levels.push(lv);
     this.byId.set(id, lv);
-    if (source !== 'swing') this.emit('LEVEL_DETECTED', K, 'H1', price, null, `${LEVEL_TYPE_LABEL[type]} ${price} valid from ${hhmm(validFrom)} UTC`, id);
+    if (source !== 'swing') this.emit('LEVEL_DETECTED', K, 'H1', price, null, `${LEVEL_TYPE_LABEL[type]} ${this.px(price)} valid from ${hhmm(validFrom)} UTC`, id);
     return lv;
   }
 
@@ -524,7 +534,7 @@ export class HighLowEngine {
       if (lv.l.touchedAt === null && b.l <= lv.fP + st.levelTolAtr * A) {
         lv.l.touchedAt = m15.bars[i]!.time;
         lv.touchKnownAt = K;
-        this.emit('LEVEL_APPROACH', K, 'M15', lv.l.price, null, `Price reached ${lv.l.label} ${lv.l.price}`, lv.l.id);
+        this.emit('LEVEL_APPROACH', K, 'M15', lv.l.price, null, `Price reached ${lv.l.label} ${this.px(lv.l.price)}`, lv.l.id);
       }
       if (b.l < lv.fP - st.sweepMinAtr * A) {
         this.createSetup(lv, i, A, K);
@@ -663,7 +673,7 @@ export class HighLowEngine {
           rt.m5Cursor = i + 1;
           const b = frame(rt.sign, m5.bars[i]!);
           if (b.c < rt.fExt) {
-            this.finish(rt, 'INVALIDATED', 'STRUCTURE_FAILED', 2, K, 'M5', `M5 closed back through the swept extreme ${s.sweep.extreme} before structure turned.`);
+            this.finish(rt, 'INVALIDATED', 'STRUCTURE_FAILED', 2, K, 'M5', `M5 closed back through the swept extreme ${this.px(s.sweep.extreme)} before structure turned.`);
             return;
           }
           if (i < 3 * st.swingK + 2) continue;
@@ -694,7 +704,7 @@ export class HighLowEngine {
           rt.m1Cursor = j + 1;
           const b = frame(rt.sign, m1.bars[j]!);
           if (b.c < rt.fSL) {
-            this.finish(rt, 'INVALIDATED', 'STRUCTURE_FAILED', 3, K, 'M1', `Price closed through the protective level at ${s.zone!.stop} after the M5 ${s.m5!.kind}. The setup is invalidated.`);
+            this.finish(rt, 'INVALIDATED', 'STRUCTURE_FAILED', 3, K, 'M1', `Price closed through the protective level at ${this.px(s.zone!.stop)} after the M5 ${s.m5!.kind}. The setup is invalidated.`);
             return;
           }
           if (s.state !== 'WAITING_M1') continue;
@@ -764,8 +774,8 @@ export class HighLowEngine {
     };
     s.alertKey = `HLE-${this.instrumentId}-${s.side}-${stamp(bar.time)}`;
     const text = `${s.side === 'BUY' ? 'Bullish' : 'Bearish'} ${kind} from ${rt.preBias!.label.toLowerCase()} M5 structure`;
-    this.setState(rt, 'WAITING_M1', 'WAITING_PULLBACK', 3, K, `${text} — close through ${cand.price}${preSweep ? ' (pre-sweep swing)' : ''}${s.m5.displacement.displaced ? ' + displacement' : ''}`);
-    this.emit(kind === 'CHOCH' ? 'M5_CHOCH' : 'M5_BOS', K, 'M5', bar.close, s.id, `${text} (close ${bar.close} through ${cand.price})`);
+    this.setState(rt, 'WAITING_M1', 'WAITING_PULLBACK', 3, K, `${text} — close through ${this.px(cand.price)}${preSweep ? ' (pre-sweep swing)' : ''}${s.m5.displacement.displaced ? ' + displacement' : ''}`);
+    this.emit(kind === 'CHOCH' ? 'M5_CHOCH' : 'M5_BOS', K, 'M5', bar.close, s.id, `${text} (close ${this.px(bar.close)} through ${this.px(cand.price)})`, s.alertKey);
   }
 
   private pullback(rt: SetupRt, j: number, K: number): void {
@@ -773,7 +783,7 @@ export class HighLowEngine {
     const s = rt.s;
     const bar = this.tf.M1.bars[j]!;
     s.entry = { time: bar.time, knownAt: K, price: bar.close };
-    this.emit('M1_PULLBACK', K, 'M1', bar.close, s.id, `M1 pullback into ${s.zone!.low} – ${s.zone!.high}`);
+    this.emit('M1_PULLBACK', K, 'M1', bar.close, s.id, `M1 pullback into ${this.px(s.zone!.low)} – ${this.px(s.zone!.high)}`, s.alertKey!);
     const m15 = this.tf.M15;
     const fp15 = frame(rt.sign, m15.bars[m15.length - 1]!).c;
     const fEntry = Math.max(rt.fzlo, Math.min(rt.fzhi, fp15));
@@ -785,7 +795,7 @@ export class HighLowEngine {
     const t1 = cands[0];
     if (!t1) {
       this.setState(rt, 'NO_TARGET', 'NO_TARGET', 4, K, `No opposing liquidity ${s.side === 'BUY' ? 'above' : 'below'} the entry to target. The engine will not invent one.`);
-      this.emit('NO_TARGET', K, 'M1', null, s.id, 'Pullback reached, but there is no opposing liquidity to target — no entry.');
+      this.emit('NO_TARGET', K, 'M1', null, s.id, 'Pullback reached, but there is no opposing liquidity to target — no entry.', s.alertKey!);
       return;
     }
     const t2 = cands[1] ?? null;
@@ -809,9 +819,9 @@ export class HighLowEngine {
     const h4 = directionOf(this.tf.H4, st.minBars.H4, st.dirSwings);
     const h1 = directionOf(this.tf.H1, 60, st.contextSwings);
     s.context = { h4: h4.raw, h4Dir: h4.dir, h1: h1.raw, h1Dir: h1.dir, counterTrend: h4.dir !== 0 && h4.dir !== rt.sign };
-    this.setState(rt, 'ENTRY_READY', 'NONE', 5, K, `${s.side} CONFIRMED — every mandatory stage passed (entry ${s.risk.entry}, SL ${s.risk.stop}, TP1 ${s.risk.tp1})`);
+    this.setState(rt, 'ENTRY_READY', 'NONE', 5, K, `${s.side} CONFIRMED — every mandatory stage passed (entry ${this.px(s.risk.entry)}, SL ${this.px(s.risk.stop)}, TP1 ${this.px(s.risk.tp1)})`);
     s.score = this.scoreOf(rt, true);
-    this.emit('ENTRY_READY', K, 'M1', s.risk.entry, s.id, `${s.side} CONFIRMED — entry ${s.risk.entry}, SL ${s.risk.stop}, TP1 ${s.risk.tp1} (${s.risk.tp1Source})${s.context.counterTrend ? ' · counter-trend' : ''}`);
+    this.emit('ENTRY_READY', K, 'M1', s.risk.entry, s.id, `${s.side} CONFIRMED — entry ${this.px(s.risk.entry)}, SL ${this.px(s.risk.stop)}, TP1 ${this.px(s.risk.tp1)} (${s.risk.tp1Source})${s.context.counterTrend ? ' · counter-trend' : ''}`, s.alertKey!);
   }
 
   /**
@@ -963,7 +973,7 @@ export class HighLowEngine {
       const name = view?.label ?? LEVEL_TYPE_LABEL[l.type];
       const d = dAtr(l.price);
       if (m15.firstFrom(l.validFrom) < 0) {
-        list.push({ side, stage: 0, invalidated: false, code: 'NOT_AT_LEVEL', why: `${name} at ${l.price} became valid at ${hhmm(l.validFrom)} UTC; no M15 candle has opened since.`, levelId: l.id, setupId: null, distanceAtr: d });
+        list.push({ side, stage: 0, invalidated: false, code: 'NOT_AT_LEVEL', why: `${name} at ${this.px(l.price)} became valid at ${hhmm(l.validFrom)} UTC; no M15 candle has opened since.`, levelId: l.id, setupId: null, distanceAtr: d });
         continue;
       }
       if (d !== null && d <= st.nearAtr)
@@ -988,11 +998,11 @@ export class HighLowEngine {
     const buy = s.side === 'BUY';
     switch (s.code) {
       case 'WAITING_RECLAIM':
-        return `${buy ? 'SSL' : 'BSL'} taken at ${s.levelLabel}; waiting for an M15 close back ${buy ? 'above' : 'below'} ${s.level} (within ${this.settings.reclaimWindow} M15 candles).`;
+        return `${buy ? 'SSL' : 'BSL'} taken at ${s.levelLabel}; waiting for an M15 close back ${buy ? 'above' : 'below'} ${this.px(s.level)} (within ${this.settings.reclaimWindow} M15 candles).`;
       case 'WAITING_STRUCTURE':
         return `The sweep is confirmed. Waiting for a closed M5 ${buy ? 'bullish' : 'bearish'} CHOCH / BOS.`;
       case 'WAITING_PULLBACK':
-        return `M5 ${s.m5!.kind} confirmed. Waiting for an M1 pullback into ${s.zone!.low} – ${s.zone!.high}.`;
+        return `M5 ${s.m5!.kind} confirmed. Waiting for an M1 pullback into ${this.px(s.zone!.low)} – ${this.px(s.zone!.high)}.`;
       case 'NONE':
         return 'Every mandatory condition passed.';
       default:

@@ -95,10 +95,16 @@ BUY/SELL setup states with entry zone / SL / TP / R:R appear ONLY on the High / 
   Blocks engine's public output (own read-only instances) and never changes S&R, Liquidity or Order Blocks.
   Not locked until validated on REAL MT5 data. Dev visual harness: `/hlr-harness.html` (synthetic, bannered, dev only).
 - High / Low Engine (`src/engines/highLowEngine`, `src/services/highLowEngine`, `src/components/highLowEngine`, route
-  `/engines/high-low-engine`): a SECOND, fully separate H/L engine (never merge with High / Low Reversal). PDH/PDL, Asia
-  and major-swing levels, M15 sweep/reclaim, M5 CHOCH/BOS, M1 entry, persistent signal log, one-shot entry alerts.
-  No runner / mailer exists: Engine Status shows NOT CONFIGURED and email is never faked. Not locked until validated on
-  REAL MT5 data. Dev visual harness: `/hle-harness.html` (synthetic, bannered, dev only).
+  `/engines/high-low-engine`): a SECOND, fully separate H/L engine (never merge with High / Low Reversal). Follows the
+  documented rules of the migration handoff (user decision): PDH/PDL, Asia (Tokyo) and H1 pivot-cluster levels with
+  frozen validFrom tolerance (R2), M15 sweep ≥ 0.10 ATR + 4-bar reclaim, M5 CHOCH/BOS close, 0.5–0.786 zone, M1
+  pullback, frozen entry/SL/TP (R1), mandatory six booleans; BUY/SELL CONFIRMED only on a LIVE feed (`decision.ts`).
+  Alerts: once per M5-keyed setup, FRESH ≤ 5 min else LATE (outage/startup/delayed), separate PRE-ENTRY. Revised
+  closed candles are rebuilt and logged (DATA_REVISED). No runner / mailer exists: Engine Status shows NOT CONFIGURED
+  and email is never faked. Not locked until validated on REAL MT5 data. Dev visual harness: `/hle-harness.html`
+  (synthetic, bannered, dev only).
+- MT5 bridge process safety: start it with `bridge/mt5/start_bridge.cmd` (pinned venv interpreter). It refuses a
+  second instance (lock), a shared port (exclusive bind) and an interpreter without MetaTrader5.
 - Sweep / Reversal is not built yet (disabled SOON in the sidebar).
 
 ## Chart navigation (shared by every strategy chart)

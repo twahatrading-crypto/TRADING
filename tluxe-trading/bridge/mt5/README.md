@@ -42,12 +42,19 @@ Then open `.env` in a text editor and set:
 ## Run
 
 1. Start MetaTrader 5 and log in. (The bridge adds the symbols it reads to Market Watch automatically.)
-2. Start the bridge:
+2. Start the bridge with the launcher (it runs **this project's** `.venv\Scripts\python.exe` by absolute path —
+   never a bare `python` from PATH, which may be another installation without MetaTrader5):
    ```powershell
    cd path\to\TRADING\tluxe-trading\bridge\mt5
-   .venv\Scripts\activate
-   python run_bridge.py
+   .\start_bridge.cmd
    ```
+   The bridge refuses to start instead of running in a broken state:
+   | Exit code | Meaning |
+   | --- | --- |
+   | 2 | bad configuration (`.env`) |
+   | 3 | another TLUXE bridge is already running (single-instance lock) |
+   | 4 | this interpreter cannot import MetaTrader5 (wrong Python) |
+   | 5 | the port is already in use — the bridge never shares its port (no `SO_REUSEADDR`, `SO_EXCLUSIVEADDRUSE` on Windows) |
    It should log `TLUXE MT5 bridge listening on http://127.0.0.1:8765`.
 3. Start the app on the same PC (`npm install` once, then `npm run dev` in `tluxe-trading`) and open `http://localhost:5181`.
 4. In the app, go to **Settings**:

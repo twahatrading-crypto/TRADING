@@ -51,6 +51,8 @@ interface Runtime {
   meta: ProviderSymbolMeta | null;
   loaded: Set<Timeframe>;
   needsResync: boolean;
+  /** Reloading history after an outage: never reported LIVE until it completes (a 3-bar poll cannot fill a hole). */
+  resyncing: boolean;
   history: Partial<Record<Timeframe, { count: number; limited: boolean; lastClosed: number }>>;
   lastCandleAt: Partial<Record<Timeframe, number>>;
   lastClosedAt: number | null;
@@ -73,6 +75,7 @@ const newRuntime = (): Runtime => ({
   meta: null,
   loaded: new Set(),
   needsResync: false,
+  resyncing: false,
   history: {},
   lastCandleAt: {},
   lastClosedAt: null,
@@ -280,11 +283,26 @@ export class Mt5Provider implements MarketDataProvider {
       ? { description: s.description, digits: s.digits, point: s.point, tickSize: s.tickSize, contractSize: s.contractSize, tradeMode: s.tradeMode, spreadFloat: s.spreadFloat }
       : null;
     this.sink?.capabilities(id, ['quote', 'ohlcv', 'level1', 'historicalCandles']);
-    for (const tf of this.requested.get(id) ?? []) {
-      if (!rt.loaded.has(tf)) await this.loadHistory(id, tf, this.cfg.historyBars, 'replace');
-      else if (rt.needsResync) await this.loadHistory(id, tf, this.cfg.resyncBars, 'upsert');
+    const resync = rt.needsResync;
+    if (resync) {
+      rt.resyncing = true;
+      this.emit(id);
     }
-    rt.needsResync = false;
+    try {
+      for (const tf of this.requested.get(id) ?? []) {
+        if (!rt.loaded.has(tf)) await this.loadHistory(id, tf, this.cfg.historyBars, 'replace');
+        else if (resync) {
+          // Deterministic recovery: fetch enough bars to cover the whole outage; beyond the history window, reload it all.
+          const last = rt.history[tf]?.lastClosed ?? 0;
+          const gap = last ? Math.ceil((this.now() / 1000 - last) / TIMEFRAME_SECONDS[tf]) + 5 : Infinity;
+          if (gap > this.cfg.historyBars) await this.loadHistory(id, tf, this.cfg.historyBars, 'replace');
+          else await this.loadHistory(id, tf, Math.max(this.cfg.resyncBars, gap), 'upsert');
+        }
+      }
+      rt.needsResync = false;
+    } finally {
+      rt.resyncing = false;
+    }
   }
 
   /* --------------------------------- data --------------------------------- */
@@ -428,7 +446,10 @@ export class Mt5Provider implements MarketDataProvider {
     let code: FeedStatusCode = fresh;
     let message: string | null = null;
     const res = rt.resolution;
-    if (st.error?.code === 'UNAUTHORIZED') {
+    if (rt.resyncing && (fresh === 'LIVE' || fresh === 'INSUFFICIENT_HISTORY')) {
+      code = 'STALE';
+      message = 'Reloading candles after an outage — not live until the history is complete.';
+    } else if (st.error?.code === 'UNAUTHORIZED') {
       code = 'ERROR';
       message = 'The bridge rejected the access token.';
     } else if (fresh === 'MT5_BRIDGE_OFFLINE') {

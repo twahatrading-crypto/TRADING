@@ -25,7 +25,7 @@ import type { Timeframe } from '../types/market';
 
 const q = new URLSearchParams(location.search);
 const full = q.get('side') === 'sell' ? F.sellReversal() : F.buyReversal();
-const entry = analyzeHighLow({ instrumentId: 'GC', tickSize: 0.01, candles: full }).setups.find((s) => s.entry);
+const entry = analyzeHighLow({ instrumentId: 'GC', tickSize: 0.01, candles: full }).setups.find((s) => s.risk);
 const data = q.get('at') === 'end' || !entry ? full : hleKnownInput({ instrumentId: 'GC', tickSize: 0.01, settings: { ...DEFAULT_HLE_SETTINGS }, candles: full }, entry.entry!.knownAt);
 
 class FixtureProvider implements MarketDataProvider {
@@ -37,7 +37,8 @@ class FixtureProvider implements MarketDataProvider {
   }
   disconnect() {}
   subscribe(i: InstrumentDefinition) {
-    this.sink?.connection(i.id, 'DELAYED');
+    // Default DELAYED (old fixture data is not live → the engine withholds). `?feed=live` shows the confirmed view.
+    this.sink?.connection(i.id, q.get('feed') === 'live' ? 'LIVE' : 'DELAYED');
   }
   unsubscribe() {}
   requestCandles(id: string, tf: Timeframe) {

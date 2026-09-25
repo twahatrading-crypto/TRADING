@@ -4,6 +4,8 @@ from __future__ import annotations
 import hmac
 import json
 import logging
+import os
+import socket
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -96,9 +98,24 @@ def make_handler(cfg: BridgeConfig, term: Terminal, started_at: float):
     return Handler
 
 
+class ExclusiveHTTPServer(ThreadingHTTPServer):
+    """Never shares its port. ThreadingHTTPServer inherits allow_reuse_address = 1, which on Windows lets a
+    second (orphaned or new) bridge bind the same port and split requests between them. Here a second
+    bind fails loudly instead."""
+
+    allow_reuse_address = False
+    daemon_threads = True
+
+    def server_bind(self) -> None:
+        excl = getattr(socket, "SO_EXCLUSIVEADDRUSE", None)
+        if os.name == "nt" and excl is not None:
+            self.socket.setsockopt(socket.SOL_SOCKET, excl, 1)
+        super().server_bind()
+
+
 def serve(cfg: BridgeConfig, term: Terminal) -> ThreadingHTTPServer:
     started = time.time()
-    httpd = ThreadingHTTPServer((cfg.host, cfg.port), make_handler(cfg, term, started))
+    httpd = ExclusiveHTTPServer((cfg.host, cfg.port), make_handler(cfg, term, started))
 
     def watchdog() -> None:
         while True:
