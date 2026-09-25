@@ -7,6 +7,7 @@ import { useOptionalStore } from '../../hooks/useOptionalStore';
 import type { HighLowReplaySession } from '../../services/highLowEngine/HighLowReplay';
 import { useStore } from '../../store/createStore';
 import { formatPrice } from '../../utils/format';
+import { ChartStage } from '../chart/ChartStage';
 import { useChartController } from '../chart/useChartController';
 import { EmptyState } from '../ui/EmptyState';
 import { HLE_VIEW_TITLE, hleOverlays, type HLETools, type HLEViewState } from './hleView';
@@ -83,20 +84,17 @@ export function HighLowChart(p: Props) {
       <div className={`srchart__state ${p.viewState === 'LIVE' ? 'is-ready' : ''} ${p.replay ? 'is-replay' : ''}`} data-testid="hle-chart-state">
         <span className="dot" aria-hidden="true" /> {p.replay ? `REPLAY · as of ${fmtUtc(replayTime)} · live chart frozen` : HLE_VIEW_TITLE[p.viewState]}
       </div>
-      <div className="srchart__stage">
-        <div ref={containerRef} className="chart-canvas" hidden={barCount === 0} />
-        {barCount === 0 && (
-          <div className="chart-empty">
-            <div className="chart-empty__grid" aria-hidden="true" />
-            <EmptyState
-              icon={p.viewState === 'UNAVAILABLE' ? <ChartCandlestick size={18} /> : <Unplug size={18} />}
-              title={p.viewState === 'LIVE' ? 'MARKET DATA NOT CONNECTED' : HLE_VIEW_TITLE[p.viewState]}
-              message={`Connect MT5 through the TLUXE bridge to analyse ${instrument.symbol}. No simulated candles, levels or signals are ever shown.`}
-              meta="High / Low Engine uses real closed H4 · H1 · M15 · M5 · M1 candles only."
-            />
-          </div>
-        )}
-      </div>
+      <ChartStage containerRef={containerRef} controller={controller} hasBars={barCount > 0}>
+        <div className="chart-empty">
+          <div className="chart-empty__grid" aria-hidden="true" />
+          <EmptyState
+            icon={p.viewState === 'UNAVAILABLE' ? <ChartCandlestick size={18} /> : <Unplug size={18} />}
+            title={p.viewState === 'LIVE' ? 'MARKET DATA NOT CONNECTED' : HLE_VIEW_TITLE[p.viewState]}
+            message={`Connect MT5 through the TLUXE bridge to analyse ${instrument.symbol}. No simulated candles, levels or signals are ever shown.`}
+            meta="High / Low Engine uses real closed H4 · H1 · M15 · M5 · M1 candles only."
+          />
+        </div>
+      </ChartStage>
     </section>
   );
 }

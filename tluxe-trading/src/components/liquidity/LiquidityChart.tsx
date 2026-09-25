@@ -9,6 +9,7 @@ import type { LiquidityReplaySession } from '../../services/liquidity/LiquidityR
 import type { Timeframe } from '../../types/market';
 import { formatPrice } from '../../utils/format';
 import { TimeframeTabs } from '../chart/ChartPanel';
+import { ChartStage } from '../chart/ChartStage';
 import { useChartController } from '../chart/useChartController';
 import { EmptyState } from '../ui/EmptyState';
 import { fmtUtc } from './format';
@@ -148,28 +149,25 @@ export function LiquidityChart(p: Props) {
           {near(p.nearest.below, 'SSL BELOW', 'ssl')}
         </div>
       </div>
-      <div className="srchart__stage">
-        <div ref={containerRef} className="chart-canvas" hidden={barCount === 0} />
-        {barCount === 0 && (
-          <div className="chart-empty">
-            <div className="chart-empty__grid" aria-hidden="true" />
-            {p.replay ? (
-              <EmptyState icon={<ChartCandlestick size={18} />} title={`NO CLOSED ${p.chartTf} CANDLE YET`} message={`At the replay time no ${p.chartTf} candle had closed yet.`} meta="Replay never shows a candle before it closed." />
-            ) : (
-              <EmptyState
-                icon={p.viewState === 'UNAVAILABLE' ? <ChartCandlestick size={18} /> : <Unplug size={18} />}
-                title={p.viewState === 'LIVE' ? 'MARKET DATA NOT CONNECTED' : LIQUIDITY_VIEW_TITLE[p.viewState]}
-                message={
-                  p.viewState === 'UNAVAILABLE'
-                    ? `${instrument.symbol} is a category. Liquidity runs once a provider maps it to a specific instrument.`
-                    : `Connect a market-data provider to analyse ${instrument.symbol}. No simulated candles or liquidity are displayed.`
-                }
-                meta="Liquidity v1 uses real candles only. It is not order-book (Level-2) liquidity."
-              />
-            )}
-          </div>
-        )}
-      </div>
+      <ChartStage containerRef={containerRef} controller={controller} hasBars={barCount > 0}>
+        <div className="chart-empty">
+          <div className="chart-empty__grid" aria-hidden="true" />
+          {p.replay ? (
+            <EmptyState icon={<ChartCandlestick size={18} />} title={`NO CLOSED ${p.chartTf} CANDLE YET`} message={`At the replay time no ${p.chartTf} candle had closed yet.`} meta="Replay never shows a candle before it closed." />
+          ) : (
+            <EmptyState
+              icon={p.viewState === 'UNAVAILABLE' ? <ChartCandlestick size={18} /> : <Unplug size={18} />}
+              title={p.viewState === 'LIVE' ? 'MARKET DATA NOT CONNECTED' : LIQUIDITY_VIEW_TITLE[p.viewState]}
+              message={
+                p.viewState === 'UNAVAILABLE'
+                  ? `${instrument.symbol} is a category. Liquidity runs once a provider maps it to a specific instrument.`
+                  : `Connect a market-data provider to analyse ${instrument.symbol}. No simulated candles or liquidity are displayed.`
+              }
+              meta="Liquidity v1 uses real candles only. It is not order-book (Level-2) liquidity."
+            />
+          )}
+        </div>
+      </ChartStage>
     </section>
   );
 }

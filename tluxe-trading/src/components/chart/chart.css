@@ -92,3 +92,55 @@
   .chart-panel .seg__btn { min-width: 0; padding: 7px 0; }
   .chart-overlays__note { display: none; }
 }
+
+/* ---------------- shared strategy-chart navigation (ChartStage) ---------------- */
+.chartnav {
+  position: absolute;
+  left: 16px;
+  bottom: 40px; /* above the time axis */
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: rgba(10, 14, 20, 0.82);
+  backdrop-filter: blur(3px);
+  opacity: 0.72;
+  transition: opacity 0.15s ease;
+}
+.chartnav:hover,
+.chartnav:focus-within { opacity: 1; }
+.chartnav__btn,
+.chartnav__reset {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 26px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.chartnav__btn { width: 26px; }
+.chartnav__reset { padding: 0 10px 0 8px; }
+.chartnav__btn:hover,
+.chartnav__reset:hover { background: var(--panel-hover); color: var(--gold-bright); }
+.chartnav button:disabled { opacity: 0.4; cursor: default; }
+.chartnav kbd {
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-4);
+  font: inherit;
+  font-size: 11px;
+}
+@media (max-width: 560px) {
+  .chartnav__reset span,
+  .chartnav kbd { display: none; }
+}

@@ -100,3 +100,10 @@ BUY/SELL setup states with entry zone / SL / TP / R:R appear ONLY on the High / 
   No runner / mailer exists: Engine Status shows NOT CONFIGURED and email is never faked. Not locked until validated on
   REAL MT5 data. Dev visual harness: `/hle-harness.html` (synthetic, bannered, dev only).
 - Sweep / Reversal is not built yet (disabled SOON in the sidebar).
+
+## Chart navigation (shared by every strategy chart)
+Every strategy chart (and every future one) renders its canvas through `src/components/chart/ChartStage.tsx`
+— never its own stage markup. It provides Zoom In / Zoom Out / Fit (auto scale) / "↶ Reset chart view Alt + R"
+and one HMR-safe Alt+R listener. Native wheel/pinch zoom, drag-pan and axis drag-scaling are enabled in
+`ChartController` (`CHART_INTERACTION`). Navigation is presentation only: it never requests data, recalculates
+engines, changes levels/signals/timestamps or fires alerts.

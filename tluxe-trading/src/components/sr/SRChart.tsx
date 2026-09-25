@@ -6,6 +6,7 @@ import type { SRConfluence, SRSnapshot, SRZone } from '../../engines/sr/types';
 import type { SRReplaySession } from '../../services/sr/SRReplay';
 import type { Timeframe } from '../../types/market';
 import { TimeframeTabs } from '../chart/ChartPanel';
+import { ChartStage } from '../chart/ChartStage';
 import { useChartController } from '../chart/useChartController';
 import { EmptyState } from '../ui/EmptyState';
 import { useOptionalStore, useSRSettings } from './useSR';
@@ -131,35 +132,32 @@ export function SRChart(p: Props) {
           </div>
         </div>
       </div>
-      <div className="srchart__stage">
-        <div ref={containerRef} className="chart-canvas" hidden={barCount === 0} />
-        {barCount === 0 && (
-          <div className="chart-empty">
-            <div className="chart-empty__grid" aria-hidden="true" />
-            {p.replay ? (
-              <EmptyState
-                icon={<ChartCandlestick size={18} />}
-                title={`NO CLOSED ${p.chartTf} CANDLE YET`}
-                message={`At the replay time no ${p.chartTf} candle had closed yet. Step forward or choose a smaller timeframe.`}
-                meta="Replay never shows a candle before it closed."
-              />
-            ) : (
+      <ChartStage containerRef={containerRef} controller={controller} hasBars={barCount > 0}>
+        <div className="chart-empty">
+          <div className="chart-empty__grid" aria-hidden="true" />
+          {p.replay ? (
             <EmptyState
-              icon={state === 'CATEGORY' ? <ChartCandlestick size={18} /> : <Unplug size={18} />}
-              title={state === 'READY' ? 'MARKET DATA NOT CONNECTED' : SR_VIEW_TITLE[state]}
-              message={
-                state === 'CATEGORY'
-                  ? `${instrument.symbol} is a category. S&R runs once a provider maps it to a specific instrument.`
-                  : state === 'INSUFFICIENT_HISTORY'
-                    ? `Waiting for enough closed ${p.chartTf} candles (${settings.minHistoryBars} required). No zones are shown until then.`
-                    : `Connect a market-data provider to analyse ${instrument.symbol}. No simulated candles or zones are displayed.`
-              }
-              meta="S&R zones are calculated only from real candle history."
+              icon={<ChartCandlestick size={18} />}
+              title={`NO CLOSED ${p.chartTf} CANDLE YET`}
+              message={`At the replay time no ${p.chartTf} candle had closed yet. Step forward or choose a smaller timeframe.`}
+              meta="Replay never shows a candle before it closed."
             />
-            )}
-          </div>
-        )}
-      </div>
+          ) : (
+          <EmptyState
+            icon={state === 'CATEGORY' ? <ChartCandlestick size={18} /> : <Unplug size={18} />}
+            title={state === 'READY' ? 'MARKET DATA NOT CONNECTED' : SR_VIEW_TITLE[state]}
+            message={
+              state === 'CATEGORY'
+                ? `${instrument.symbol} is a category. S&R runs once a provider maps it to a specific instrument.`
+                : state === 'INSUFFICIENT_HISTORY'
+                  ? `Waiting for enough closed ${p.chartTf} candles (${settings.minHistoryBars} required). No zones are shown until then.`
+                  : `Connect a market-data provider to analyse ${instrument.symbol}. No simulated candles or zones are displayed.`
+            }
+            meta="S&R zones are calculated only from real candle history."
+          />
+          )}
+        </div>
+      </ChartStage>
     </section>
   );
 }

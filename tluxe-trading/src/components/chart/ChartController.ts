@@ -14,6 +14,23 @@ import { COMPACT_LABEL_WIDTH, ZONE_LABEL_MARGIN_MAX_SHARE, ZONE_LABEL_MARGIN_PX,
 
 type ChartLib = typeof LightweightCharts;
 
+/** Default candle spacing (px) — the "Reset chart view" zoom level (lightweight-charts' own default). */
+export const DEFAULT_BAR_SPACING = 6;
+/** One Zoom In / Zoom Out step (× / ÷ bar spacing). */
+export const ZOOM_STEP = 1.25;
+export const MIN_BAR_SPACING = 0.5;
+export const MAX_BAR_SPACING = 60;
+
+/**
+ * Native interaction options, identical on every chart: wheel / pinch zoom, drag to pan,
+ * drag either axis to scale, double-click an axis to reset that axis. Presentation only.
+ */
+export const CHART_INTERACTION = {
+  handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false },
+  handleScale: { mouseWheel: true, pinch: true, axisPressedMouseMove: { time: true, price: true }, axisDoubleClickReset: { time: true, price: true } },
+  kineticScroll: { mouse: false, touch: true },
+} as const;
+
 const COLORS = {
   up: '#3fcf7c',
   down: '#ef5d5d',
@@ -60,6 +77,7 @@ export class ChartController {
       crosshair: { mode: lib.CrosshairMode.Normal },
       // Explicit locale: some environments report tags like "en-US@posix" that Intl rejects.
       localization: { locale: 'en-US' },
+      ...CHART_INTERACTION,
     });
     const minMove = 1 / 10 ** priceDecimals;
     this.candles = this.chart.addSeries(lib.CandlestickSeries, {
@@ -217,6 +235,48 @@ export class ChartController {
     }));
     if (!this.markers) this.markers = this.lib.createSeriesMarkers(this.candles, items);
     else this.markers.setMarkers(items);
+  }
+
+  /* -------------------- view navigation (presentation only) -------------------- */
+  // These change ONLY the visible time range / price scale through the library's own APIs.
+  // Candle data, overlays, markers and every engine result are untouched; primitives redraw
+  // from the chart's coordinate mapping, so overlays stay aligned with the candles.
+
+  /** Zoom in one step (wider candles), keeping the right edge anchored. */
+  zoomIn(): void {
+    if (this.disposed) return;
+    const ts = this.chart.timeScale();
+    ts.applyOptions({ barSpacing: Math.min(MAX_BAR_SPACING, ts.options().barSpacing * ZOOM_STEP) });
+  }
+
+  /** Zoom out one step (narrower candles). */
+  zoomOut(): void {
+    if (this.disposed) return;
+    const ts = this.chart.timeScale();
+    ts.applyOptions({ barSpacing: Math.max(MIN_BAR_SPACING, ts.options().barSpacing / ZOOM_STEP) });
+  }
+
+  /** Price axis back to automatic scaling (undoes a manual price-axis drag). */
+  autoScalePrice(): void {
+    if (this.disposed) return;
+    this.candles.priceScale().applyOptions({ autoScale: true });
+  }
+
+  /** Reset chart view: default zoom, latest bars in view (keeps the overlay label margin), price autoscale. */
+  resetView(): void {
+    if (this.disposed) return;
+    const ts = this.chart.timeScale();
+    ts.applyOptions({ barSpacing: DEFAULT_BAR_SPACING });
+    // Immediate (not animated) jump to the latest bar plus the overlay layer's reserved right margin.
+    ts.scrollToPosition(ts.options().rightOffset, false);
+    this.autoScalePrice();
+  }
+
+  /** Fit / Auto Scale: every loaded bar in view and price autoscale. */
+  fitView(): void {
+    if (this.disposed) return;
+    this.chart.timeScale().fitContent();
+    this.autoScalePrice();
   }
 
   /** PNG snapshot of the chart canvas. */

@@ -6,6 +6,7 @@ import type { HLRSnapshot, HLRTimeframe, Setup } from '../../engines/hlReversal/
 import { useActiveInstrument, useMarket } from '../../hooks/useMarket';
 import { useOptionalStore } from '../../hooks/useOptionalStore';
 import type { HLRReplaySession } from '../../services/hlReversal/HLRReplay';
+import { ChartStage } from '../chart/ChartStage';
 import { useChartController } from '../chart/useChartController';
 import { EmptyState } from '../ui/EmptyState';
 import { fmtUtc } from './format';
@@ -115,28 +116,25 @@ export function HLRChart(p: Props) {
           <span className="dot" aria-hidden="true" /> {statusText}
         </div>
       </div>
-      <div className="srchart__stage">
-        <div ref={containerRef} className="chart-canvas" hidden={barCount === 0} />
-        {barCount === 0 && (
-          <div className="chart-empty">
-            <div className="chart-empty__grid" aria-hidden="true" />
-            {p.replay ? (
-              <EmptyState icon={<ChartCandlestick size={18} />} title={`NO CLOSED ${p.chartTf} CANDLE YET`} message={`At the replay time no ${p.chartTf} candle had closed yet.`} meta="Replay never shows a candle before it closed." />
-            ) : (
-              <EmptyState
-                icon={p.viewState === 'UNAVAILABLE' ? <ChartCandlestick size={18} /> : <Unplug size={18} />}
-                title={p.viewState === 'LIVE' ? 'MARKET DATA NOT CONNECTED' : HLR_VIEW_TITLE[p.viewState]}
-                message={
-                  p.viewState === 'UNAVAILABLE'
-                    ? `${instrument.symbol} is a category. The reversal engine runs once a provider maps it to a specific instrument.`
-                    : `Connect a market-data provider to analyse ${instrument.symbol}. No simulated candles, levels or setups are displayed.`
-                }
-                meta="High / Low Reversal v1 uses real closed H4 · H1 · M15 · M5 · M1 candles only."
-              />
-            )}
-          </div>
-        )}
-      </div>
+      <ChartStage containerRef={containerRef} controller={controller} hasBars={barCount > 0}>
+        <div className="chart-empty">
+          <div className="chart-empty__grid" aria-hidden="true" />
+          {p.replay ? (
+            <EmptyState icon={<ChartCandlestick size={18} />} title={`NO CLOSED ${p.chartTf} CANDLE YET`} message={`At the replay time no ${p.chartTf} candle had closed yet.`} meta="Replay never shows a candle before it closed." />
+          ) : (
+            <EmptyState
+              icon={p.viewState === 'UNAVAILABLE' ? <ChartCandlestick size={18} /> : <Unplug size={18} />}
+              title={p.viewState === 'LIVE' ? 'MARKET DATA NOT CONNECTED' : HLR_VIEW_TITLE[p.viewState]}
+              message={
+                p.viewState === 'UNAVAILABLE'
+                  ? `${instrument.symbol} is a category. The reversal engine runs once a provider maps it to a specific instrument.`
+                  : `Connect a market-data provider to analyse ${instrument.symbol}. No simulated candles, levels or setups are displayed.`
+              }
+              meta="High / Low Reversal v1 uses real closed H4 · H1 · M15 · M5 · M1 candles only."
+            />
+          )}
+        </div>
+      </ChartStage>
     </section>
   );
 }
