@@ -1,6 +1,7 @@
 import { BellRing, Camera, ChartCandlestick, Expand, Mail, Play, Unplug, Volume2 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useServices } from '../../app/servicesContext';
+import type { HLEDecision } from '../../engines/highLowEngine/decision';
 import type { HLESnapshot, HLETimeframe, Setup } from '../../engines/highLowEngine/types';
 import { useActiveInstrument, useMarket } from '../../hooks/useMarket';
 import { useOptionalStore } from '../../hooks/useOptionalStore';
@@ -13,11 +14,13 @@ import { EmptyState } from '../ui/EmptyState';
 import { HLE_VIEW_TITLE, hleOverlays, type HLETools, type HLEViewState } from './hleView';
 import { HighLowReplayBar } from './HighLowReplayBar';
 import { fmtUtc } from './useHighLow';
+import { DISCOVERY_TEXT } from '../../services/highLowEngine/alerts';
 
 interface Props {
   chartTf: HLETimeframe;
   snapshot: HLESnapshot | null;
   selected: Setup | null;
+  decision: HLEDecision | null;
   viewState: HLEViewState;
   tools: HLETools;
   replay: HighLowReplaySession | null;
@@ -38,8 +41,8 @@ export function HighLowChart(p: Props) {
   const liveBars = market.getCandles(def.id, p.chartTf).length;
   const ready = p.viewState === 'LIVE' || p.viewState === 'STALE' || p.viewState === 'REPLAY';
   const overlay = useMemo(
-    () => (ready && p.snapshot ? hleOverlays({ levels: p.snapshot.levels, selected: p.selected, chartTf: p.chartTf, decimals: d, tools: p.tools }) : { drawables: [], markers: [] }),
-    [ready, p.snapshot, p.selected, p.chartTf, d, p.tools],
+    () => (ready && p.snapshot ? hleOverlays({ levels: p.snapshot.levels, setup: p.selected, decision: p.decision, chartTf: p.chartTf, decimals: d, tools: p.tools }) : { drawables: [], markers: [] }),
+    [ready, p.snapshot, p.selected, p.decision, p.chartTf, d, p.tools],
   );
   useEffect(() => controller?.setHighLowEngine(overlay.drawables, overlay.markers), [controller, overlay]);
   useEffect(() => {
@@ -147,7 +150,14 @@ export function ToolsPanel({ tools, onTools, chartTf, onChartTf }: { tools: HLET
         </dd>
         <dt>Email</dt><dd className="muted">not configured</dd>
       </dl>
-      {a.last && <p className="hletools__last">Last alert: {a.last.side} CONFIRMED · {fmtUtc(a.last.at)} · {a.last.channels.join(' + ') || 'silent (alarm off)'}</p>}
+      {a.last && (
+        <p className={`hletools__last ${a.last.late ? 'is-late' : ''}`} data-testid="hle-last-alert">
+          {a.last.kind === 'entry-ready' ? `🚨 ENTRY READY — ${a.last.side}` : a.last.kind === 'late-entry' ? `⚠️ LATE ENTRY DISCOVERED — ${a.last.side}` : a.last.kind === 'pre-entry' ? `⚠️ PRE-ENTRY — GET READY (${a.last.side})` : `⚠️ PRE-ENTRY DISCOVERED LATE (${a.last.side})`}
+          <br />
+          {fmtUtc(a.last.readyAt / 1000)}{a.last.discovery ? ` · not fresh: ${DISCOVERY_TEXT[a.last.discovery]}` : ''} · {a.last.channels.join(' + ')}
+        </p>
+      )}
+      <p className="hlenote">One alert per setup, ever. Fresh ≤ 5 min; older ones are labelled LATE. Only on a live feed. Mute silences the sound only.</p>
     </aside>
   );
 }

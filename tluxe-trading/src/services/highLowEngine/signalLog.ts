@@ -3,7 +3,8 @@ import type { InstrumentId } from '../../types/instruments';
 
 type KV = Pick<Storage, 'getItem' | 'setItem'> | null;
 export const SIGNAL_LOG_MAX = 1000;
-const key = (id: InstrumentId) => `tluxe.hle.log.v1.${id}`;
+/** v2: the engine now follows the documented High / Low rules; v1 events came from the previous rule set. */
+const key = (id: InstrumentId) => `tluxe.hle.log.v2.${id}`;
 
 /**
  * Persistent, de-duplicated signal log per instrument. Engine events have deterministic ids

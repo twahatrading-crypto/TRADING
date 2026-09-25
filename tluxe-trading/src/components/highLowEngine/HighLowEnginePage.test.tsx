@@ -71,7 +71,7 @@ describe('High / Low Engine page', () => {
     setup(null);
     await flush();
     expect(screen.getByTestId('hle-chart-state')).toHaveTextContent('MARKET DATA OFFLINE');
-    expect(screen.getByTestId('hle-signal')).toHaveTextContent('WAIT');
+    expect(screen.getByTestId('hle-signal')).toHaveTextContent('NO DATA');
     expect(screen.getByTestId('hle-status-runner')).toHaveTextContent('NOT CONFIGURED');
     expect(screen.getByTestId('hle-status-email')).toHaveTextContent('OFF');
     expect(screen.getByTestId('hle-status-analysis')).toHaveTextContent('Last analysis—');
@@ -83,19 +83,31 @@ describe('High / Low Engine page', () => {
     expect(screen.getByTestId('hle-chart-state')).toHaveTextContent('LIVE');
     expect(screen.getByTestId('hle-signal')).toHaveTextContent('BUY CONFIRMED');
     expect(screen.getByTestId('hle-card-m1-zone').textContent).not.toBe('—');
-    expect(screen.getByTestId('hle-sequence').querySelectorAll('.is-done')).toHaveLength(5);
-    expect(screen.getByTestId('hle-score-m5Structure')).toHaveTextContent('15/15');
+    expect(screen.getByTestId('hle-pipe-BUY').querySelectorAll('.is-done')).toHaveLength(5);
+    expect(screen.getByTestId('hle-score-m5Structure')).toHaveTextContent('9/15'); // CHOCH 0.60, not displaced (documented shaping)
+    expect(screen.getByTestId('hle-mandatory').querySelectorAll('.is-pass')).toHaveLength(6);
     expect(within(screen.getByTestId('hle-log')).getAllByText(/ENTRY READY/).length).toBeGreaterThan(0);
     expect(draw.mock.calls.at(-1)![0].some((x) => x.kind === 'zone')).toBe(true);
-    expect(screen.getByText(/not a win probability/)).toBeInTheDocument();
+    expect(screen.getByText(/Score describes quality only/)).toBeInTheDocument();
+    expect(screen.getByText(/A high is not a sell and a low is not a buy/)).toBeInTheDocument();
   });
-  it('View All Levels lists every level with source, price, created, strength, state and distance', async () => {
+  it('View All Levels lists every level with source, price, validity, rating, state, touches and distance', async () => {
     setup();
     await flush();
     fireEvent.click(screen.getByRole('button', { name: /View All Levels/ }));
     const dlg = screen.getByTestId('hle-levels-dialog');
-    for (const h of ['Source', 'Price', 'Created', 'Strength', 'State', 'Distance']) expect(within(dlg).getByRole('columnheader', { name: h })).toBeInTheDocument();
+    for (const h of ['Source', 'Price', 'Valid from', 'Rating', 'State', 'Touches', 'Distance']) expect(within(dlg).getByRole('columnheader', { name: h })).toBeInTheDocument();
     expect(within(dlg).getAllByRole('row').length).toBeGreaterThan(1);
+  });
+  it('a STALE feed withholds the complete setup: WAIT · DATA_STALE, no Entry / SL / TP drawn — never LIVE', async () => {
+    const { provider } = setup();
+    await flush();
+    act(() => provider.sink.connection('XAUUSD', 'DELAYED'));
+    await flush();
+    expect(screen.getByTestId('hle-chart-state')).toHaveTextContent('DATA STALE');
+    expect(screen.getByTestId('hle-signal')).toHaveTextContent('WAIT');
+    expect(screen.getByTestId('hle-signal')).toHaveTextContent(/withheld/);
+    expect(draw.mock.calls.at(-1)![0].some((x) => x.kind === 'zone' || x.kind === 'tp')).toBe(false);
   });
   it('TEST EMAIL never fakes a send', async () => {
     setup();
@@ -131,7 +143,7 @@ describe('High / Low Engine page', () => {
     act(() => services.instruments.select('XAGUSD'));
     await flush();
     expect(screen.getByTestId('hle-card-m1-zone')).toHaveTextContent('—');
-    expect(screen.getByTestId('hle-signal')).toHaveTextContent('WAIT');
+    expect(screen.getByTestId('hle-signal')).toHaveTextContent('NO DATA');
     expect(services.hlReversal.store('XAUUSD').getState().snapshot).not.toBeNull();
   });
 });

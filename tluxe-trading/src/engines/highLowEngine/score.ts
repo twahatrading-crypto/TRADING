@@ -1,39 +1,46 @@
 import { HLE_SCORE_WEIGHTS } from './config';
-import type { Bias, HLEScore, HLEScoreKey, Setup } from './types';
+import type { HLEScore, HLEScoreKey, Setup } from './types';
 
-const c01 = (x: number) => Math.max(0, Math.min(1, x));
+const c01 = (x: number) => (Number.isFinite(x) ? Math.max(0, Math.min(1, x)) : 0);
 
 /**
- * Raw 0–100 components (all exposed in the UI):
- *  htfAlignment          H4 bias (at the sweep, else current): aligned 100 · neutral 50 · against 0 · insufficient 0
- *  levelImportance       level strength score (frozen at the sweep)
- *  sweepQuality          none 0; else 60·min(1, penetration / 0.25 ATR) + 40·rejection
- *  rejectionDisplacement none before reclaim; 50·rejection + 50·min(1, M5 leg ATR / 3)
- *  m5Structure           CHOCH 100 · BOS 80 · none 0
- *  m1EntryQuality        0 until ENTRY READY; then 60 + 40·min(1, R:R TP1 / 3) (60 when no TP1)
- *  fvgObConfluence       OB+FVG 100 · OB 70 · FVG 60 · reclaim band 0
- * total = round(Σ weight × component / 100). Descriptive only — the state machine never reads it.
+ * Setup Score (handoff §10) — each component a 0..1 fraction of its maximum:
+ *  htf     (H4 dir = trade ? 0.6 : H4 0 ? 0.3 : 0) + (H1 dir = trade ? 0.4 : H1 0 ? 0.2 : 0)
+ *  level   the level's rating score (§4.6)
+ *  sweep   min(1, penetration ATR / 0.75) × 0.6 + (reclaimed ? 0.4 : 0)
+ *  reject  clamp(wick / 0.45) × 0.5 + (M5 break ? clamp(body ATR / 1.00) × 0.5 : 0)
+ *  m5      (CHOCH 0.60 · BOS 0.45) + (displaced ? 0.40 : 0); none 0
+ *  m1      pullback ? 0.6 + (R:R1 ? clamp((R:R1 − 1) / 2) × 0.4 : 0) : 0
+ *  conf    zone ? (M1 FVG ? 0.6 : 0) + (M1 OB ? 0.4 : 0) : 0
+ * points = round(fraction × max); total = Σ points. A missing stage scores zero (never skipped).
+ * Descriptive only: nothing in the engine reads it.
  */
-export function hleScoreComponents(s: Setup, levelScore: number, h4Now: Bias): Record<HLEScoreKey, number> {
-  const h4 = s.h4AtSweep ?? h4Now;
-  const aligned = (s.side === 'BUY' && h4 === 'BULLISH') || (s.side === 'SELL' && h4 === 'BEARISH');
+export function hleScoreFractions(s: Setup, o: { h4Dir: number; h1Dir: number; levelRating: number; fvg: boolean; ob: boolean }): Record<HLEScoreKey, number> {
+  const dir = s.side === 'BUY' ? 1 : -1;
+  const ctx = s.context;
+  const h4 = ctx ? ctx.h4Dir : o.h4Dir;
+  const h1 = ctx ? ctx.h1Dir : o.h1Dir;
+  const sw = s.sweep;
+  const m5 = s.m5;
   return {
-    htfAlignment: aligned ? 100 : h4 === 'NEUTRAL' ? 50 : 0,
-    levelImportance: s.sweep ? s.sweep.importanceAtSweep : levelScore,
-    sweepQuality: s.sweep ? 60 * c01(s.sweep.penetrationAtr / 0.25) + 40 * c01(s.sweep.rejection) : 0,
-    rejectionDisplacement: s.reclaim && s.sweep ? 50 * c01(s.sweep.rejection) + 50 * c01((s.m5?.displacement.legAtr ?? 0) / 3) : 0,
-    m5Structure: s.m5 ? (s.m5.kind === 'CHOCH' ? 100 : 80) : 0,
-    m1EntryQuality: s.entry ? 60 + 40 * c01((s.risk?.rr1 ?? 0) / 3) : 0,
-    fvgObConfluence: s.zone ? { 'OB+FVG': 100, OB: 70, FVG: 60, RECLAIM: 0 }[s.zone.source] : 0,
+    htfAlignment: c01((h4 === dir ? 0.6 : h4 === 0 ? 0.3 : 0) + (h1 === dir ? 0.4 : h1 === 0 ? 0.2 : 0)),
+    levelImportance: c01(o.levelRating),
+    sweepQuality: c01(Math.min(1, sw.penetrationAtr / 0.75) * 0.6 + (s.reclaim ? 0.4 : 0)),
+    rejectionDisplacement: c01(c01(sw.wick / 0.45) * 0.5 + (m5 ? c01(m5.displacement.bodyAtr / 1.0) * 0.5 : 0)),
+    m5Structure: m5 ? c01((m5.kind === 'CHOCH' ? 0.6 : 0.45) + (m5.displacement.displaced ? 0.4 : 0)) : 0,
+    m1EntryQuality: s.entry ? c01(0.6 + (s.risk ? c01((s.risk.rr1 - 1) / 2) * 0.4 : 0)) : 0,
+    fvgObConfluence: s.zone ? c01((o.fvg ? 0.6 : 0) + (o.ob ? 0.4 : 0)) : 0,
   };
 }
 
-export function finalizeHLEScore(components: Record<HLEScoreKey, number>): HLEScore {
+export function finalizeHLEScore(fr: Record<HLEScoreKey, number>, frozen: boolean): HLEScore {
+  const components = {} as Record<HLEScoreKey, number>;
   const contributions = {} as Record<HLEScoreKey, number>;
-  let sum = 0;
+  let total = 0;
   for (const k of Object.keys(HLE_SCORE_WEIGHTS) as HLEScoreKey[]) {
-    contributions[k] = (HLE_SCORE_WEIGHTS[k] * components[k]) / 100;
-    sum += contributions[k];
+    components[k] = Math.round(c01(fr[k]) * 100);
+    contributions[k] = Math.round(c01(fr[k]) * HLE_SCORE_WEIGHTS[k]);
+    total += contributions[k];
   }
-  return { components, weights: HLE_SCORE_WEIGHTS, contributions, total: Math.round(sum) };
+  return { components, weights: HLE_SCORE_WEIGHTS, contributions, total, frozen };
 }

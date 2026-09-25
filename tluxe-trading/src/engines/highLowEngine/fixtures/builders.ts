@@ -27,7 +27,10 @@ export function fromCloses(closes: readonly number[], t0: number, step: number, 
     const o = ov[i] ?? {};
     const close = o.close ?? c0;
     const open = o.open ?? (i === 0 ? close : out[i - 1]!.close);
-    out.push({ time: t0 + i * step, open, high: Math.max(open, close, o.high ?? Math.max(open, close) + wick), low: Math.min(open, close, o.low ?? Math.min(open, close) - wick), close, volume: null });
+    // Deterministic wick variation: real highs / lows are rarely exactly equal, and equal neighbours never form a pivot.
+    const wh = wick * (0.75 + 0.5 * ((i * 0.6180339887) % 1));
+    const wl = wick * (0.75 + 0.5 * ((i * 0.4142135623 + 0.5) % 1));
+    out.push({ time: t0 + i * step, open, high: Math.max(open, close, o.high ?? Math.max(open, close) + wh), low: Math.min(open, close, o.low ?? Math.min(open, close) - wl), close, volume: null });
   });
   return out;
 }

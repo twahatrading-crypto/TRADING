@@ -1,7 +1,8 @@
 import { HLE_TF_SECONDS, HLE_TIMEFRAMES } from '../../engines/highLowEngine/config';
+import type { HLEDecision, HLEFeed } from '../../engines/highLowEngine/decision';
 import { levelLabel } from '../../engines/highLowEngine/engine';
-import type { HLESnapshot, HLETimeframe, Level, LevelType, Setup, SetupState } from '../../engines/highLowEngine/types';
-import { TERMINAL } from '../../engines/highLowEngine/types';
+import type { Candidate, HLESnapshot, HLETimeframe, Level, LevelType, Setup, Side } from '../../engines/highLowEngine/types';
+import { hleFeedOf } from '../../services/highLowEngine/feed';
 import type { ConnectionState, FeedStatusCode } from '../../types/market';
 import { formatPrice } from '../../utils/format';
 
@@ -19,7 +20,7 @@ export const HLE_VIEW_TITLE: Record<HLEViewState, string> = {
   UNAVAILABLE: 'DATA UNAVAILABLE',
 };
 
-/** Truthful page state: LIVE only with a live feed and every timeframe READY. Never falls back to generated data. */
+/** Truthful page state: LIVE only with a fresh feed and every timeframe READY. Never falls back to generated data. */
 export function hleViewState(o: { tradable: boolean; connection: ConnectionState; feedCode?: FeedStatusCode | null; snapshot: HLESnapshot | null; replay?: boolean }): HLEViewState {
   if (!o.tradable) return 'UNAVAILABLE';
   const snap = o.snapshot;
@@ -28,97 +29,68 @@ export function hleViewState(o: { tradable: boolean; connection: ConnectionState
   const missing = tfs.some((s) => s === 'NO_DATA');
   if (o.replay) return snap?.state === 'READY' ? 'REPLAY' : anyData && missing ? 'DEPENDENCY_UNAVAILABLE' : 'INSUFFICIENT_DATA';
   if (o.feedCode === 'ERROR') return 'ERROR';
-  const live = (o.connection === 'LIVE' || o.connection === 'DELAYED') && o.feedCode !== 'STALE';
+  const live = hleFeedOf(o.connection, o.feedCode) === 'LIVE';
   if (!anyData) return live ? 'INSUFFICIENT_DATA' : 'OFFLINE';
   if (missing) return 'DEPENDENCY_UNAVAILABLE';
   if (snap!.state !== 'READY') return 'INSUFFICIENT_DATA';
   return live ? 'LIVE' : 'STALE';
 }
 export const hasData = (s: HLEViewState) => s === 'LIVE' || s === 'STALE' || s === 'REPLAY';
-
-/* ------------------------------ setups ------------------------------ */
-
-const RANK: Record<SetupState, number> = { ENTRY_READY: 0, WAITING_M1: 1, M5_CONFIRMED: 2, WAITING_M5: 3, RECLAIMED: 4, SWEPT: 5, LIQUIDITY_APPROACH: 6, LEVEL_ACTIVE: 7, INVALIDATED: 8, EXPIRED: 8 };
-export const isOpen = (s: Setup) => !TERMINAL.includes(s.state);
-
-/**
- * The setup the page follows: the most advanced open setup that has swept liquidity; otherwise
- * the setup with the most recent sweep; otherwise the nearest approached / watched level.
- */
-export function focusSetup(setups: readonly Setup[], price: number | null): Setup | null {
-  const open = setups.filter(isOpen).sort((a, b) => RANK[a.state] - RANK[b.state] || b.lastUpdate - a.lastUpdate || (a.id < b.id ? -1 : 1));
-  // Proximity alone (LEVEL_ACTIVE / LIQUIDITY_APPROACH) never outranks real liquidity evidence.
-  if (open[0] && open[0].state !== 'LEVEL_ACTIVE' && open[0].state !== 'LIQUIDITY_APPROACH') return open[0];
-  // Most recent real liquidity event (sweep time), not whichever setup happened to expire last.
-  const recent = setups.filter((s) => !isOpen(s) && s.sweep).sort((a, b) => b.sweep!.knownAt - a.sweep!.knownAt || (a.id < b.id ? -1 : 1))[0];
-  if (recent) return recent;
-  return open.sort((a, b) => Math.abs(a.level - (price ?? a.level)) - Math.abs(b.level - (price ?? b.level)))[0] ?? null;
-}
-
-export const STATE_LABEL: Record<SetupState, string> = {
-  LEVEL_ACTIVE: 'LEVEL ACTIVE',
-  LIQUIDITY_APPROACH: 'APPROACHING',
-  SWEPT: 'SWEPT',
-  RECLAIMED: 'RECLAIMED',
-  WAITING_M5: 'WAITING M5',
-  M5_CONFIRMED: 'M5 CONFIRMED',
-  WAITING_M1: 'WAITING M1',
-  ENTRY_READY: 'ENTRY READY',
-  INVALIDATED: 'INVALIDATED',
-  EXPIRED: 'EXPIRED',
-};
-
-/** The single next condition the engine needs (from the setup's own state). */
-export function nextRequired(s: Setup, d: number): string {
-  const buy = s.side === 'BUY';
-  switch (s.state) {
-    case 'LEVEL_ACTIVE':
-    case 'LIQUIDITY_APPROACH':
-      return `M15 must trade ${buy ? 'below' : 'above'} ${formatPrice(s.level, d)} (${buy ? 'SSL' : 'BSL'})`;
-    case 'SWEPT':
-      return `M15 close back ${buy ? 'above' : 'below'} ${formatPrice(s.level, d)} (reclaim)`;
-    case 'RECLAIMED':
-    case 'WAITING_M5':
-      return `M5 ${buy ? 'bullish' : 'bearish'} CHOCH / BOS on a closed candle`;
-    case 'M5_CONFIRMED':
-    case 'WAITING_M1':
-      return `M1 pullback into ${formatPrice(s.zone!.low, d)} – ${formatPrice(s.zone!.high, d)}`;
-    case 'ENTRY_READY':
-      return `${s.side} CONFIRMED — every mandatory stage complete`;
-    default:
-      return 'None — setup finished';
-  }
+/** Feed gate for the decision layer. Replay is historical by definition. */
+export function feedForView(v: HLEViewState, connection: ConnectionState, feedCode: FeedStatusCode | null | undefined): HLEFeed {
+  if (v === 'REPLAY') return 'REPLAY';
+  return hleFeedOf(connection, feedCode);
 }
 
 /* --------------------------- setup sequence --------------------------- */
 
-export type StepStatus = 'done' | 'active' | 'pending' | 'failed';
-export function sequence(s: Setup | null): { side: 'BUY' | 'SELL'; steps: { label: string; status: StepStatus }[] } {
-  const side = s?.side ?? 'BUY';
-  const buy = side === 'BUY';
-  const dead = !!s && TERMINAL.includes(s.state) && !s.entry;
-  const st = (done: boolean, active: boolean): StepStatus => (done ? 'done' : dead ? 'failed' : active ? 'active' : 'pending');
-  return {
-    side,
-    steps: [
-      { label: buy ? 'Important Low' : 'Important High', status: s ? 'done' : 'pending' },
-      { label: buy ? 'SSL Sweep' : 'BSL Sweep', status: st(!!s?.reclaim, !!s) },
-      { label: buy ? 'Bullish CHOCH/BOS' : 'Bearish CHOCH/BOS', status: st(!!s?.m5, !!s?.reclaim) },
-      { label: 'Pullback (M1)', status: st(!!s?.entry, !!s?.m5) },
-      { label: buy ? 'BUY Confirmed' : 'SELL Confirmed', status: st(!!s?.entry, !!s?.m5) },
-    ],
-  };
+export type StepState = 'PENDING' | 'ACTIVE' | 'DONE' | 'DEAD';
+const STEPS = [
+  { n: 1, buy: 'Important Low', sell: 'Important High' },
+  { n: 2, buy: 'SSL Swept', sell: 'BSL Swept' },
+  { n: 3, buy: 'Bullish CHOCH/BOS', sell: 'Bearish CHOCH/BOS' },
+  { n: 4, buy: 'Pullback (M1)', sell: 'Pullback (M1)' },
+  { n: 5, buy: 'BUY Confirmed', sell: 'SELL Confirmed' },
+];
+/** Pipeline boxes for one direction (handoff §8.4). The last box lights only on the real, live confirmation. */
+export function pipeline(c: Candidate | null, side: Side, confirmed: boolean): { label: string; state: StepState }[] {
+  const reached = c?.stage ?? 0;
+  const dead = !!c?.invalidated;
+  return STEPS.map((s) => {
+    let state: StepState;
+    if (s.n === 5) state = confirmed ? 'DONE' : reached >= 5 ? (dead ? 'DEAD' : 'ACTIVE') : 'PENDING';
+    else if (s.n <= reached) state = dead ? 'DEAD' : 'DONE';
+    else if (!dead && reached >= 1 && s.n === reached + 1) state = 'ACTIVE';
+    else state = 'PENDING';
+    return { label: side === 'BUY' ? s.buy : s.sell, state };
+  });
 }
 
 /* ------------------------------- levels ------------------------------- */
 
-/** Latest level of each type (the H1 card); `null` when that type has no level yet. */
-export function latestByType(levels: readonly Level[]): Record<LevelType, Level | null> {
-  const out = { PDH: null, PDL: null, ASIA_HIGH: null, ASIA_LOW: null, SWING_HIGH: null, SWING_LOW: null } as Record<LevelType, Level | null>;
-  for (const l of levels) if (!out[l.type] || l.createdAt > out[l.type]!.createdAt) out[l.type] = l;
-  return out;
+export type HeadlineKey = 'PDH' | 'PDL' | 'ASIA_HIGH' | 'ASIA_LOW' | 'MAJOR_HIGH' | 'MAJOR_LOW';
+export const HEADLINE: { key: HeadlineKey; label: string }[] = [
+  { key: 'PDH', label: 'Previous Day High' },
+  { key: 'PDL', label: 'Previous Day Low' },
+  { key: 'ASIA_HIGH', label: 'Asia High' },
+  { key: 'ASIA_LOW', label: 'Asia Low' },
+  { key: 'MAJOR_HIGH', label: 'Major Swing High' },
+  { key: 'MAJOR_LOW', label: 'Major Swing Low' },
+];
+/** The six headline levels (handoff §4.7) — current definitions only; null when not formed yet. */
+export function headline(levels: readonly Level[]): Record<HeadlineKey, Level | null> {
+  const live = levels.filter((l) => l.retiredAt === null);
+  const pick = (f: (l: Level) => boolean) => live.filter(f).sort((a, b) => b.createdAt - a.createdAt)[0] ?? null;
+  return {
+    PDH: pick((l) => l.type === 'PDH'),
+    PDL: pick((l) => l.type === 'PDL'),
+    ASIA_HIGH: pick((l) => l.type === 'ASIA_HIGH'),
+    ASIA_LOW: pick((l) => l.type === 'ASIA_LOW'),
+    MAJOR_HIGH: pick((l) => l.source === 'swing' && l.major && l.kind === 'high'),
+    MAJOR_LOW: pick((l) => l.source === 'swing' && l.major && l.kind === 'low'),
+  };
 }
-export const LEVEL_ORDER: LevelType[] = ['PDH', 'PDL', 'ASIA_HIGH', 'ASIA_LOW', 'SWING_HIGH', 'SWING_LOW'];
+export const LEVEL_TYPES: LevelType[] = ['PDH', 'PDL', 'ASIA_HIGH', 'ASIA_LOW', 'SWING_HIGH', 'SWING_LOW'];
 export { levelLabel };
 
 /* --------------------------- chart overlays ---------------------------- */
@@ -152,48 +124,58 @@ export interface HLEMarker {
 
 const alignTo = (t: number, tf: HLETimeframe) => Math.floor(t / HLE_TF_SECONDS[tf]) * HLE_TF_SECONDS[tf];
 
-/** Chart overlays — actual engine outputs only, filtered by the Tools toggles. */
-export function hleOverlays(o: { levels: readonly Level[]; selected: Setup | null; chartTf: HLETimeframe; decimals: number; tools: HLETools }): { drawables: HLEDrawable[]; markers: HLEMarker[] } {
+/**
+ * Chart overlays — the engine result only (handoff §11.3): the six headline levels as bands of the
+ * tolerance the engine used (consumed levels drawn faint and captioned "broken", never removed),
+ * the sweep marker, the CHOCH / BOS line from the broken swing to the closing candle, and Entry /
+ * SL / TP ONLY from the decision's trade levels (null unless confirmed on a live feed).
+ */
+export function hleOverlays(o: { levels: readonly Level[]; setup: Setup | null; decision: HLEDecision | null; chartTf: HLETimeframe; decimals: number; tools: HLETools }): { drawables: HLEDrawable[]; markers: HLEMarker[] } {
   const d = o.decimals;
   const out: HLEDrawable[] = [];
-  const s = o.selected;
-  const own = new Set(s?.levelIds ?? []);
-  for (const l of o.levels) {
-    if (l.status !== 'ACTIVE' && !own.has(l.id)) continue;
-    const isSwing = l.type === 'SWING_HIGH' || l.type === 'SWING_LOW';
-    if ((isSwing && !o.tools.levels) || (!isSwing && !o.tools.liquidity)) continue;
-    const broken = l.status === 'BROKEN' || l.status === 'SWEPT';
+  const s = o.setup;
+  const active = s?.levelId ?? o.decision?.level?.id ?? null;
+  const heads = headline(o.levels);
+  for (const h of HEADLINE) {
+    const l = heads[h.key];
+    if (!l) continue;
+    const isMajor = h.key === 'MAJOR_HIGH' || h.key === 'MAJOR_LOW';
+    if ((isMajor && !o.tools.levels) || (!isMajor && !o.tools.liquidity)) continue;
+    const on = l.id === active;
+    const half = Math.max(l.tol, 0);
     out.push({
       id: l.id,
       kind: 'level',
-      tone: own.has(l.id) ? 'gold' : l.kind === 'high' ? 'sell' : 'buy',
-      low: l.price,
-      high: l.price,
-      from: l.sourceTime,
+      tone: on ? 'gold' : l.state === 'CONSUMED' ? 'muted' : l.kind === 'high' ? 'sell' : 'buy',
+      low: l.price - half,
+      high: l.price + half,
+      from: l.formedAt,
       to: null,
-      label: `${levelLabel(l.type)} ${formatPrice(l.price, d)}${broken ? ` (${l.status.toLowerCase()})` : ''} · ${l.kind === 'high' ? 'BSL' : 'SSL'}`,
-      dashed: !own.has(l.id),
-      emphasis: own.has(l.id),
+      label: `${l.label} ${formatPrice(l.price, d)}${l.state === 'CONSUMED' ? ' · broken' : l.state === 'SWEPT' ? ' · swept' : ''} · ${l.kind === 'high' ? 'BSL' : 'SSL'}${on ? ' ● setup' : ''}`,
+      dashed: l.state !== 'ACTIVE',
+      emphasis: on,
     });
   }
   const markers: HLEMarker[] = [];
   if (s) {
     const buy = s.side === 'BUY';
-    if (s.m5 && o.tools.structure) out.push({ id: `${s.id}:bos`, kind: 'structure', tone: 'structure', low: s.m5.brokenLevel, high: s.m5.brokenLevel, from: s.m5.swingTime, to: s.m5.time, label: `M5 ${s.m5.kind}`, dashed: false, emphasis: true });
-    if (s.risk && o.tools.risk) {
-      const from = s.zone!.definedAt;
-      out.push({ id: `${s.id}:zone`, kind: 'zone', tone: 'zone', low: s.zone!.low, high: s.zone!.high, from, to: null, label: `Entry ${formatPrice(s.risk.entry, d)} (${s.zone!.source})`, dashed: false, emphasis: true });
-      out.push({ id: `${s.id}:sl`, kind: 'stop', tone: 'sell', low: s.risk.stop, high: s.risk.stop, from, to: null, label: `SL ${formatPrice(s.risk.stop, d)}`, dashed: true, emphasis: false });
-      if (s.risk.tp1 !== null) out.push({ id: `${s.id}:tp1`, kind: 'tp', tone: 'buy', low: s.risk.tp1, high: s.risk.tp1, from, to: null, label: `TP1 ${formatPrice(s.risk.tp1, d)}`, dashed: true, emphasis: false });
-      if (s.risk.tp2 !== null) out.push({ id: `${s.id}:tp2`, kind: 'tp', tone: 'buy', low: s.risk.tp2, high: s.risk.tp2, from, to: null, label: `TP2 ${formatPrice(s.risk.tp2, d)}`, dashed: true, emphasis: false });
+    if (s.m5 && o.tools.structure)
+      out.push({ id: `${s.id}:bos`, kind: 'structure', tone: 'structure', low: s.m5.brokenLevel, high: s.m5.brokenLevel, from: s.m5.swingTime, to: s.m5.time, label: `${s.m5.kind}${s.m5.displacement.displaced ? ' + disp' : ''}`, dashed: true, emphasis: true });
+    const t = o.decision?.setup?.id === s.id ? o.decision.tradeLevels : null;
+    if (t && o.tools.risk) {
+      const from = t.zone.definedAt;
+      out.push({ id: `${s.id}:zone`, kind: 'zone', tone: 'zone', low: t.zone.low, high: t.zone.high, from, to: null, label: `Entry ${formatPrice(t.entry, d)}`, dashed: false, emphasis: true });
+      out.push({ id: `${s.id}:sl`, kind: 'stop', tone: 'sell', low: t.stop, high: t.stop, from, to: null, label: `SL ${formatPrice(t.stop, d)}`, dashed: true, emphasis: false });
+      out.push({ id: `${s.id}:tp1`, kind: 'tp', tone: 'buy', low: t.tp1, high: t.tp1, from, to: null, label: `TP1 ${formatPrice(t.tp1, d)}`, dashed: true, emphasis: false });
+      if (t.tp2 !== null) out.push({ id: `${s.id}:tp2`, kind: 'tp', tone: 'buy', low: t.tp2, high: t.tp2, from, to: null, label: `TP2 ${formatPrice(t.tp2, d)}`, dashed: true, emphasis: false });
     }
     const side = buy ? 'belowBar' : 'aboveBar';
-    if (s.sweep && o.tools.sweeps) {
-      markers.push({ time: alignTo(s.sweep.extremeTime, o.chartTf), position: side, shape: buy ? 'arrowUp' : 'arrowDown', color: buy ? '#3cc9a0' : '#ef5d5d', text: `${buy ? 'SSL' : 'BSL'} Sweep` });
+    if (o.tools.sweeps) {
+      markers.push({ time: alignTo(s.sweep.extremeTime, o.chartTf), position: side, shape: buy ? 'arrowUp' : 'arrowDown', color: '#ffd54f', text: `${buy ? 'SSL' : 'BSL'} Sweep` });
       if (s.reclaim) markers.push({ time: alignTo(s.reclaim.time, o.chartTf), position: side, shape: 'circle', color: '#d4a94f', text: 'Reclaim' });
     }
-    if (s.m5 && o.tools.structure) markers.push({ time: alignTo(s.m5.time, o.chartTf), position: buy ? 'aboveBar' : 'belowBar', shape: 'square', color: '#a78bfa', text: s.m5.kind });
-    if (s.entry && o.tools.risk) markers.push({ time: alignTo(s.entry.time, o.chartTf), position: buy ? 'belowBar' : 'aboveBar', shape: buy ? 'arrowUp' : 'arrowDown', color: '#5b8cff', text: `${s.side} Confirmed` });
+    if (s.m5 && o.tools.structure) markers.push({ time: alignTo(s.m5.time, o.chartTf), position: buy ? 'aboveBar' : 'belowBar', shape: 'square', color: '#ab47bc', text: s.m5.kind });
+    if (t && o.tools.risk && s.entry) markers.push({ time: alignTo(s.entry.time, o.chartTf), position: buy ? 'belowBar' : 'aboveBar', shape: buy ? 'arrowUp' : 'arrowDown', color: '#4c8dff', text: `${s.side} Confirmed` });
   }
   const gap = 3 * HLE_TF_SECONDS[o.chartTf];
   const merged: HLEMarker[] = [];

@@ -10,21 +10,23 @@ import { TERMINAL } from './types';
  * Replays every knowledge time (each distinct bar close across H4…M1) and compares
  * the incremental engine with the full-history run:
  *  A1 parity       at checkpoints: incremental snapshot === clean recomputation at K
- *  A2 levels       never visible before created; type / price / time / strength frozen
+ *  A2 levels       never visible before created or before validFrom; price / validFrom /
+ *                  tolerance frozen (R2); a level state never goes backwards
  *  A3 sweep        sweep bar never moves; sweep record frozen once reclaimed
  *  A4 reclaim      frozen once set
  *  A5 M5           frozen once set; never appears earlier later on
- *  A6 entry        zone / SL / TP / ENTRY READY time frozen once set; never earlier later on
+ *  A6 entry        zone / SL / entry / TP / R frozen once set (R1); never earlier later on
  *  A7 lifecycle    state history at K is a prefix of the final history (forward-only)
  *  A8 knowability  every recorded time ≤ K
- *  A9 causality    level ≤ sweep ≤ reclaim ≤ M5 = zone ≤ entry
- *  A10 gates       ENTRY_READY only with every mandatory stage present
+ *  A9 causality    level validFrom ≤ sweep ≤ reclaim ≤ M5 = zone ≤ entry
+ *  A10 gates       ENTRY_READY only with every mandatory boolean true
  *  A11 event log   the log at K is an exact prefix of the final log (history never rewritten)
+ *  A12 score       frozen at ENTRY_READY
  * The first mismatch is reported first.
  * ========================================================================== */
 
 export interface AuditableHLE {
-  update(input: HLEInput): void;
+  update(input: HLEInput): unknown;
   snapshot(): HLESnapshot;
   inspect(): { knowledgeTime: number | null; setups: readonly Setup[]; levels: readonly Level[]; events: readonly HLEEvent[] };
 }
@@ -45,9 +47,14 @@ export interface HLEAuditResult {
   violations: string[];
 }
 
-const ORDER: Record<SetupState, number> = { LEVEL_ACTIVE: 0, LIQUIDITY_APPROACH: 1, SWEPT: 2, RECLAIMED: 3, WAITING_M5: 4, M5_CONFIRMED: 5, WAITING_M1: 6, ENTRY_READY: 7, INVALIDATED: 9, EXPIRED: 9 };
+const ORDER: Record<SetupState, number> = { SWEPT: 0, WAITING_M5: 1, WAITING_M1: 2, NO_TARGET: 3, ENTRY_READY: 4, INVALIDATED: 9, EXPIRED: 9 };
+const LEVEL_ORDER = { ACTIVE: 0, SWEPT: 1, CONSUMED: 2 } as const;
 const j = (v: unknown) => JSON.stringify(v);
 const iso = (t: number) => new Date(t * 1000).toISOString().replace('T', ' ').slice(0, 16);
+
+/** Snapshot without display-only fields (display price / distances), for parity. */
+export const normHLE = (x: HLESnapshot) =>
+  j({ ...x, displayPrice: null, levels: x.levels.map((l) => ({ ...l, distance: null })), setups: x.setups.map((s) => ({ ...s, distance: null })) });
 
 export function auditHighLowEngine(input: HLEAuditInput): HLEAuditResult {
   const settings: HLESettings = { ...input.settings, maxFinishedSetups: Number.MAX_SAFE_INTEGER, maxEvents: Number.MAX_SAFE_INTEGER };
@@ -76,6 +83,7 @@ export function auditHighLowEngine(input: HLEAuditInput): HLEAuditResult {
   const grow = Object.fromEntries(HLE_TIMEFRAMES.map((tf) => [tf, [] as Candle[]])) as Record<string, Candle[]>;
   const eng = make(opts);
   const seen = new Map<string, Record<string, string | number | undefined>>();
+  const levelSeen = new Map<string, { frozen: string; state: number }>();
   let checkpoints = 0;
 
   for (const K of times) {
@@ -96,10 +104,15 @@ export function auditHighLowEngine(input: HLEAuditInput): HLEAuditResult {
     if (view.events.length > finEvents.length) add(`A11 ${at}: more events than the full run`);
 
     for (const l of view.levels) {
-      const f = finLevels.get(l.id);
       if (l.createdAt > K) add(`A2 ${at}: level ${l.id} visible before it was created`);
-      if (!f) add(`A2 ${at}: level ${l.id} missing from the full run`);
-      else if (l.price !== f.price || l.sourceTime !== f.sourceTime || l.createdAt !== f.createdAt || l.strengthScore !== f.strengthScore || l.type !== f.type) add(`A2 ${at}: level ${l.id} frozen fields changed`);
+      if (l.validFrom > K) add(`A2 ${at}: level ${l.id} published before its validFrom`);
+      const frozen = j([l.type, l.price, l.validFrom, l.createdAt, l.tol, l.atr, l.members]);
+      const prev = levelSeen.get(l.id);
+      if (prev && prev.frozen !== frozen) add(`A2 ${at}: level ${l.id} frozen fields changed (price / validFrom / tolerance)`);
+      if (prev && LEVEL_ORDER[l.state] < prev.state) add(`A2 ${at}: level ${l.id} state went backwards to ${l.state}`);
+      levelSeen.set(l.id, { frozen, state: LEVEL_ORDER[l.state] });
+      const f = finLevels.get(l.id);
+      if (f && j([f.type, f.price, f.validFrom, f.createdAt, f.tol, f.atr, f.members]) !== frozen) add(`A2 ${at}: level ${l.id} differs from the full run`);
     }
 
     for (const s of view.setups) {
@@ -114,7 +127,7 @@ export function auditHighLowEngine(input: HLEAuditInput): HLEAuditResult {
         if (ORDER[h.to] <= ORDER[h.from!]) add(`A7 ${at}: ${s.id} moved backwards ${h.from} → ${h.to}`);
       }
       if (TERMINAL.includes(s.state) && j(s.history) !== j(f.history)) add(`A7 ${at}: finished setup ${s.id} rewritten later`);
-      for (const t of [s.levelCreatedAt, ...s.history.map((h) => h.time), s.sweep?.knownAt, s.reclaim?.knownAt, s.m5?.knownAt, s.zone?.definedAt, s.entry?.knownAt, s.pullback?.knownAt, s.approachAt])
+      for (const t of [s.sweep.knownAt, ...s.history.map((h) => h.time), s.touch?.knownAt, s.reclaim?.knownAt, s.m5?.knownAt, s.zone?.definedAt, s.entry?.knownAt])
         if (t !== null && t !== undefined && t > K) add(`A8 ${at}: ${s.id} holds a time after K (${iso(t)})`);
       const m = seen.get(s.id) ?? {};
       const once = (key: string, val: unknown, label: string) => {
@@ -126,31 +139,32 @@ export function auditHighLowEngine(input: HLEAuditInput): HLEAuditResult {
         if (m[key] === undefined) m[key] = x;
         else if (m[key] !== x) add(`${label} ${at}: ${s.id} ${key} changed after it was set`);
       };
-      if (s.sweep) {
-        if (m.sweepTime === undefined) m.sweepTime = s.sweep.time;
-        else if (m.sweepTime !== s.sweep.time) add(`A3 ${at}: ${s.id} sweep bar moved`);
-      }
+      if (m.sweepTime === undefined) m.sweepTime = s.sweep.time;
+      else if (m.sweepTime !== s.sweep.time) add(`A3 ${at}: ${s.id} sweep bar moved`);
       if (s.reclaim) once('sweep', s.sweep, 'A3');
       once('reclaim', s.reclaim, 'A4');
       once('m5', s.m5, 'A5');
       once('zone', s.zone, 'A6');
       once('risk', s.risk, 'A6');
       once('entry', s.entry, 'A6');
+      if (s.state === 'ENTRY_READY' || s.score.frozen) {
+        if (!s.score.frozen) add(`A12 ${at}: ${s.id} ENTRY_READY score is not frozen`);
+        once('score', s.score, 'A12');
+      }
       seen.set(s.id, m);
       if (!s.m5 && f.m5 && f.m5.knownAt <= K) add(`A5 ${at}: ${s.id} final run has an M5 confirmation at ${iso(f.m5.knownAt)} not known then`);
-      if (!s.entry && f.entry && f.entry.knownAt <= K) add(`A6 ${at}: ${s.id} final run has ENTRY READY at ${iso(f.entry.knownAt)} not known then`);
-      if (s.sweep && s.sweep.time < s.levelCreatedAt) add(`A9 ${at}: ${s.id} sweep bar opened before the level existed`);
-      if (s.reclaim && s.reclaim.knownAt < s.sweep!.knownAt) add(`A9 ${at}: ${s.id} reclaim before sweep`);
+      if (!s.entry && f.entry && f.entry.knownAt <= K) add(`A6 ${at}: ${s.id} final run has an entry at ${iso(f.entry.knownAt)} not known then`);
+      if (s.sweep.time < s.levelValidFrom) add(`A9 ${at}: ${s.id} sweep bar opened before the level existed`);
+      if (s.reclaim && s.reclaim.knownAt < s.sweep.knownAt) add(`A9 ${at}: ${s.id} reclaim before sweep`);
       if (s.m5 && s.m5.knownAt < s.reclaim!.knownAt) add(`A9 ${at}: ${s.id} M5 before reclaim`);
-      if (s.zone && s.zone.definedAt !== s.m5?.knownAt) add(`A9 ${at}: ${s.id} zone not defined at the M5 confirmation close`);
-      if (s.entry && s.entry.time < s.m5!.knownAt) add(`A9 ${at}: ${s.id} M1 entry bar opened before M5 confirmed`);
+      if (s.zone && s.zone.definedAt !== s.m5?.knownAt) add(`A9 ${at}: ${s.id} zone not defined at the M5 confirmation`);
+      if (s.entry && (s.entry.knownAt < s.m5!.knownAt || s.entry.time < s.m5!.time + 300)) add(`A9 ${at}: ${s.id} M1 pullback before the M5 break closed`);
       if (s.state === 'ENTRY_READY') for (const [k, ok] of Object.entries(mandatoryGates(s))) if (!ok) add(`A10 ${at}: ${s.id} ENTRY_READY without "${k}"`);
     }
 
     if (cps.has(K)) {
       checkpoints += 1;
-      const norm = (x: HLESnapshot) => j({ ...x, price: null, levels: x.levels.map((l) => ({ ...l, distance: null })), setups: x.setups.map((s) => ({ ...s, distance: null })) });
-      if (norm(eng.snapshot()) !== norm(analyzeHLEAt(ds, K, null))) add(`A1 ${at}: incremental state ≠ clean recomputation on the bars known then`);
+      if (normHLE(eng.snapshot()) !== normHLE(analyzeHLEAt(ds, K, null))) add(`A1 ${at}: incremental state ≠ clean recomputation on the bars known then`);
     }
   }
   const fs = [...fin.values()];
@@ -159,10 +173,10 @@ export function auditHighLowEngine(input: HLEAuditInput): HLEAuditResult {
     checkpoints,
     levels: finLevels.size,
     setups: fs.length,
-    sweeps: fs.filter((s) => s.sweep).length,
+    sweeps: fs.length,
     reclaims: fs.filter((s) => s.reclaim).length,
     confirmations: fs.filter((s) => s.m5).length,
-    entryReady: fs.filter((s) => s.entry).length,
+    entryReady: fs.filter((s) => s.entry && s.risk).length,
     events: finEvents.length,
     violations: v,
   };

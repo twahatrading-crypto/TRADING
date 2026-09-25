@@ -1,24 +1,24 @@
 import { Clock3 } from 'lucide-react';
 import { useServices } from '../../app/servicesContext';
 import { SESSIONS, UPCOMING_WINDOW_MS } from '../../config/sessions';
-import type { HLESnapshot, Setup, StructureContext } from '../../engines/highLowEngine/types';
+import type { HLEDecision } from '../../engines/highLowEngine/decision';
+import type { HLESnapshot, StructureContext } from '../../engines/highLowEngine/types';
 import { createStore, useStore } from '../../store/createStore';
 import type { Mt5ProviderState } from '../../services/mt5/Mt5Provider';
 import { formatPrice } from '../../utils/format';
 import { formatCountdown, getSessionState } from '../../utils/sessions';
-import { levelLabel, nextRequired } from './hleView';
 import { ago, fmtTime, useNow } from './useHighLow';
 
 const biasTone = (b: string | undefined) => (b === 'BULLISH' ? 'buy' : b === 'BEARISH' ? 'sell' : 'neutral');
 
-export function TopCards({ symbol, price, change, changePct, d, h4, h1, snap, focus }: { symbol: string; price: number | null; change: number | null; changePct: number | null; d: number; h4: StructureContext | null; h1: StructureContext | null; snap: HLESnapshot | null; focus: Setup | null }) {
+export function TopCards({ symbol, price, change, changePct, d, h4, h1, snap, decision }: { symbol: string; price: number | null; change: number | null; changePct: number | null; d: number; h4: StructureContext | null; h1: StructureContext | null; snap: HLESnapshot | null; decision: HLEDecision | null }) {
   const now = useNow();
   const open = SESSIONS.filter((s) => s.id !== 'globex').map((s) => ({ s, st: getSessionState(s, now, UPCOMING_WINDOW_MS) }));
   const live = open.filter((x) => x.st.status === 'OPEN');
   const next = [...open].sort((a, b) => a.st.next.open - b.st.next.open)[0]!;
-  const levels = snap?.levels.filter((l) => l.status === 'ACTIVE') ?? [];
+  const levels = snap?.levels.filter((l) => l.retiredAt === null && l.state !== 'CONSUMED' && (l.source !== 'swing' || l.major)) ?? [];
   const nearest = price === null ? null : [...levels].sort((a, b) => Math.abs(a.price - price) - Math.abs(b.price - price))[0] ?? null;
-  const signal = snap?.signal ?? null;
+  const confirmed = decision?.confirmed ? decision.direction : null;
   return (
     <div className="hlecards-top">
       <div className="panel hlecard-mini" data-testid="hle-price">
@@ -32,19 +32,19 @@ export function TopCards({ symbol, price, change, changePct, d, h4, h1, snap, fo
         <span className="hlecard-mini__sub">{live.length ? `ends in ${formatCountdown(live[0]!.st.countdownMs)}` : `${next.s.name} opens in ${formatCountdown(next.st.countdownMs)}`}</span>
       </div>
       <div className="panel hlecard-mini" data-testid="hle-h4bias">
-        <span className="hlecard-mini__k">H4 bias</span>
-        <span className={`hlepill hlepill--${biasTone(h4?.bias)}`}>{h4 ? h4.bias.replace('_', ' ') : 'NO DATA'}</span>
-        <span className="hlecard-mini__sub">{h4?.short ?? '—'}</span>
+        <span className="hlecard-mini__k">H4 direction</span>
+        <span className={`hlepill hlepill--${biasTone(h4?.bias)}`}>{h4 ? (h4.bias === 'INSUFFICIENT_DATA' ? 'WAITING FOR DATA' : h4.bias) : 'NO DATA'}</span>
+        <span className="hlecard-mini__sub">{h4 ? h4.reason : '—'}</span>
       </div>
       <div className="panel hlecard-mini" data-testid="hle-h1bias">
         <span className="hlecard-mini__k">H1 bias</span>
-        <span className={`hlepill hlepill--${biasTone(h1?.bias)}`}>{h1 ? h1.bias.replace('_', ' ') : 'NO DATA'}</span>
-        <span className="hlecard-mini__sub">{nearest && price !== null ? `${price < nearest.price ? 'Below' : 'Above'} key level ${levelLabel(nearest.type)}` : '—'}</span>
+        <span className={`hlepill hlepill--${biasTone(h1?.bias)}`}>{h1 ? (h1.bias === 'INSUFFICIENT_DATA' ? 'WAITING FOR DATA' : h1.bias) : 'NO DATA'}</span>
+        <span className="hlecard-mini__sub">{nearest && price !== null ? `${price < nearest.price ? 'Below' : 'Above'} ${nearest.label}` : '—'}</span>
       </div>
-      <div className={`panel hlecard-mini hlecard-signal ${signal ? `is-${signal.side.toLowerCase()}` : ''}`} data-testid="hle-signal">
+      <div className={`panel hlecard-mini hlecard-signal ${confirmed ? `is-${confirmed.toLowerCase()}` : ''}`} data-testid="hle-signal">
         <span className="hlecard-mini__k">Current signal</span>
-        <strong className="hlecard-signal__v">{signal ? `${signal.side} CONFIRMED` : 'WAIT'}</strong>
-        <span className="hlecard-mini__sub">{signal ? 'Every mandatory condition passed.' : focus ? `Next: ${nextRequired(focus, d)}` : 'No important level being tracked.'}</span>
+        <strong className="hlecard-signal__v">{decision ? decision.label : 'NO DATA'}</strong>
+        <span className="hlecard-mini__sub">{decision ? decision.why : 'No closed candles yet.'}</span>
       </div>
     </div>
   );

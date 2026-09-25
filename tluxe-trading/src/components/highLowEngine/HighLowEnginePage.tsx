@@ -11,7 +11,8 @@ import type { HighLowReplaySession } from '../../services/highLowEngine/HighLowR
 import { SetupScore, SetupSequence, SignalLog } from './BottomPanels';
 import { EngineStatus, TopCards, WorldClock } from './HeaderPanels';
 import { HighLowChart, ToolsPanel } from './HighLowChart';
-import { focusSetup, hasData, hleViewState, type HLETools } from './hleView';
+import { hleDecision } from '../../engines/highLowEngine/decision';
+import { feedForView, hasData, hleViewState, type HLETools } from './hleView';
 import { LevelsDialog, StageCards } from './StageCards';
 import { useHighLowState } from './useHighLow';
 import '../sr/sr.css';
@@ -32,6 +33,7 @@ export function HighLowEnginePage() {
           <span className="foot__brand">TLUXE | TRADING</span>
           <span>High / Low Engine</span>
           <span>{def.displayName}</span>
+          <span>A high is not a sell and a low is not a buy. A level is stage one of five; without a liquidity sweep and an M5 structure confirmation that closed, this engine reports WAIT.</span>
           <span>Real closed MT5 candles only · analysis, not advice · no orders are placed</span>
         </div>
       </footer>
@@ -63,7 +65,10 @@ function Workspace() {
   const view = hleViewState({ tradable: def.tradable, connection, feedCode, snapshot: snap, replay: !!replay });
   const ok = hasData(view);
   const setups = ok && snap ? snap.setups : [];
-  const selected = setups.find((s) => s.id === selectedId) ?? focusSetup(setups, snap?.price ?? null);
+  // The published signal: the engine result gated on a LIVE feed (handoff §9). Never confirmed on stale data.
+  const decision = snap ? hleDecision(ok ? snap : { ...snap, state: snap.state === 'READY' ? 'INSUFFICIENT_HISTORY' : snap.state }, feedForView(view, connection, feedCode)) : null;
+  const selected = setups.find((s) => s.id === selectedId) ?? decision?.setup ?? null;
+  const decisionFor = selected && decision?.setup?.id !== selected.id ? { ...decision!, setup: selected, tradeLevels: null } : decision;
   const levels = ok && snap ? snap.levels : [];
   const price = quote.last ?? quote.bid ?? snap?.price ?? null;
 
@@ -90,17 +95,17 @@ function Workspace() {
             <p className="hlehead__sub">Find the best buy-low / sell-high setups using multi-timeframe structure and liquidity.</p>
           </div>
         </div>
-        <TopCards symbol={instrument.symbol} price={price} change={quote.change} changePct={quote.changePercent} d={d} h4={ok && snap ? snap.h4 : null} h1={ok && snap ? snap.h1 : null} snap={ok ? snap : null} focus={selected} />
+        <TopCards symbol={instrument.symbol} price={price} change={quote.change} changePct={quote.changePercent} d={d} h4={ok && snap ? snap.h4 : null} h1={ok && snap ? snap.h1 : null} snap={ok ? snap : null} decision={decision} />
       </div>
       <WorldClock />
       <EngineStatus computedAt={liveSnap && liveSnap.state !== 'NO_DATA' ? computedAt : null} tz={tz} />
-      <StageCards h4={ok && snap ? snap.h4 : null} levels={levels} setup={selected} d={d} tz={tz} onViewLevels={() => setShowLevels(true)} />
+      <StageCards h4={ok && snap ? snap.h4 : null} levels={levels} decision={decisionFor} setup={selected} d={d} tz={tz} onViewLevels={() => setShowLevels(true)} />
       <div className="hlegrid">
-        <HighLowChart chartTf={chartTf} snapshot={snap} selected={ok ? selected : null} viewState={view} tools={tools} replay={replay} onStartReplay={startReplay} onExitReplay={exitReplay} />
+        <HighLowChart chartTf={chartTf} snapshot={snap} selected={ok ? selected : null} decision={decisionFor} viewState={view} tools={tools} replay={replay} onStartReplay={startReplay} onExitReplay={exitReplay} />
         <ToolsPanel tools={tools} onTools={setTools} chartTf={chartTf} onChartTf={setChartTf} />
       </div>
       <div className="hlebottomgrid">
-        <SetupSequence s={selected} d={d} />
+        <SetupSequence snap={ok ? snap : null} decision={decision} />
         <SetupScore s={selected} />
         <SignalLog log={replay ? (snap?.events ?? []) : log} d={d} tz={tz} onSelect={setSelectedId} />
       </div>

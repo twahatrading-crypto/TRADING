@@ -171,3 +171,12 @@
   .hleseq { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .hlechart { min-height: 420px; }
 }
+
+/* Mandatory conditions, warnings, alert labels (handoff §9 / §14) */
+.hlemandatory { list-style: none; margin: 10px 0 0; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 3px 10px; font-size: 10px; }
+.hlemandatory li { display: flex; align-items: center; gap: 5px; color: var(--text-3); }
+.hlemandatory li.is-pass { color: #86e3c6; }
+.hlemandatory li.is-miss { color: var(--text-3); }
+.hlenote--warn { color: var(--amber); }
+.hlelog__badge.is-local { color: var(--amber); background: var(--amber-soft); border-color: rgba(240, 180, 60, 0.4); }
+.hletools__last.is-late { color: var(--amber); }

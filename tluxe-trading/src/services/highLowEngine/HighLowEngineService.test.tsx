@@ -13,7 +13,7 @@ import { SignalLog } from './signalLog';
 
 const ds: HLEDataset = { instrumentId: 'XAUUSD', tickSize: 0.01, settings: { ...DEFAULT_HLE_SETTINGS }, candles: F.buyReversal() };
 const norm = (v: unknown) => JSON.stringify(v, (k, x) => (k === 'price' || k === 'distance' ? null : x));
-const keySetup = () => analyzeHighLow({ instrumentId: 'XAUUSD', tickSize: 0.01, candles: F.buyReversal() }).setups.find((s) => s.entry)!;
+const keySetup = () => analyzeHighLow({ instrumentId: 'XAUUSD', tickSize: 0.01, candles: F.buyReversal() }).setups.find((s) => s.levelType === 'PDL' && s.risk)!;
 
 describe('High / Low Engine replay + Verify No-Repaint', () => {
   it('every visited step matches a clean recomputation (parity), forward / back / jumps', () => {
@@ -52,38 +52,78 @@ describe('signal log and alerts', () => {
     expect(new SignalLog(storage).get('XAUUSD').map((e) => e.id)).toEqual(a.get('XAUUSD').map((e) => e.id));
     expect(new SignalLog(storage).get('XAGUSD')).toEqual([]);
   });
-  it('entry alert fires once on the live transition into ENTRY_READY — never on load, never repeated, never for old history', () => {
-    const s = keySetup();
-    const sounds: number[] = [];
-    let now = s.entry!.knownAt * 1000 + 30_000;
+  const s = keySetup();
+  const readyAt = s.entry!.knownAt * 1000;
+  const before = analyzeHLEAt(ds, s.entry!.knownAt - 60);
+  const ready = analyzeHLEAt(ds, s.entry!.knownAt);
+  const mk = (clock: { now: number }, storage = memoryStorage({}), log: string[] = []) =>
+    new HighLowAlerts(storage, { sound: (k) => (log.push(`sound:${k}`), true), desktop: (t) => (log.push(`desktop:${t}`), true), permission: () => 'granted', now: () => clock.now });
+  it('ENTRY READY alerts exactly once per M5-keyed setup — never repeated, never after a refresh (recorded before the alarm)', () => {
+    const clock = { now: readyAt - 60_000 };
     const storage = memoryStorage({});
-    const mk = () => new HighLowAlerts(storage, { sound: () => (sounds.push(1), true), desktop: () => true, permission: () => 'granted', now: () => now });
-    const before = analyzeHLEAt(ds, s.entry!.knownAt - 60);
-    const at = analyzeHLEAt(ds, s.entry!.knownAt);
-    const al = mk();
-    expect(al.observe('XAUUSD', before)).toEqual([]); // seed
-    expect(al.observe('XAUUSD', at)).toEqual([s.id]);
-    expect(al.observe('XAUUSD', at)).toEqual([]);
-    expect(sounds).toHaveLength(1);
-    expect(al.store.getState().last?.channels).toEqual(['sound', 'desktop']);
-    // Refresh: a new instance seeing the same ready setup does not alert again.
-    const al2 = mk();
-    al2.observe('XAUUSD', before);
-    expect(al2.observe('XAUUSD', at)).toEqual([]);
-    // Old history: a transition observed long after the fact does not alert.
-    now = s.entry!.knownAt * 1000 + 60 * 60 * 1000;
-    const al3 = new HighLowAlerts(memoryStorage({}), { sound: () => true, desktop: () => true, permission: () => 'granted', now: () => now });
-    al3.observe('XAUUSD', before);
-    expect(al3.observe('XAUUSD', at)).toEqual([]);
+    const log: string[] = [];
+    const al = mk(clock, storage, log);
+    expect(al.observe('XAUUSD', before, 'LIVE').every((x) => x.kind.startsWith('pre-entry'))).toBe(true); // waiting for the pullback: PRE-ENTRY only
+    clock.now = readyAt + 30_000;
+    const r = al.observe('XAUUSD', ready, 'LIVE');
+    expect(r.map((x) => [x.kind, x.late, x.discovery])).toEqual([['entry-ready', false, null]]);
+    expect(ready.setups.filter((x) => x.alertKey === s.alertKey && x.state === 'ENTRY_READY').length).toBeGreaterThan(1); // PDL + swing low: one trade, one alert
+    expect(al.observe('XAUUSD', ready, 'LIVE')).toEqual([]);
+    expect(log.filter((x) => x === 'sound:entry-ready')).toEqual(['sound:entry-ready']);
+    expect(r[0]!.channels).toEqual(['sound', 'desktop', 'banner']);
+    expect(JSON.parse(storage.data.get('tluxe.hle.alerts.v2')!).entry[s.alertKey!]).toBe(readyAt + 30_000);
+    expect(mk(clock, storage).observe('XAUUSD', ready, 'LIVE')).toEqual([]);
   });
-  it('ALARM OFF suppresses sound / desktop but still de-duplicates; email is never faked', () => {
-    const s = keySetup();
-    const al = new HighLowAlerts(memoryStorage({}), { sound: () => true, desktop: () => true, permission: () => 'granted', now: () => s.entry!.knownAt * 1000 });
+  it('FRESH ≤ 5 min (inclusive); older at first sight → LATE ENTRY DISCOVERED with discovery startup / outage / delayed', () => {
+    expect(mk({ now: readyAt + 5 * 60_000 }).observe('XAUUSD', ready, 'LIVE')[0]!.kind).toBe('entry-ready');
+    const startup = mk({ now: readyAt + 5 * 60_000 + 1 }).observe('XAUUSD', ready, 'LIVE')[0]!;
+    expect([startup.kind, startup.late, startup.discovery]).toEqual(['late-entry', true, 'startup']);
+    // Outage: live before, stale while the setup completed, recovery 20 min later.
+    const c1 = { now: readyAt - 60_000 };
+    const o = mk(c1);
+    o.observe('XAUUSD', before, 'LIVE');
+    c1.now = readyAt + 60_000;
+    expect(o.observe('XAUUSD', ready, 'STALE')).toEqual([]); // an outage in progress never alerts
+    c1.now = readyAt + 20 * 60_000;
+    expect(o.observe('XAUUSD', ready, 'DISCONNECTED')).toEqual([]);
+    c1.now = readyAt + 21 * 60_000;
+    const out = o.observe('XAUUSD', ready, 'LIVE')[0]!;
+    expect([out.kind, out.discovery]).toEqual(['late-entry', 'outage']);
+    // Delayed: live the whole time, but first observed ready > 5 min after its entry time.
+    const c2 = { now: readyAt - 60_000 };
+    const d = mk(c2);
+    d.observe('XAUUSD', before, 'LIVE');
+    c2.now = readyAt + 10 * 60_000;
+    expect(d.observe('XAUUSD', ready, 'LIVE')[0]!.discovery).toBe('delayed');
+  });
+  it('mute silences only the sound: desktop + banner still fire; email is never faked', () => {
+    const log: string[] = [];
+    const al = mk({ now: readyAt }, memoryStorage({}), log);
     al.setAlarm(false);
-    al.observe('XAUUSD', analyzeHLEAt(ds, s.entry!.knownAt - 60));
-    al.observe('XAUUSD', analyzeHLEAt(ds, s.entry!.knownAt));
-    expect(al.store.getState().last?.channels).toEqual([]);
+    const r = al.observe('XAUUSD', ready, 'LIVE');
+    expect(r[0]!.channels).toEqual(['desktop', 'banner']);
+    expect(log.some((x) => x.startsWith('sound'))).toBe(false);
     expect(al.store.getState().email).toBe('not-configured');
+  });
+  it('a failing channel never stops the others (the record is already stored)', () => {
+    const storage = memoryStorage({});
+    const al = new HighLowAlerts(storage, { sound: () => { throw new Error('audio'); }, desktop: () => true, permission: () => 'granted', now: () => readyAt });
+    expect(al.observe('XAUUSD', ready, 'LIVE')[0]!.channels).toEqual(['desktop', 'banner']);
+    expect(storage.data.get('tluxe.hle.alerts.v2')).toContain(s.alertKey!);
+  });
+  it('PRE-ENTRY: separate once-only warning when M5 confirmed and the zone waits; never after that setup’s ENTRY alert', () => {
+    const preSnap = analyzeHLEAt(ds, s.m5!.knownAt);
+    const clock = { now: s.m5!.knownAt * 1000 + 10_000 };
+    const al = mk(clock);
+    expect(al.observe('XAUUSD', preSnap, 'LIVE').map((x) => x.kind)).toEqual(['pre-entry']);
+    expect(al.observe('XAUUSD', preSnap, 'LIVE')).toEqual([]);
+    clock.now = readyAt + 10_000;
+    expect(al.observe('XAUUSD', ready, 'LIVE').map((x) => x.kind)).toEqual(['entry-ready']); // PRE-ENTRY never blocks ENTRY
+    const storage = memoryStorage({});
+    const al2 = mk({ now: readyAt }, storage);
+    al2.observe('XAUUSD', ready, 'LIVE');
+    expect(mk({ now: readyAt }, storage).observe('XAUUSD', preSnap, 'LIVE')).toEqual([]);
+    expect(mk({ now: readyAt }).observe('XAUUSD', preSnap, 'STALE')).toEqual([]);
   });
 });
 

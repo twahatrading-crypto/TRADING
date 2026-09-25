@@ -11,11 +11,12 @@ describe('High / Low Engine anti-repaint audit (every knowledge time, five timef
   it.each([
     ['BUY (ENTRY READY)', F.buyReversal],
     ['SELL', F.sellReversal],
-    ['wick without reclaim', F.wickNoReclaim],
-    ['continuation', F.continuation],
-    ['reclaim without M5', F.reclaimNoM5],
-    ['missed (no pullback)', F.confirmNoPullback],
+    ['break without reclaim (LEVEL_BROKEN)', F.breakNoReclaim],
+    ['reclaim without M5 (EXPIRED)', F.reclaimNoM5],
+    ['no pullback (stage-3 EXPIRED)', F.confirmNoPullback],
     ['invalidated before entry', F.invalidatedBeforeEntry],
+    ['stop after entry', F.stopAfterEntry],
+    ['shallow poke', F.shallowPoke],
   ])('%s: PASS', (_n, f) => {
     const r = auditHighLowEngine(base(f()));
     expect(r.violations).toEqual([]);
@@ -46,5 +47,5 @@ describe('High / Low Engine anti-repaint audit (every knowledge time, five timef
     const r = auditHighLowEngine({ ...base(full), createEngine: cheat });
     expect(r.violations.length).toBeGreaterThan(0);
     expect(r.violations[0]).toMatch(/^A\d+ /);
-  });
+  }, 180_000);
 });

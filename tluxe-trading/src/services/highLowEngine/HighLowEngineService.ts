@@ -8,6 +8,7 @@ import type { InstrumentId } from '../../types/instruments';
 import type { InstrumentSelection } from '../instruments/InstrumentSelection';
 import type { MarketDataService } from '../market/MarketDataService';
 import { HighLowAlerts, type AlertChannels } from './alerts';
+import { hleFeedOf } from './feed';
 import { HighLowReplaySession } from './HighLowReplay';
 import { SignalLog } from './signalLog';
 
@@ -93,15 +94,40 @@ export class HighLowEngineService {
       this.engines.set(id, engine);
     }
     const e = engine;
+    const feed = () => {
+      const m = this.market.store(id).getState();
+      return hleFeedOf(m.connection, m.feed?.code ?? null);
+    };
     const run = () => {
       const m1 = this.market.getCandles(id, 'M1');
-      e.update(this.input(id), { currentPrice: m1.length ? m1[m1.length - 1]!.close : null });
+      const r = e.update(this.input(id), { currentPrice: m1.length ? m1[m1.length - 1]!.close : null });
       const snapshot = e.snapshot();
-      const log = this.log.merge(id, snapshot.events);
+      // Broker revisions of closed candles (handoff R6): accepted, rebuilt deterministically — and logged, never silent.
+      const revised: HLEEvent[] = r.revised.map((x) => ({
+        id: `${id}:DATA_REVISED:${x.tf}:${x.time}`,
+        time: snapshot.knowledgeTime ?? x.time,
+        instrumentId: id,
+        timeframe: x.tf,
+        type: 'DATA_REVISED',
+        price: null,
+        setupId: null,
+        message: `MT5 revised the closed ${x.tf} candle of ${new Date(x.time * 1000).toISOString().slice(0, 16).replace('T', ' ')} UTC — the engine rebuilt from the corrected data.`,
+      }));
+      const log = this.log.merge(id, [...snapshot.events, ...revised]);
       this.store(id).setState({ instrumentId: id, snapshot, log, computedAt: Date.now() });
-      this.alerts.observe(id, snapshot);
+      this.alerts.observe(id, snapshot, feed());
     };
     for (const tf of HLE_TIMEFRAMES) this.unsubs.push(this.market.subscribeCandles(id, tf, () => run()));
+    // Feed state changes (stale → live, outage) are observed without re-analysing: the alert clocks need them.
+    let lastFeed = feed();
+    this.unsubs.push(
+      this.market.store(id).subscribe(() => {
+        const f = feed();
+        if (f === lastFeed) return;
+        lastFeed = f;
+        this.alerts.observe(id, this.store(id).getState().snapshot, f);
+      }),
+    );
     run();
   }
 
