@@ -5,7 +5,18 @@ import { STRATEGY_NAV } from '../../config/navigation';
 import { renderWithServices } from '../../test/renderWithServices';
 
 vi.mock('lightweight-charts', () => ({}));
-vi.mock('../chart/ChartController', () => ({ ChartController: class {} }));
+vi.mock('../chart/ChartController', () => ({
+  ChartController: class {
+    setData() {}
+    upsert() {}
+    setFootprint() {}
+    autoScalePrice() {}
+    onBarClick() {
+      return () => {};
+    }
+    destroy() {}
+  },
+}));
 
 const nav = () => screen.getByRole('navigation', { name: 'Main navigation' });
 const go = async (hash: string) => {
@@ -25,6 +36,7 @@ const EXPECTED: [string, string | null, RegExp | null][] = [
   ['SMC Analysis', '/engines/smc', /SMC Engine/],
   ['Liquidity Heatmap', '/engines/liquidity-heatmap', /Liquidity Heatmap/],
   ['Volume Profile', '/engines/volume-profile', /Volume Profile/],
+  ['Volume Footprint', '/engines/volume-footprint', /Volume Footprint/],
   ['News Analysis', '/engines/news-analysis', /News Analysis/],
   ['Sweep / Reversal', null, null],
 ];
@@ -32,7 +44,7 @@ const EXPECTED: [string, string | null, RegExp | null][] = [
 describe('Trading Strategy sidebar', () => {
   it('lists every strategy page once, in order, with the right route (Sweep / Reversal SOON)', () => {
     expect(STRATEGY_NAV.map((s) => [s.label, s.route])).toEqual(EXPECTED.map(([l, r]) => [l, r]));
-    expect(new Set(STRATEGY_NAV.map((s) => s.route).filter(Boolean)).size).toBe(9);
+    expect(new Set(STRATEGY_NAV.map((s) => s.route).filter(Boolean)).size).toBe(10);
   });
 
   it('each item opens its page, is highlighted as active, and the sidebar stays visible', async () => {

@@ -93,14 +93,16 @@ export function useChartController(
     };
   }, [market, instrumentId, timeframe, priceDecimals, containerRef, replay]);
 
-  // Replay bars → chart. One revealed bar = one upsert; anything else (step back, seek, TF switch) = full redraw.
+  // Override bars → chart (replay / footprint). One revealed or updated last bar = one upsert; anything else (step back, seek, TF switch) = full redraw.
   useEffect(() => {
     overrideRef.current = override;
     const ctl = controllerRef.current;
     if (!override || !ctl) return;
     const prev = shownRef.current;
     const appendedOne = prev && override.length === prev.length + 1 && (prev.length === 0 || override[prev.length - 1] === prev[prev.length - 1]);
-    if (appendedOne && override.length) ctl.upsert(override[override.length - 1]!);
+    // Only the newest bar changed (a live footprint candle still forming): update it in place.
+    const lastChanged = !!prev && prev !== override && override.length > 0 && override.length === prev.length && (override.length === 1 || override[override.length - 2] === prev[prev.length - 2]) && override[override.length - 1] !== prev[prev.length - 1] && override[override.length - 1]!.time === prev[prev.length - 1]!.time;
+    if ((appendedOne || lastChanged) && override.length) ctl.upsert(override[override.length - 1]!);
     else ctl.setData(override);
     shownRef.current = override;
   }, [override, controller]);

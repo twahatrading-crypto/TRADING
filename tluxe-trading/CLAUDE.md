@@ -56,8 +56,8 @@ Open ONLY the newest preview. Leave exactly one TLUXE preview running.
   The hosted preview cannot reach the user's MT5, so it shows DATA UNAVAILABLE. Never use fake candles or prices to make it look connected.
 
 ## 9. Sidebar (all pages, via `AppShell`)
-Dashboard · Trading Strategy (Support & Resistance · Liquidity · Order Blocks · High / Low Reversal · High / Low Engine · SMC Analysis · Liquidity Heatmap · Volume Profile · News Analysis · Sweep / Reversal SOON) · Settings.
-Support & Resistance, Liquidity, Order Blocks, High / Low Reversal, High / Low Engine, SMC Analysis, Liquidity Heatmap, Volume Profile and News Analysis open their real pages. Entries live in `src/config/navigation.ts` (`route: null` = disabled SOON).
+Dashboard · Trading Strategy (Support & Resistance · Liquidity · Order Blocks · High / Low Reversal · High / Low Engine · SMC Analysis · Liquidity Heatmap · Volume Profile · Volume Footprint · News Analysis · Sweep / Reversal SOON) · Settings.
+Support & Resistance, Liquidity, Order Blocks, High / Low Reversal, High / Low Engine, SMC Analysis, Liquidity Heatmap, Volume Profile, Volume Footprint and News Analysis open their real pages. Entries live in `src/config/navigation.ts` (`route: null` = disabled SOON).
 
 ## 10. Safety check before any process command
 Before starting or stopping any Node/Vite/Python process, identify its PID, command line, working/project path and port.
@@ -144,6 +144,19 @@ BUY/SELL setup states with entry zone / SL / TP / R:R appear ONLY on the High / 
   read READ-ONLY from the SMC and S&R services' published snapshots. Revised closed candles: ACCEPT + LOG (DATA REVISED,
   deterministic rebuild). Anti-repaint audit + replay parity in `volumeProfile/antiRepaint.ts` / `services/volumeProfile`.
   Not locked until validated on REAL MT5 data. Dev visual harness: `/vp-harness.html` (TEST DATA, bannered, dev only).
+- Volume Footprint (`src/engines/volumeFootprint`, `src/providers/footprint`, `src/services/volumeFootprint`,
+  `src/components/volumeFootprint`, route `/engines/volume-footprint`): EXECUTED order-flow analysis of a FUTURE (GC —
+  COMEX; other futures later). Built ONLY from genuine exchange time & sales via `FootprintTradeProvider` (Rithmic / T4 /
+  CQG adapters later), which declares its aggressor source (EXCHANGE / CLASSIFIED with a named method / NONE). Never from
+  MT5, OHLC candles or tick volume; never splits volume; UNKNOWN aggressor stays UNKNOWN (NONE → FOOTPRINT DATA
+  UNAVAILABLE for Bid × Ask). No provider exists yet: production shows FOOTPRINT DATA UNAVAILABLE and names the missing
+  capability. Bid × Ask / delta / POC / diagonal imbalance / stacked imbalance / absorption, exhaustion, delta-divergence
+  and unfinished-auction CANDIDATES (evidence only — never BUY / SELL / entry / SL / TP). Integrity: duplicates dropped,
+  sequence gaps flagged (never filled), late trades excluded (closed candles never repaint), disconnects flagged,
+  contract changes start a new history (contracts never combined). Knowledge = receive time; replay / anti-repaint audit
+  in `volumeFootprint/replay.ts` + `services/volumeFootprint/FPReplay.ts`. Canvas rendering via `FootprintPrimitive`
+  on the shared ChartStage. TEST DATA only in `engines/volumeFootprint/testing` / `providers/footprint/testing`
+  (refused unless `allowTestProviders`). Dev visual harness: `/footprint-harness.html` (TEST DATA, bannered, dev only).
 - Sweep / Reversal is not built yet (disabled SOON in the sidebar).
 
 ## Chart navigation (shared by every strategy chart)

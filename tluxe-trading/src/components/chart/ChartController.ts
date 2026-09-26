@@ -12,6 +12,8 @@ import type { SmcDrawable, SmcMarker } from '../smc/smcView';
 import { SmcPrimitive } from './SmcPrimitive';
 import type { VPDrawable, VPHistogram, VPMarker } from '../volumeProfile/vpView';
 import { VolumeProfilePrimitive } from './VolumeProfilePrimitive';
+import type { FPMarker, FPRenderData } from '../volumeFootprint/fpView';
+import { FootprintPrimitive } from './FootprintPrimitive';
 import type { Candle } from '../../types/market';
 import type { ChartOverlay } from '../../types/overlays';
 import { COMPACT_LABEL_WIDTH, ZONE_LABEL_MARGIN_MAX_SHARE, ZONE_LABEL_MARGIN_PX, ZonesPrimitive, type ZoneDrawable } from './ZonesPrimitive';
@@ -24,6 +26,9 @@ export const DEFAULT_BAR_SPACING = 6;
 export const ZOOM_STEP = 1.25;
 export const MIN_BAR_SPACING = 0.5;
 export const MAX_BAR_SPACING = 60;
+/** Footprint chart: default / maximum candle width (px) so Bid × Ask rows are readable. */
+export const FOOTPRINT_BAR_SPACING = 96;
+export const FOOTPRINT_MAX_BAR_SPACING = 260;
 
 /**
  * Native interaction options, identical on every chart: wheel / pinch zoom, drag to pan,
@@ -62,6 +67,10 @@ export class ChartController {
   private smcPrimitive: SmcPrimitive | null = null;
   private newsLines: IPriceLine[] = [];
   private vpPrimitive: VolumeProfilePrimitive | null = null;
+  private fpPrimitive: FootprintPrimitive | null = null;
+  /** Zoom limits / reset zoom (defaults for every chart; the footprint chart needs wider candles). */
+  private maxBarSpacing = MAX_BAR_SPACING;
+  private defaultBarSpacing = DEFAULT_BAR_SPACING;
   private markers: ISeriesMarkersPluginApi<Time> | null = null;
   private readonly lib: ChartLib;
   /** After destroy() every call is a no-op (React cleanups may run after the chart is gone). */
@@ -273,6 +282,30 @@ export class ChartController {
     else this.markers.setMarkers(m);
   }
 
+  /** Volume Footprint page: footprint rows / stacks / cross-engine lines + candidate markers (engine output only). */
+  setFootprint(data: FPRenderData | null, markers: readonly FPMarker[]): void {
+    if (this.disposed) return;
+    if (!this.fpPrimitive) {
+      this.fpPrimitive = new FootprintPrimitive();
+      this.candles.attachPrimitive(this.fpPrimitive);
+      // The footprint primitive draws the candles itself (OHLC edge bar / plain candle) — hide the series bodies.
+      const clear = 'rgba(0,0,0,0)';
+      this.candles.applyOptions({ upColor: clear, downColor: clear, wickUpColor: clear, wickDownColor: clear });
+      // More vertical room for footprint rows: slimmer volume pane and margins.
+      this.candles.priceScale().applyOptions({ scaleMargins: { top: 0.04, bottom: 0.1 } });
+      this.chart.priceScale('vol').applyOptions({ scaleMargins: { top: 0.92, bottom: 0 } });
+      this.maxBarSpacing = FOOTPRINT_MAX_BAR_SPACING;
+      this.defaultBarSpacing = FOOTPRINT_BAR_SPACING;
+      const ts = this.chart.timeScale();
+      ts.applyOptions({ barSpacing: FOOTPRINT_BAR_SPACING, rightOffset: 2 });
+      ts.scrollToPosition(2, false);
+    }
+    this.fpPrimitive.set(data);
+    const m = [...markers].sort((a, b) => a.time - b.time).map((x) => ({ ...x, time: x.time as UTCTimestamp, size: 0.8 }));
+    if (!this.markers) this.markers = this.lib.createSeriesMarkers(this.candles, m);
+    else this.markers.setMarkers(m);
+  }
+
   /** Visible time range (s) changes — presentation only (Volume Profile "visible range" profile). */
   onVisibleRange(cb: (range: { from: number; to: number } | null) => void): () => void {
     const ts = this.chart.timeScale();
@@ -307,7 +340,7 @@ export class ChartController {
   zoomIn(): void {
     if (this.disposed) return;
     const ts = this.chart.timeScale();
-    ts.applyOptions({ barSpacing: Math.min(MAX_BAR_SPACING, ts.options().barSpacing * ZOOM_STEP) });
+    ts.applyOptions({ barSpacing: Math.min(this.maxBarSpacing, ts.options().barSpacing * ZOOM_STEP) });
   }
 
   /** Zoom out one step (narrower candles). */
@@ -327,7 +360,7 @@ export class ChartController {
   resetView(): void {
     if (this.disposed) return;
     const ts = this.chart.timeScale();
-    ts.applyOptions({ barSpacing: DEFAULT_BAR_SPACING });
+    ts.applyOptions({ barSpacing: this.defaultBarSpacing });
     // Immediate (not animated) jump to the latest bar plus the overlay layer's reserved right margin.
     ts.scrollToPosition(ts.options().rightOffset, false);
     this.autoScalePrice();

@@ -30,6 +30,8 @@ export const HEATMAP_ROUTE = '/engines/liquidity-heatmap';
 export const SMC_ROUTE = '/engines/smc';
 /** Volume Profile page (POC / value area / HVN-LVN from real candle volume; analysis only). */
 export const VP_ROUTE = '/engines/volume-profile';
+/** Volume Footprint page (executed order flow: Bid × Ask per price from exchange trades; analysis only). */
+export const FOOTPRINT_ROUTE = '/engines/volume-footprint';
 /** News Analysis page (economic calendar, breaking news, event impact; analysis only). */
 export const NEWS_ROUTE = '/engines/news-analysis';
 

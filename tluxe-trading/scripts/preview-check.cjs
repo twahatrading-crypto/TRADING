@@ -17,7 +17,7 @@ try {
 }
 
 const BASE = process.env.PREVIEW_URL || 'http://localhost:5181';
-const PAGES = ['/#/', '/#/engines/support-resistance', '/#/engines/liquidity', '/#/engines/order-blocks', '/#/engines/high-low-reversal', '/#/engines/high-low-engine', '/#/engines/liquidity-heatmap', '/#/engines/smc', '/#/engines/volume-profile', '/#/engines/news-analysis', '/#/settings'];
+const PAGES = ['/#/', '/#/engines/support-resistance', '/#/engines/liquidity', '/#/engines/order-blocks', '/#/engines/high-low-reversal', '/#/engines/high-low-engine', '/#/engines/liquidity-heatmap', '/#/engines/smc', '/#/engines/volume-profile', '/#/engines/volume-footprint', '/#/engines/news-analysis', '/#/settings'];
 const HMR = process.argv.includes('--hmr');
 const HMR_FILE = path.join(__dirname, '../src/components/market/MarketBar.tsx');
 const BRIDGE = 'http://127.0.0.1:8765';

@@ -8,6 +8,7 @@ import {
   Diamond,
   Droplets,
   Flame,
+  Footprints,
   Layers,
   LayoutDashboard,
   LineChart,
@@ -32,6 +33,7 @@ const STRATEGY_ICONS: Record<StrategyIcon, LucideIcon> = {
   heatmap: Flame,
   smc: Brain,
   volumeProfile: BarChart3,
+  footprint: Footprints,
   news: Newspaper,
   sweep: ArrowLeftRight,
 };

@@ -70,7 +70,7 @@ beforeEach(() => {
 });
 
 describe('Volume Profile page', () => {
-  it('is in the sidebar after Liquidity Heatmap and before News Analysis', async () => {
+  it('is in the sidebar after Liquidity Heatmap and before Volume Footprint', async () => {
     window.location.hash = '#/';
     renderWithServices(<App />);
     await flush();
@@ -79,7 +79,7 @@ describe('Volume Profile page', () => {
     const labels = screen.getAllByRole('link').map((a) => a.textContent ?? '');
     const i = labels.findIndex((t) => /Volume Profile/.test(t));
     expect(labels.findIndex((t) => /Liquidity Heatmap/.test(t))).toBe(i - 1);
-    expect(labels.findIndex((t) => /News Analysis/.test(t))).toBe(i + 1);
+    expect(labels.findIndex((t) => /Volume Footprint/.test(t))).toBe(i + 1);
   });
 
   it('without MT5: DATA UNAVAILABLE + VOLUME DATA UNAVAILABLE, no histogram, no score, nothing invented', async () => {
