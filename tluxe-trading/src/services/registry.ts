@@ -12,6 +12,8 @@ import type { DepthProvider } from './market/DepthProvider';
 import { NO_ORDER_FLOW_PROVIDERS, type OrderFlowProviders } from '../providers/orderFlow/types';
 import { OrderFlowService } from './orderFlow/OrderFlowService';
 import { SmcService } from './smc/SmcService';
+import { NewsAnalysisService } from './newsAnalysis/NewsAnalysisService';
+import { NO_NEWS_PROVIDERS, type NewsProviders } from '../providers/news/types';
 import { MarketDataService } from './market/MarketDataService';
 import type { MarketDataProvider } from './market/MarketDataProvider';
 import { createNewsService, type NewsProvider, type NewsService } from './news/NewsProvider';
@@ -40,6 +42,7 @@ export interface Services {
   /** Order flow / Liquidity Heatmap runtime (exchange Level-2 + time & sales only; never MT5). */
   orderFlow: OrderFlowService;
   smc: SmcService;
+  newsAnalysis: NewsAnalysisService;
   /** MT5 price provider, when enabled in Settings (null otherwise). */
   mt5: Mt5Provider | null;
   /** Phase 1 has no persistence layer. */
@@ -56,6 +59,8 @@ export interface ProviderSet {
   ai: AiProvider;
   /** Exchange Level-2 depth + time & sales for futures (e.g. GC). None connected by default. */
   orderFlow?: OrderFlowProviders;
+  /** News Analysis providers (none configured by default → DATA UNAVAILABLE). */
+  newsAnalysis?: Partial<NewsProviders>;
 }
 
 export interface ServiceOptions {
@@ -100,6 +105,7 @@ export function createServices(providers: ProviderSet = defaultProviders(), opts
     highLow: new HighLowEngineService(market, selection, storage),
     orderFlow: new OrderFlowService(selection, orderFlowProviders(providers.orderFlow, opts.allowTestProviders ?? false)),
     smc: new SmcService(market, selection),
+    newsAnalysis: new NewsAnalysisService(market, selection, newsProviders(providers.newsAnalysis, opts.allowTestProviders ?? false)),
     mt5: (providers.price.find((p) => p instanceof Mt5Provider) as Mt5Provider | undefined) ?? null,
     databaseStatus: 'NOT_CONNECTED',
   };
@@ -110,6 +116,13 @@ function orderFlowProviders(p: OrderFlowProviders | undefined, allowTest: boolea
   if (!p) return NO_ORDER_FLOW_PROVIDERS;
   const ok = (x: { info: { test?: boolean } } | null) => !!x && (!x.info.test || allowTest);
   return { depth: ok(p.depth) ? p.depth : null, trade: ok(p.trade) ? p.trade : null };
+}
+
+/** Production never runs on TEST news data: a test provider is refused unless explicitly allowed. */
+function newsProviders(p: Partial<NewsProviders> | undefined, allowTest: boolean): NewsProviders {
+  if (!p) return NO_NEWS_PROVIDERS;
+  const ok = <T extends { info: { test?: boolean } }>(x: T | null | undefined) => (x && (!x.info.test || allowTest) ? x : null);
+  return { calendar: ok(p.calendar), breaking: ok(p.breaking), macro: ok(p.macro) };
 }
 
 function browserStorage(): Pick<Storage, 'getItem' | 'setItem'> | null {
@@ -142,6 +155,7 @@ export function connectServices(s: Services): () => void {
   const stopHighLow = s.highLow.start();
   const stopOrderFlow = s.orderFlow.start();
   const stopSmc = s.smc.start();
+  const stopNews = s.newsAnalysis.start();
   const teardown = () => {
     if (connected.get(s) !== teardown) return;
     connected.delete(s);
@@ -153,6 +167,7 @@ export function connectServices(s: Services): () => void {
     stopHighLow();
     stopOrderFlow();
     stopSmc();
+    stopNews();
     s.market.disconnect();
     s.news.disconnect();
     s.calendar.disconnect();

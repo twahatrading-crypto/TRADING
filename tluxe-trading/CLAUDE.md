@@ -56,8 +56,8 @@ Open ONLY the newest preview. Leave exactly one TLUXE preview running.
   The hosted preview cannot reach the user's MT5, so it shows DATA UNAVAILABLE. Never use fake candles or prices to make it look connected.
 
 ## 9. Sidebar (all pages, via `AppShell`)
-Dashboard · Trading Strategy (Support & Resistance · Liquidity · Order Blocks · High / Low Reversal · High / Low Engine · SMC Analysis · Liquidity Heatmap · Sweep / Reversal SOON) · Settings.
-Support & Resistance, Liquidity, Order Blocks, High / Low Reversal, High / Low Engine, SMC Analysis and Liquidity Heatmap open their real pages. Entries live in `src/config/navigation.ts` (`route: null` = disabled SOON).
+Dashboard · Trading Strategy (Support & Resistance · Liquidity · Order Blocks · High / Low Reversal · High / Low Engine · SMC Analysis · Liquidity Heatmap · News Analysis · Sweep / Reversal SOON) · Settings.
+Support & Resistance, Liquidity, Order Blocks, High / Low Reversal, High / Low Engine, SMC Analysis, Liquidity Heatmap and News Analysis open their real pages. Entries live in `src/config/navigation.ts` (`route: null` = disabled SOON).
 
 ## 10. Safety check before any process command
 Before starting or stopping any Node/Vite/Python process, identify its PID, command line, working/project path and port.
@@ -124,6 +124,15 @@ BUY/SELL setup states with entry zone / SL / TP / R:R appear ONLY on the High / 
   ACCEPT + LOG (DATA REVISED, deterministic rebuild, superseded log entries kept). Anti-repaint audit + replay parity in
   `smc/antiRepaint.ts` / `services/smc`. One engine for the active instrument only (cleared on symbol change).
   Not locked until validated on REAL MT5 data. Dev visual harness: `/smc-harness.html` (TEST DATA, bannered, dev only).
+- News Analysis (`src/engines/news`, `src/providers/news`, `src/services/newsAnalysis`, `src/components/newsAnalysis`,
+  `src/pages/NewsAnalysisPage.tsx`, route `/engines/news-analysis`): economic calendar, breaking / macro news and event
+  impact — ANALYSIS only (no orders, no signals, never blocks trading; the news-risk state is exposed read-only via
+  `newsAnalysis.riskFor(asset)`). Vendor-neutral `EconomicCalendarProvider` / `BreakingNewsProvider` / `MacroNewsProvider`
+  interfaces; NO provider is connected yet → NEWS DATA / ECONOMIC CALENDAR / BREAKING NEWS UNAVAILABLE. Never invent
+  headlines, events, values, times or sentiment. Point-in-time engine: knownAt = receipt time; replay to T = live state
+  at T (audited, incl. a look-ahead cheat test). Reactions use the ACTIVE instrument's existing M1 stream only.
+  TEST DATA providers live only in `providers/news/testing` / `engines/news/testing` (refused unless
+  `allowTestProviders`). Dev visual harness: `/news-harness.html` (TEST DATA, bannered, dev only).
 - Sweep / Reversal is not built yet (disabled SOON in the sidebar).
 
 ## Chart navigation (shared by every strategy chart)

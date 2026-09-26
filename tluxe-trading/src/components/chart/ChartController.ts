@@ -58,6 +58,7 @@ export class ChartController {
   private hlrPrimitive: HLRPrimitive | null = null;
   private hlePrimitive: HighLowPrimitive | null = null;
   private smcPrimitive: SmcPrimitive | null = null;
+  private newsLines: IPriceLine[] = [];
   private markers: ISeriesMarkersPluginApi<Time> | null = null;
   private readonly lib: ChartLib;
   /** After destroy() every call is a no-op (React cleanups may run after the chart is gone). */
@@ -238,6 +239,16 @@ export class ChartController {
     const margin = Math.min(width < COMPACT_LABEL_WIDTH ? 110 : 170, width * ZONE_LABEL_MARGIN_MAX_SHARE);
     ts.applyOptions({ rightOffset: items.length ? Math.ceil(margin / ts.options().barSpacing) : 0 });
     const m = markers.map((x) => ({ ...x, time: x.time as UTCTimestamp, size: 0.8 }));
+    if (!this.markers) this.markers = this.lib.createSeriesMarkers(this.candles, m);
+    else this.markers.setMarkers(m);
+  }
+
+  /** News Analysis reaction chart: release / horizon markers and reference price lines (real data only). */
+  setNewsReaction(markers: readonly { time: number; position: 'aboveBar' | 'belowBar'; shape: 'arrowUp' | 'arrowDown' | 'circle' | 'square'; color: string; text: string }[], lines: readonly { price: number; title: string; color: string }[]): void {
+    if (this.disposed) return;
+    this.newsLines.forEach((l) => this.candles.removePriceLine(l));
+    this.newsLines = lines.map((l) => this.candles.createPriceLine({ price: l.price, color: l.color, lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: l.title }));
+    const m = [...markers].sort((a, b) => a.time - b.time).map((x) => ({ ...x, time: x.time as UTCTimestamp, size: 0.9 }));
     if (!this.markers) this.markers = this.lib.createSeriesMarkers(this.candles, m);
     else this.markers.setMarkers(m);
   }

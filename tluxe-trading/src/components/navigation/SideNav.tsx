@@ -10,6 +10,7 @@ import {
   Layers,
   LayoutDashboard,
   LineChart,
+  Newspaper,
   Settings,
   type LucideIcon,
 } from 'lucide-react';
@@ -29,6 +30,7 @@ const STRATEGY_ICONS: Record<StrategyIcon, LucideIcon> = {
   hle: Diamond,
   heatmap: Flame,
   smc: Brain,
+  news: Newspaper,
   sweep: ArrowLeftRight,
 };
 
