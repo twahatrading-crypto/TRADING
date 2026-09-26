@@ -11,6 +11,7 @@ import { InstrumentSelection } from './instruments/InstrumentSelection';
 import type { DepthProvider } from './market/DepthProvider';
 import { NO_ORDER_FLOW_PROVIDERS, type OrderFlowProviders } from '../providers/orderFlow/types';
 import { OrderFlowService } from './orderFlow/OrderFlowService';
+import { SmcService } from './smc/SmcService';
 import { MarketDataService } from './market/MarketDataService';
 import type { MarketDataProvider } from './market/MarketDataProvider';
 import { createNewsService, type NewsProvider, type NewsService } from './news/NewsProvider';
@@ -38,6 +39,7 @@ export interface Services {
   highLow: HighLowEngineService;
   /** Order flow / Liquidity Heatmap runtime (exchange Level-2 + time & sales only; never MT5). */
   orderFlow: OrderFlowService;
+  smc: SmcService;
   /** MT5 price provider, when enabled in Settings (null otherwise). */
   mt5: Mt5Provider | null;
   /** Phase 1 has no persistence layer. */
@@ -97,6 +99,7 @@ export function createServices(providers: ProviderSet = defaultProviders(), opts
     hlReversal: new HLRService(market, selection),
     highLow: new HighLowEngineService(market, selection, storage),
     orderFlow: new OrderFlowService(selection, orderFlowProviders(providers.orderFlow, opts.allowTestProviders ?? false)),
+    smc: new SmcService(market, selection),
     mt5: (providers.price.find((p) => p instanceof Mt5Provider) as Mt5Provider | undefined) ?? null,
     databaseStatus: 'NOT_CONNECTED',
   };
@@ -138,6 +141,7 @@ export function connectServices(s: Services): () => void {
   const stopHLR = s.hlReversal.start();
   const stopHighLow = s.highLow.start();
   const stopOrderFlow = s.orderFlow.start();
+  const stopSmc = s.smc.start();
   const teardown = () => {
     if (connected.get(s) !== teardown) return;
     connected.delete(s);
@@ -148,6 +152,7 @@ export function connectServices(s: Services): () => void {
     stopHLR();
     stopHighLow();
     stopOrderFlow();
+    stopSmc();
     s.market.disconnect();
     s.news.disconnect();
     s.calendar.disconnect();

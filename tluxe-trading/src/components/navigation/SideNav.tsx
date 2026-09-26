@@ -2,6 +2,7 @@ import {
   ArrowDownUp,
   ArrowLeftRight,
   Boxes,
+  Brain,
   ChevronRight,
   Diamond,
   Droplets,
@@ -27,6 +28,7 @@ const STRATEGY_ICONS: Record<StrategyIcon, LucideIcon> = {
   hlr: ArrowDownUp,
   hle: Diamond,
   heatmap: Flame,
+  smc: Brain,
   sweep: ArrowLeftRight,
 };
 

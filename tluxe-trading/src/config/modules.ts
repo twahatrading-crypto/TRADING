@@ -26,6 +26,8 @@ export const HLE_ROUTE = '/engines/high-low-engine';
 
 /** Trading Strategy → Liquidity Heatmap (order flow; exchange Level-2 + time & sales only). */
 export const HEATMAP_ROUTE = '/engines/liquidity-heatmap';
+/** SMC Engine page (Smart Money Concepts market analysis; its own engine, service and UI). */
+export const SMC_ROUTE = '/engines/smc';
 
 /** Settings → Data Providers page. */
 export const SETTINGS_ROUTE = '/settings';

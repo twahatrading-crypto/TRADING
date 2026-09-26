@@ -8,6 +8,8 @@ import type { HLRDrawable, HLRMarker } from '../hlReversal/hlrView';
 import { HLRPrimitive } from './HLRPrimitive';
 import type { HLEDrawable, HLEMarker } from '../highLowEngine/hleView';
 import { HighLowPrimitive } from './HighLowPrimitive';
+import type { SmcDrawable, SmcMarker } from '../smc/smcView';
+import { SmcPrimitive } from './SmcPrimitive';
 import type { Candle } from '../../types/market';
 import type { ChartOverlay } from '../../types/overlays';
 import { COMPACT_LABEL_WIDTH, ZONE_LABEL_MARGIN_MAX_SHARE, ZONE_LABEL_MARGIN_PX, ZonesPrimitive, type ZoneDrawable } from './ZonesPrimitive';
@@ -55,6 +57,7 @@ export class ChartController {
   private orderBlockPrimitive: OrderBlockPrimitive | null = null;
   private hlrPrimitive: HLRPrimitive | null = null;
   private hlePrimitive: HighLowPrimitive | null = null;
+  private smcPrimitive: SmcPrimitive | null = null;
   private markers: ISeriesMarkersPluginApi<Time> | null = null;
   private readonly lib: ChartLib;
   /** After destroy() every call is a no-op (React cleanups may run after the chart is gone). */
@@ -218,6 +221,23 @@ export class ChartController {
     const margin = Math.min(width < COMPACT_LABEL_WIDTH ? 110 : 190, width * ZONE_LABEL_MARGIN_MAX_SHARE);
     ts.applyOptions({ rightOffset: items.length ? Math.ceil(margin / ts.options().barSpacing) : 0 });
     const m = markers.map((x) => ({ ...x, time: x.time as UTCTimestamp, size: 0.9 }));
+    if (!this.markers) this.markers = this.lib.createSeriesMarkers(this.candles, m);
+    else this.markers.setMarkers(m);
+  }
+
+  /** SMC Engine overlays + markers (SMC page only; engine output, nothing decorative). */
+  setSmc(items: SmcDrawable[], markers: readonly SmcMarker[]): void {
+    if (this.disposed) return;
+    if (!this.smcPrimitive) {
+      this.smcPrimitive = new SmcPrimitive();
+      this.candles.attachPrimitive(this.smcPrimitive);
+    }
+    this.smcPrimitive.setItems(items);
+    const ts = this.chart.timeScale();
+    const width = ts.width();
+    const margin = Math.min(width < COMPACT_LABEL_WIDTH ? 110 : 170, width * ZONE_LABEL_MARGIN_MAX_SHARE);
+    ts.applyOptions({ rightOffset: items.length ? Math.ceil(margin / ts.options().barSpacing) : 0 });
+    const m = markers.map((x) => ({ ...x, time: x.time as UTCTimestamp, size: 0.8 }));
     if (!this.markers) this.markers = this.lib.createSeriesMarkers(this.candles, m);
     else this.markers.setMarkers(m);
   }

@@ -56,8 +56,8 @@ Open ONLY the newest preview. Leave exactly one TLUXE preview running.
   The hosted preview cannot reach the user's MT5, so it shows DATA UNAVAILABLE. Never use fake candles or prices to make it look connected.
 
 ## 9. Sidebar (all pages, via `AppShell`)
-Dashboard · Trading Strategy (Support & Resistance · Liquidity · Order Blocks · High / Low Reversal · High / Low Engine · Liquidity Heatmap · Sweep / Reversal SOON) · Settings.
-Support & Resistance, Liquidity, Order Blocks, High / Low Reversal, High / Low Engine and Liquidity Heatmap open their real pages. Entries live in `src/config/navigation.ts` (`route: null` = disabled SOON).
+Dashboard · Trading Strategy (Support & Resistance · Liquidity · Order Blocks · High / Low Reversal · High / Low Engine · Liquidity Heatmap · Smart Money Concepts · Sweep / Reversal SOON) · Settings.
+Support & Resistance, Liquidity, Order Blocks, High / Low Reversal, High / Low Engine, Liquidity Heatmap and Smart Money Concepts open their real pages. Entries live in `src/config/navigation.ts` (`route: null` = disabled SOON).
 
 ## 10. Safety check before any process command
 Before starting or stopping any Node/Vite/Python process, identify its PID, command line, working/project path and port.
@@ -115,6 +115,15 @@ BUY/SELL setup states with entry zone / SL / TP / R:R appear ONLY on the High / 
   `providers/orderFlow/testing` (TEST DATA, `info.test = true`, refused by the registry unless `allowTestProviders`).
   Events are evidence-only (never spoofing / iceberg claims); no trading signals. Dev visual harness:
   `/orderflow-harness.html` (TEST DATA, bannered, dev only).
+- SMC Engine (`src/engines/smc`, `src/services/smc`, `src/components/smc`, route `/engines/smc`): Smart Money
+  Concepts MARKET ANALYSIS only (no BUY/SELL, entries, SL/TP or orders). Each of D1 H4 H1 M30 M15 M5 M1 is analysed
+  independently from its own REAL closed MT5 candles (causal swings, HH/HL/LH/LL, close-based BOS vs CHOCH, displacement,
+  3-candle FVG lifecycle, dealing range / premium-discount, inducement candidate); then an MTF matrix, a non-voting MTF
+  verdict with explicit conflicts and a documented 0–100 confluence score (never a probability). Order Blocks and
+  Liquidity are consumed READ-ONLY from their unchanged engines (own instances, `smc/adapters.ts`). Revised closed candles:
+  ACCEPT + LOG (DATA REVISED, deterministic rebuild, superseded log entries kept). Anti-repaint audit + replay parity in
+  `smc/antiRepaint.ts` / `services/smc`. One engine for the active instrument only (cleared on symbol change).
+  Not locked until validated on REAL MT5 data. Dev visual harness: `/smc-harness.html` (TEST DATA, bannered, dev only).
 - Sweep / Reversal is not built yet (disabled SOON in the sidebar).
 
 ## Chart navigation (shared by every strategy chart)

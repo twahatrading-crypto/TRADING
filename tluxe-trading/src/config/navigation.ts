@@ -1,4 +1,4 @@
-import { HEATMAP_ROUTE, HLE_ROUTE, HLR_ROUTE, LIQUIDITY_ROUTE, ORDER_BLOCKS_ROUTE, SR_ROUTE } from './modules';
+import { HEATMAP_ROUTE, HLE_ROUTE, HLR_ROUTE, LIQUIDITY_ROUTE, ORDER_BLOCKS_ROUTE, SMC_ROUTE, SR_ROUTE } from './modules';
 
 /**
  * Trading Strategy pages shown under "Trading Strategy" in the sidebar.
@@ -7,7 +7,7 @@ import { HEATMAP_ROUTE, HLE_ROUTE, HLR_ROUTE, LIQUIDITY_ROUTE, ORDER_BLOCKS_ROUT
  * `route` — entries without a route render disabled ("Soon"), so unfinished
  * strategies can never be opened.
  */
-export type StrategyIcon = 'sr' | 'liquidity' | 'orderBlocks' | 'hlr' | 'hle' | 'heatmap' | 'sweep';
+export type StrategyIcon = 'sr' | 'liquidity' | 'orderBlocks' | 'hlr' | 'hle' | 'heatmap' | 'smc' | 'sweep';
 
 export interface StrategyNavItem {
   id: string;
@@ -24,6 +24,7 @@ export const STRATEGY_NAV: readonly StrategyNavItem[] = [
   { id: 'high-low-reversal', label: 'High / Low Reversal', icon: 'hlr', route: HLR_ROUTE },
   { id: 'high-low-engine', label: 'High / Low Engine', icon: 'hle', route: HLE_ROUTE },
   { id: 'liquidity-heatmap', label: 'Liquidity Heatmap', icon: 'heatmap', route: HEATMAP_ROUTE },
+  { id: 'smc', label: 'Smart Money Concepts', icon: 'smc', route: SMC_ROUTE },
   { id: 'sweep-reversal', label: 'Sweep / Reversal', icon: 'sweep', route: null },
 ];
 
