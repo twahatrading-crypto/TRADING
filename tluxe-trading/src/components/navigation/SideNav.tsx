@@ -1,6 +1,7 @@
 import {
   ArrowDownUp,
   ArrowLeftRight,
+  BarChart3,
   Boxes,
   Brain,
   ChevronRight,
@@ -30,6 +31,7 @@ const STRATEGY_ICONS: Record<StrategyIcon, LucideIcon> = {
   hle: Diamond,
   heatmap: Flame,
   smc: Brain,
+  volumeProfile: BarChart3,
   news: Newspaper,
   sweep: ArrowLeftRight,
 };

@@ -1,0 +1,25 @@
+/* Volume Profile page — reuses the SMC page layout (smc.css) + a few VP-specific tokens. */
+.vpcards { grid-template-columns: repeat(10, minmax(0, 1fr)); }
+.vppoc { color: #f3a0a0; }
+.vpva { color: #a9c1ff; }
+.vphvn { color: #efcd84; }
+.vplvn { color: #cdbdfd; }
+.vpwarn { color: var(--amber) !important; }
+.vpsrc { color: var(--text-3); font-size: 10.5px; }
+.smcstatus.is-volume_unavailable, .smcchart__state.is-volume_unavailable { color: var(--amber); }
+.vpselect { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-xs); color: var(--text-3); }
+.vpselect select, .vpfixed input { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 4px 6px; font: inherit; font-size: var(--fs-xs); }
+.vpfixed { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-xs); color: var(--text-3); flex-wrap: wrap; }
+.vpkv { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; margin: 0; font-size: var(--fs-xs); }
+.vpkv div { display: contents; }
+.vpkv dt { color: var(--text-3); }
+.vpkv dd { margin: 0; color: var(--text); text-align: right; overflow-wrap: anywhere; }
+.vpacc { display: flex; flex-direction: column; gap: 4px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+.vptf { background: none; border: 1px solid var(--border); border-radius: 5px; color: var(--text-2); font: inherit; font-size: 10.5px; padding: 1px 6px; cursor: pointer; }
+.vptf[aria-pressed='true'] { color: var(--gold-bright); border-color: var(--border-gold); }
+.vprow3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.vpmain tr.is-active td { background: var(--gold-soft); }
+.vpmain tr[data-testid='vp-mtf-row'] { cursor: pointer; }
+@media (max-width: 1500px) { .vpcards { grid-template-columns: repeat(5, minmax(0, 1fr)); } .vprow3 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 1100px) { .vpcards { grid-template-columns: repeat(3, minmax(0, 1fr)); } .vprow3 { grid-template-columns: 1fr; } }
+@media (max-width: 640px) { .vpcards { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

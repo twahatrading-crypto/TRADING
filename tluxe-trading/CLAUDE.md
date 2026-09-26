@@ -56,8 +56,8 @@ Open ONLY the newest preview. Leave exactly one TLUXE preview running.
   The hosted preview cannot reach the user's MT5, so it shows DATA UNAVAILABLE. Never use fake candles or prices to make it look connected.
 
 ## 9. Sidebar (all pages, via `AppShell`)
-Dashboard · Trading Strategy (Support & Resistance · Liquidity · Order Blocks · High / Low Reversal · High / Low Engine · SMC Analysis · Liquidity Heatmap · News Analysis · Sweep / Reversal SOON) · Settings.
-Support & Resistance, Liquidity, Order Blocks, High / Low Reversal, High / Low Engine, SMC Analysis, Liquidity Heatmap and News Analysis open their real pages. Entries live in `src/config/navigation.ts` (`route: null` = disabled SOON).
+Dashboard · Trading Strategy (Support & Resistance · Liquidity · Order Blocks · High / Low Reversal · High / Low Engine · SMC Analysis · Liquidity Heatmap · Volume Profile · News Analysis · Sweep / Reversal SOON) · Settings.
+Support & Resistance, Liquidity, Order Blocks, High / Low Reversal, High / Low Engine, SMC Analysis, Liquidity Heatmap, Volume Profile and News Analysis open their real pages. Entries live in `src/config/navigation.ts` (`route: null` = disabled SOON).
 
 ## 10. Safety check before any process command
 Before starting or stopping any Node/Vite/Python process, identify its PID, command line, working/project path and port.
@@ -133,6 +133,17 @@ BUY/SELL setup states with entry zone / SL / TP / R:R appear ONLY on the High / 
   at T (audited, incl. a look-ahead cheat test). Reactions use the ACTIVE instrument's existing M1 stream only.
   TEST DATA providers live only in `providers/news/testing` / `engines/news/testing` (refused unless
   `allowTestProviders`). Dev visual harness: `/news-harness.html` (TEST DATA, bannered, dev only).
+- Volume Profile (`src/engines/volumeProfile`, `src/services/volumeProfile`, `src/components/volumeProfile`, route
+  `/engines/volume-profile`): volume-at-price ANALYSIS only (no signals, no orders). POC / VAH / VAL (CME two-row value
+  area, default 70 %), HVN / LVN with ACTIVE / TESTED / BROKEN / EXPIRED, daily (17:00 New York) / weekly / session
+  (Asia, London, New York) / visible / fixed-range profiles, independent D1–M5 MTF profiles, location, closed-candle
+  acceptance / rejection, event log and a documented 0–100 score (never a probability; capped at 40 without mandatory
+  evidence). Volume is NEVER estimated: MT5 candles are labelled "MT5 Tick Volume" (or "MT5 Real Volume" when the
+  broker reports it); "COMEX Exchange Volume" only from a real exchange provider — none exists, so GC shows
+  GC VOLUME DATA UNAVAILABLE. XAUUSD and GC are separate instruments and sources. Liquidity / OB / FVG / SMC / S&R are
+  read READ-ONLY from the SMC and S&R services' published snapshots. Revised closed candles: ACCEPT + LOG (DATA REVISED,
+  deterministic rebuild). Anti-repaint audit + replay parity in `volumeProfile/antiRepaint.ts` / `services/volumeProfile`.
+  Not locked until validated on REAL MT5 data. Dev visual harness: `/vp-harness.html` (TEST DATA, bannered, dev only).
 - Sweep / Reversal is not built yet (disabled SOON in the sidebar).
 
 ## Chart navigation (shared by every strategy chart)

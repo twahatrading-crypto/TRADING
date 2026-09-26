@@ -10,6 +10,8 @@ import type { HLEDrawable, HLEMarker } from '../highLowEngine/hleView';
 import { HighLowPrimitive } from './HighLowPrimitive';
 import type { SmcDrawable, SmcMarker } from '../smc/smcView';
 import { SmcPrimitive } from './SmcPrimitive';
+import type { VPDrawable, VPHistogram, VPMarker } from '../volumeProfile/vpView';
+import { VolumeProfilePrimitive } from './VolumeProfilePrimitive';
 import type { Candle } from '../../types/market';
 import type { ChartOverlay } from '../../types/overlays';
 import { COMPACT_LABEL_WIDTH, ZONE_LABEL_MARGIN_MAX_SHARE, ZONE_LABEL_MARGIN_PX, ZonesPrimitive, type ZoneDrawable } from './ZonesPrimitive';
@@ -59,6 +61,7 @@ export class ChartController {
   private hlePrimitive: HighLowPrimitive | null = null;
   private smcPrimitive: SmcPrimitive | null = null;
   private newsLines: IPriceLine[] = [];
+  private vpPrimitive: VolumeProfilePrimitive | null = null;
   private markers: ISeriesMarkersPluginApi<Time> | null = null;
   private readonly lib: ChartLib;
   /** After destroy() every call is a no-op (React cleanups may run after the chart is gone). */
@@ -251,6 +254,33 @@ export class ChartController {
     const m = [...markers].sort((a, b) => a.time - b.time).map((x) => ({ ...x, time: x.time as UTCTimestamp, size: 0.9 }));
     if (!this.markers) this.markers = this.lib.createSeriesMarkers(this.candles, m);
     else this.markers.setMarkers(m);
+  }
+
+  /** Volume Profile page: right-edge histogram + engine levels / zones + markers (engine output only). */
+  setVolumeProfile(hist: VPHistogram | null, items: VPDrawable[], markers: readonly VPMarker[]): void {
+    if (this.disposed) return;
+    if (!this.vpPrimitive) {
+      this.vpPrimitive = new VolumeProfilePrimitive();
+      this.candles.attachPrimitive(this.vpPrimitive);
+    }
+    this.vpPrimitive.set(hist, items);
+    const ts = this.chart.timeScale();
+    const width = ts.width();
+    const margin = hist && hist.rows.length ? Math.min(240, width * 0.3) : 0;
+    ts.applyOptions({ rightOffset: margin ? Math.ceil(margin / ts.options().barSpacing) : 0 });
+    const m = [...markers].sort((a, b) => a.time - b.time).map((x) => ({ ...x, time: x.time as UTCTimestamp, size: 0.8 }));
+    if (!this.markers) this.markers = this.lib.createSeriesMarkers(this.candles, m);
+    else this.markers.setMarkers(m);
+  }
+
+  /** Visible time range (s) changes — presentation only (Volume Profile "visible range" profile). */
+  onVisibleRange(cb: (range: { from: number; to: number } | null) => void): () => void {
+    const ts = this.chart.timeScale();
+    const h = (r: { from: Time; to: Time } | null) => cb(r ? { from: Number(r.from), to: Number(r.to) } : null);
+    ts.subscribeVisibleTimeRangeChange(h);
+    return () => {
+      if (!this.disposed) ts.unsubscribeVisibleTimeRangeChange(h);
+    };
   }
 
   /** Small event markers (real engine events only), e.g. "BSL SWEPT" / "RECLAIM". */

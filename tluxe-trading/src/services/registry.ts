@@ -13,6 +13,7 @@ import { NO_ORDER_FLOW_PROVIDERS, type OrderFlowProviders } from '../providers/o
 import { OrderFlowService } from './orderFlow/OrderFlowService';
 import { SmcService } from './smc/SmcService';
 import { NewsAnalysisService } from './newsAnalysis/NewsAnalysisService';
+import { VolumeProfileService } from './volumeProfile/VolumeProfileService';
 import { NO_NEWS_PROVIDERS, type NewsProviders } from '../providers/news/types';
 import { MarketDataService } from './market/MarketDataService';
 import type { MarketDataProvider } from './market/MarketDataProvider';
@@ -43,6 +44,7 @@ export interface Services {
   orderFlow: OrderFlowService;
   smc: SmcService;
   newsAnalysis: NewsAnalysisService;
+  volumeProfile: VolumeProfileService;
   /** MT5 price provider, when enabled in Settings (null otherwise). */
   mt5: Mt5Provider | null;
   /** Phase 1 has no persistence layer. */
@@ -92,19 +94,22 @@ export function createServices(providers: ProviderSet = defaultProviders(), opts
   const selection = new InstrumentSelection(instruments, opts.storage);
   const market = new MarketDataService({ instruments, price: providers.price, depth: providers.depth });
   const storage = opts.storage === undefined ? browserStorage() : opts.storage;
+  const sr = new SRService(market, selection, storage);
+  const smc = new SmcService(market, selection);
   return {
     instruments: selection,
     market,
     news: createNewsService(providers.news),
     calendar: createCalendarService(providers.calendar),
     ai: new AiService(providers.ai),
-    sr: new SRService(market, selection, storage),
+    sr,
     liquidity: new LiquidityService(market, selection),
     orderBlocks: new OrderBlockService(market, selection),
     hlReversal: new HLRService(market, selection),
     highLow: new HighLowEngineService(market, selection, storage),
     orderFlow: new OrderFlowService(selection, orderFlowProviders(providers.orderFlow, opts.allowTestProviders ?? false)),
-    smc: new SmcService(market, selection),
+    smc,
+    volumeProfile: new VolumeProfileService(market, selection, smc, sr),
     newsAnalysis: new NewsAnalysisService(market, selection, newsProviders(providers.newsAnalysis, opts.allowTestProviders ?? false)),
     mt5: (providers.price.find((p) => p instanceof Mt5Provider) as Mt5Provider | undefined) ?? null,
     databaseStatus: 'NOT_CONNECTED',
@@ -156,6 +161,7 @@ export function connectServices(s: Services): () => void {
   const stopOrderFlow = s.orderFlow.start();
   const stopSmc = s.smc.start();
   const stopNews = s.newsAnalysis.start();
+  const stopVP = s.volumeProfile.start();
   const teardown = () => {
     if (connected.get(s) !== teardown) return;
     connected.delete(s);
@@ -168,6 +174,7 @@ export function connectServices(s: Services): () => void {
     stopOrderFlow();
     stopSmc();
     stopNews();
+    stopVP();
     s.market.disconnect();
     s.news.disconnect();
     s.calendar.disconnect();

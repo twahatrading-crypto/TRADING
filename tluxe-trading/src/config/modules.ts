@@ -28,6 +28,8 @@ export const HLE_ROUTE = '/engines/high-low-engine';
 export const HEATMAP_ROUTE = '/engines/liquidity-heatmap';
 /** SMC Engine page (Smart Money Concepts market analysis; its own engine, service and UI). */
 export const SMC_ROUTE = '/engines/smc';
+/** Volume Profile page (POC / value area / HVN-LVN from real candle volume; analysis only). */
+export const VP_ROUTE = '/engines/volume-profile';
 /** News Analysis page (economic calendar, breaking news, event impact; analysis only). */
 export const NEWS_ROUTE = '/engines/news-analysis';
 
