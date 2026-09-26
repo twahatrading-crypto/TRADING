@@ -77,7 +77,7 @@ describe('SMC page', () => {
     window.location.hash = '#/';
     renderWithServices(<App />);
     await flush();
-    const link = screen.getByRole('link', { name: /Smart Money Concepts/ });
+    const link = screen.getByRole('link', { name: /SMC Analysis/ });
     expect(link.getAttribute('href')).toBe('#/engines/smc');
   });
 

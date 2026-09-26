@@ -56,8 +56,8 @@ Open ONLY the newest preview. Leave exactly one TLUXE preview running.
   The hosted preview cannot reach the user's MT5, so it shows DATA UNAVAILABLE. Never use fake candles or prices to make it look connected.
 
 ## 9. Sidebar (all pages, via `AppShell`)
-Dashboard · Trading Strategy (Support & Resistance · Liquidity · Order Blocks · High / Low Reversal · High / Low Engine · Liquidity Heatmap · Smart Money Concepts · Sweep / Reversal SOON) · Settings.
-Support & Resistance, Liquidity, Order Blocks, High / Low Reversal, High / Low Engine, Liquidity Heatmap and Smart Money Concepts open their real pages. Entries live in `src/config/navigation.ts` (`route: null` = disabled SOON).
+Dashboard · Trading Strategy (Support & Resistance · Liquidity · Order Blocks · High / Low Reversal · High / Low Engine · SMC Analysis · Liquidity Heatmap · Sweep / Reversal SOON) · Settings.
+Support & Resistance, Liquidity, Order Blocks, High / Low Reversal, High / Low Engine, SMC Analysis and Liquidity Heatmap open their real pages. Entries live in `src/config/navigation.ts` (`route: null` = disabled SOON).
 
 ## 10. Safety check before any process command
 Before starting or stopping any Node/Vite/Python process, identify its PID, command line, working/project path and port.

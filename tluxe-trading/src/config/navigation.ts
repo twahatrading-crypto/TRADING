@@ -23,8 +23,8 @@ export const STRATEGY_NAV: readonly StrategyNavItem[] = [
   { id: 'order-blocks', label: 'Order Blocks', icon: 'orderBlocks', route: ORDER_BLOCKS_ROUTE },
   { id: 'high-low-reversal', label: 'High / Low Reversal', icon: 'hlr', route: HLR_ROUTE },
   { id: 'high-low-engine', label: 'High / Low Engine', icon: 'hle', route: HLE_ROUTE },
+  { id: 'smc', label: 'SMC Analysis', icon: 'smc', route: SMC_ROUTE },
   { id: 'liquidity-heatmap', label: 'Liquidity Heatmap', icon: 'heatmap', route: HEATMAP_ROUTE },
-  { id: 'smc', label: 'Smart Money Concepts', icon: 'smc', route: SMC_ROUTE },
   { id: 'sweep-reversal', label: 'Sweep / Reversal', icon: 'sweep', route: null },
 ];
 
