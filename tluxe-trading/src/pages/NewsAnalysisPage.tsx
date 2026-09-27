@@ -6,7 +6,7 @@ import type { NewsEventView } from '../engines/news/types';
 import { useStore } from '../store/createStore';
 import { AlertsPanel, BreakingPanel, CalendarPanel, EventDetail, MatrixPanel, NextEventPanel, ProvidersPanel, RiskPanel, SummaryCards, XauPanel } from '../components/newsAnalysis/NewsPanels';
 import { ReactionChart } from '../components/newsAnalysis/ReactionChart';
-import { localTz } from '../components/newsAnalysis/newsView';
+import { feedUsable, localTz } from '../components/newsAnalysis/newsView';
 import '../components/sr/sr.css';
 import '../components/newsAnalysis/news.css';
 
@@ -30,7 +30,8 @@ export function NewsAnalysisPage() {
   useEffect(() => {
     if (selected && !sel) setSelected(null);
   }, [selected, sel]);
-  const none = !st.feeds.calendar.provider && !st.feeds.breaking.provider && !st.feeds.macro.provider;
+  const none = !feedUsable(st.feeds.calendar) && !feedUsable(st.feeds.breaking) && !feedUsable(st.feeds.macro);
+  const configured = !!st.feeds.calendar.provider || !!st.feeds.breaking.provider || !!st.feeds.macro.provider;
   const tz = localTz();
   const clock = (label: string, zone: string) => {
     const z = zoneParts(st.now, zone);
@@ -61,7 +62,7 @@ export function NewsAnalysisPage() {
       </div>
       {none && (
         <div className="panel nwbanner" role="status" data-testid="nw-unavailable">
-          <strong>NEWS DATA UNAVAILABLE</strong> — no economic-calendar, breaking-news or macro-news provider is configured. Nothing is simulated: no headlines, events, values, times or sentiment are ever invented. Connect a licensed provider adapter (see News Data Providers) to enable this page.
+          <strong>NEWS DATA UNAVAILABLE</strong> — {configured ? `no news provider is delivering data (Economic Calendar: ${st.feeds.calendar.status.replace(/_/g, ' ')} · Breaking News: ${st.feeds.breaking.status.replace(/_/g, ' ')} · Macro News: ${st.feeds.macro.status.replace(/_/g, ' ')}).` : 'no economic-calendar, breaking-news or macro-news provider is configured.'} Nothing is simulated: no headlines, events, values, times or sentiment are ever invented. Connect a licensed provider adapter (see News Data Providers) to enable this page.
         </div>
       )}
       <SummaryCards st={st} />

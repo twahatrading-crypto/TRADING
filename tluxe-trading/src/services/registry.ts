@@ -8,6 +8,9 @@ import { AiService } from './ai/AiService';
 import { buildAiContext } from './ai/context/buildAiContext';
 import { loadTluxeAiConfig } from '../providers/ai/config';
 import { TluxeAiProvider } from '../providers/ai/TluxeAiProvider';
+import { BridgeCalendarProvider, BridgeHeadlineProvider } from '../providers/newsBridge/adapters';
+import { loadNewsBridgeConfig } from '../providers/newsBridge/config';
+import { NewsBridgeFeed } from '../providers/newsBridge/NewsBridgeFeed';
 import { createCalendarService, type CalendarProvider, type CalendarService } from './calendar/CalendarProvider';
 import { NullFeedProvider } from './feed/FeedProvider';
 import { InstrumentSelection } from './instruments/InstrumentSelection';
@@ -60,6 +63,8 @@ export interface Services {
   mt5: Mt5Provider | null;
   /** Databento (CME Globex / COMEX) bridge feed, when enabled in Settings (null otherwise). Market data only. */
   databento: DatabentoFeed | null;
+  /** Local news backend feed (Trading Economics calendar / news), when enabled in Settings (null otherwise). */
+  newsBridge: NewsBridgeFeed | null;
   /** Phase 1 has no persistence layer. */
   databaseStatus: ProviderStatus;
 }
@@ -80,6 +85,8 @@ export interface ProviderSet {
   footprint?: FootprintTradeProvider | null;
   /** The single Databento bridge feed behind the Databento adapters (diagnostics / UI badge). */
   databento?: DatabentoFeed | null;
+  /** The single news-backend feed behind the news adapters (Settings status). */
+  newsBridge?: NewsBridgeFeed | null;
 }
 
 export interface ServiceOptions {
@@ -106,8 +113,13 @@ export function defaultProviders(storage: Pick<Storage, 'getItem' | 'setItem'> |
   const dbFlow = dbMbo ?? (feed ? new DatabentoOrderFlowProvider(feed) : null);
   // Level-2 depth adapter slot (IBKR / T4 / …): none is connected yet -> the heatmap reports LEVEL-2 PROVIDER NOT CONNECTED.
   const level2Depth: OrderFlowDepthProvider | null = dbMbo;
+  // Real news only through the local news backend (bridge/news) when the user enabled it. Provider keys stay server-side.
+  const nb = loadNewsBridgeConfig(storage);
+  const newsFeed = nb.enabled && nb.token ? new NewsBridgeFeed(nb) : null;
   return {
     databento: feed,
+    newsBridge: newsFeed,
+    newsAnalysis: newsFeed ? { calendar: new BridgeCalendarProvider(newsFeed), macro: new BridgeHeadlineProvider(newsFeed, 'macro'), breaking: new BridgeHeadlineProvider(newsFeed, 'breaking') } : undefined,
     orderFlow: dbFlow ? composeOrderFlowProviders(level2Depth, dbFlow) : undefined,
     footprint: feed ? new DatabentoFootprintProvider(feed) : null,
     price: [...(mt5.enabled && mt5.token ? [new Mt5Provider(mt5)] : []), ...(feed ? [new DatabentoMarketProvider(feed)] : [])],
@@ -144,6 +156,7 @@ export function createServices(providers: ProviderSet = defaultProviders(), opts
     newsAnalysis: new NewsAnalysisService(market, selection, newsProviders(providers.newsAnalysis, opts.allowTestProviders ?? false)),
     mt5: (providers.price.find((p) => p instanceof Mt5Provider) as Mt5Provider | undefined) ?? null,
     databento: providers.databento ?? null,
+    newsBridge: providers.newsBridge ?? null,
     databaseStatus: 'NOT_CONNECTED',
   };
   // READ-ONLY context for TLUXE AI: reads the stores above at send time (never calls providers or changes settings).

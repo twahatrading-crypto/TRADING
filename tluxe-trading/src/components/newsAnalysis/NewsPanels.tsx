@@ -5,7 +5,7 @@ import { countdown } from '../../engines/news/time';
 import type { Aggregate, InstrumentRisk, MatrixColumn, MatrixRow, NewsAlert, NewsEventView, ReactionResult } from '../../engines/news/types';
 import type { NewsAnalysisState, NewsFeedView } from '../../services/newsAnalysis/NewsAnalysisService';
 import { formatPrice } from '../../utils/format';
-import { CURRENCY_FILTERS, RISK_LABEL, STATUS_LABEL, arrow, filterCalendar, localTz, riskTone, surpriseText, times, timelineOf, tone, type CurrencyFilter, type ImpactFilter, type RangeFilter } from './newsView';
+import { CURRENCY_FILTERS, RISK_LABEL, STATUS_LABEL, arrow, feedUsable, filterCalendar, localTz, riskTone, surpriseText, times, timelineOf, tone, type CurrencyFilter, type ImpactFilter, type RangeFilter } from './newsView';
 
 export function Panel({ title, icon, right, children, testId, className }: { title: string; icon: ReactNode; right?: ReactNode; children: ReactNode; testId?: string; className?: string }) {
   return (
@@ -47,8 +47,12 @@ export function SummaryCards({ st }: { st: NewsAnalysisState }) {
   const s = st.snapshot;
   const n = s.nextHigh;
   const risk = s.risk['XAUUSD'];
-  const noCal = !st.feeds.calendar.provider;
-  const noNews = !st.feeds.breaking.provider && !st.feeds.macro.provider;
+  const noCal = !feedUsable(st.feeds.calendar);
+  const noNews = !feedUsable(st.feeds.breaking) && !feedUsable(st.feeds.macro);
+  // Risk windows come from the calendar: without a usable calendar, "NORMAL" would falsely mean "no news".
+  const calStale = st.feeds.calendar.status === 'STALE';
+  const riskKnown = !noCal && !(calStale && (risk?.state ?? 'NORMAL') === 'NORMAL');
+  const riskActive = (risk?.state ?? 'NORMAL') !== 'NORMAL';
   const c = n?.scheduledAt ? countdown(n.scheduledAt - st.now) : null;
   const card = (k: string, body: ReactNode, testId?: string) => (
     <div className="panel nwcard" data-testid={testId}>
@@ -78,7 +82,15 @@ export function SummaryCards({ st }: { st: NewsAnalysisState }) {
           </div>
         ) : n ? <strong className="nwwarn">{STATUS_LABEL[n.status]}</strong> : <span className="nwcard__sub">—</span>,
       )}
-      {card('Current news risk · XAUUSD', <><Tag v={RISK_LABEL[risk?.state ?? 'NORMAL']} t={riskTone(risk?.state ?? 'NORMAL')} /><span className="nwcard__sub">{noCal && noNews ? 'NEWS DATA UNAVAILABLE — risk cannot be assessed' : risk?.reasons[0]?.text ?? 'No HIGH-impact window active.'}</span></>, 'nw-risk-card')}
+      {card(
+        'Current news risk · XAUUSD',
+        riskKnown || riskActive ? (
+          <><Tag v={RISK_LABEL[risk?.state ?? 'NORMAL']} t={riskTone(risk?.state ?? 'NORMAL')} /><span className="nwcard__sub">{risk?.reasons[0]?.text ?? 'No HIGH-impact window active in the calendar data.'}{calStale ? ' · CALENDAR STALE' : ''}</span></>
+        ) : (
+          <><Tag v={calStale ? 'CALENDAR STALE' : 'NEWS DATA UNAVAILABLE'} t="muted" /><span className="nwcard__sub">{calStale ? 'Economic calendar is stale — risk cannot be confirmed.' : `Economic calendar unavailable — risk cannot be assessed.${st.feeds.calendar.provider && st.feeds.calendar.detail ? ` ${st.feeds.calendar.detail}` : ''}`}</span></>
+        ),
+        'nw-risk-card',
+      )}
       {card('USD macro bias', noCal && noNews ? <Tag v="NEWS DATA UNAVAILABLE" t="muted" /> : <><Tag v={s.aggregates.USD.state} /><span className="nwcard__sub">{s.aggregates.USD.evidence}</span></>, 'nw-usd-card')}
       {card('Gold news pressure', noCal && noNews ? <Tag v="NEWS DATA UNAVAILABLE" t="muted" /> : <><Tag v={s.aggregates.GOLD.state} /><span className="nwcard__sub">{s.aggregates.GOLD.evidence}</span></>, 'nw-gold-card')}
       {card('Breaking news status', <>{feedTag(st.feeds.breaking)}<span className="nwcard__sub">{st.feeds.breaking.name ?? st.feeds.breaking.detail}{st.feeds.breaking.latency === 'DELAYED' ? ` · delayed ${st.feeds.breaking.delaySec ?? '?'} s` : ''}</span></>, 'nw-breaking-card')}
@@ -121,8 +133,8 @@ export function CalendarPanel({ st, onSelect, selected }: { st: NewsAnalysisStat
         </div>
       }
     >
-      {!feed.provider ? (
-        <Unavailable title="ECONOMIC CALENDAR UNAVAILABLE" detail="No economic-calendar provider is configured. No events, values or times are ever invented." />
+      {!feedUsable(feed) ? (
+        <Unavailable title="ECONOMIC CALENDAR UNAVAILABLE" detail={feed.provider ? `${feed.name ?? feed.provider}: ${feed.status.replace(/_/g, ' ')}${feed.detail ? ` — ${feed.detail}` : ''}. No events, values or times are ever invented.` : 'No economic-calendar provider is configured. No events, values or times are ever invented.'} />
       ) : (
         <>
           <div className="nwfeedline">{feed.name} · {feedTag(feed)} {feed.latency && <span className="nwdim">{feed.latency}{feed.delaySec ? ` ${feed.delaySec}s` : ''}</span>} {feed.detail && <span className="nwdim">{feed.detail}</span>}</div>
@@ -166,7 +178,7 @@ export function CalendarPanel({ st, onSelect, selected }: { st: NewsAnalysisStat
 
 export function NextEventPanel({ st, reaction, onSelect }: { st: NewsAnalysisState; reaction: ReactionResult | null; onSelect: (k: string) => void }) {
   const e = st.snapshot.nextHigh;
-  if (!st.feeds.calendar.provider) return <Panel title="Next Event" icon={<Clock3 size={15} />} testId="nw-next"><Unavailable title="ECONOMIC CALENDAR UNAVAILABLE" /></Panel>;
+  if (!feedUsable(st.feeds.calendar)) return <Panel title="Next Event" icon={<Clock3 size={15} />} testId="nw-next"><Unavailable title="ECONOMIC CALENDAR UNAVAILABLE" detail={st.feeds.calendar.provider ? st.feeds.calendar.detail : null} /></Panel>;
   if (!e) return <Panel title="Next Event" icon={<Clock3 size={15} />} testId="nw-next"><p className="nwempty">No upcoming HIGH-impact event in the calendar data.</p></Panel>;
   const t = times(e.scheduledAt!);
   const w = SCHEDULED_WINDOWS[e.impact];
@@ -194,7 +206,7 @@ export function NextEventPanel({ st, reaction, onSelect }: { st: NewsAnalysisSta
 /* ---------------------------- breaking feed ---------------------------- */
 
 export function BreakingPanel({ st, onSelect }: { st: NewsAnalysisState; onSelect: (k: string) => void }) {
-  const hasFeed = !!st.feeds.breaking.provider || !!st.feeds.macro.provider;
+  const hasFeed = feedUsable(st.feeds.breaking) || feedUsable(st.feeds.macro);
   const rows = st.snapshot.headlines.slice(0, 40);
   return (
     <Panel title="Breaking News Feed" icon={<Radio size={15} />} testId="nw-breaking" right={feedTag(st.feeds.breaking.provider ? st.feeds.breaking : st.feeds.macro)}>
@@ -230,7 +242,7 @@ export function BreakingPanel({ st, onSelect }: { st: NewsAnalysisState; onSelec
 
 export function XauPanel({ st, reaction, reactionEvent }: { st: NewsAnalysisState; reaction: ReactionResult | null; reactionEvent: NewsEventView | null }) {
   const s = st.snapshot;
-  const none = !st.feeds.calendar.provider && !st.feeds.breaking.provider && !st.feeds.macro.provider;
+  const none = !feedUsable(st.feeds.calendar) && !feedUsable(st.feeds.breaking) && !feedUsable(st.feeds.macro);
   const risk = s.risk['XAUUSD']!;
   const nextX = s.calendar.find((e) => !e.duplicateOf && e.impact === 'HIGH' && e.affected.includes('XAUUSD') && (e.scheduledAt ?? 0) > st.now);
   const row = (k: string, a: Aggregate | null, extra?: string) => (

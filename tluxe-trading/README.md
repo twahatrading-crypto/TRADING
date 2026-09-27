@@ -24,6 +24,10 @@ Nothing is simulated.
 `bridge\ai\start_ai.cmd`), which calls the OpenAI Responses API. The OpenAI key lives only in `bridge/ai/.env`;
 without it the panel stays **Not Connected**.
 
+**News Analysis** receives real data only through a local news backend in [`bridge/news`](bridge/news/README.md)
+(127.0.0.1:8768, `bridge\news\start_news.cmd`): Trading Economics economic calendar (and optionally its news API).
+Without a Trading Economics credential in `bridge/news/.env` the page stays **DATA UNAVAILABLE**.
+
 ## Instruments
 
 Canonical registry: `src/config/instruments.ts` — GC, SI (COMEX futures), XAUUSD,

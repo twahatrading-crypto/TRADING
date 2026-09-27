@@ -2,6 +2,7 @@ import { DEFAULT_TIMEFRAME, QUOTE_STALE_AFTER_MS } from '../../../config/instrum
 import { getQuoteDisplayMode } from '../../market/normalize';
 import type { InstrumentId } from '../../../types/instruments';
 import type { Candle, MarketState, Timeframe } from '../../../types/market';
+import { buildNewsContext, type NewsStateLike } from './newsContext';
 import { AI_ENGINE_IDS, type AiCandle, type AiContext, type AiEngineId, type AiField, type AiProvenance } from './types';
 
 /*
@@ -38,7 +39,7 @@ export interface AiContextSources {
   smc?: { store: StoreLike<{ instrumentId: InstrumentId; snapshot: unknown; computedAt: number | null }> };
   volumeProfile?: { store: StoreLike<{ instrumentId: InstrumentId; snapshot: unknown; computedAt: number | null }> };
   volumeFootprint?: { store: StoreLike<{ instrumentId: InstrumentId; supported: boolean; reason: string | null; provider: string | null; snapshot: unknown }> };
-  newsAnalysis?: { store: StoreLike<{ now: number; feeds: Record<string, { status: string; test?: boolean }>; snapshot: unknown }> };
+  newsAnalysis?: { store: StoreLike<NewsStateLike> };
 }
 
 const unavailable = <T>(source: string | null, reason: string): AiField<T> => ({ status: 'UNAVAILABLE', source, asOf: null, reason });
@@ -160,6 +161,7 @@ export function buildAiContext(src: AiContextSources, now: number, storage: Pick
 
   const fp = active(src.volumeFootprint?.store.getState());
   const news = src.newsAnalysis?.store.getState();
+  const newsCtx = buildNewsContext(news, id);
   const newsFeeds = news ? Object.values(news.feeds) : [];
   // Only a real (non-test) connected feed counts; test providers are never used as market context.
   const newsLive = newsFeeds.some((f) => !f.test && (f.status === 'LIVE' || f.status === 'CONNECTED' || f.status === 'DELAYED'));
@@ -177,11 +179,12 @@ export function buildAiContext(src: AiContextSources, now: number, storage: Pick
       : !fp.supported || !fp.snapshot || engineNoDataReason(fp.snapshot) !== null
         ? unavailable(fp.provider ?? 'TLUXE Volume Footprint engine', fp.reason ?? 'No exchange trade data (time & sales) for this instrument.')
         : { status: engineStatus, source: fp.provider ?? 'TLUXE Volume Footprint engine', asOf: null, value: boundedForAi(fp.snapshot) },
+    // The full, bounded news picture is `ctx.news`; this entry only reports the News Analysis engine's state.
     newsAnalysis: !news
       ? unavailable('TLUXE News Analysis', 'Engine not available.')
       : !newsLive
         ? unavailable('TLUXE News Analysis', 'No news / calendar provider connected.')
-        : { status: newsFeeds.some((f) => !f.test && (f.status === 'LIVE' || f.status === 'CONNECTED')) ? 'LIVE' : 'DELAYED', source: 'TLUXE News Analysis', asOf: news.now, value: boundedForAi(news.snapshot) },
+        : { status: newsCtx.status, source: 'TLUXE News Analysis', asOf: news.now, value: { see: 'news', events: news.snapshot.events.length } },
   };
   for (const k of AI_ENGINE_IDS) if (!engines[k]) engines[k] = unavailable(k, 'Engine not available.');
 
@@ -203,6 +206,7 @@ export function buildAiContext(src: AiContextSources, now: number, storage: Pick
       ? { status: prov.status === 'UNAVAILABLE' ? 'STALE' : prov.status, source: candles[candles.length - 1]?.source ?? source, asOf: lastBarMs, value: { timeframe: tf.value, count: bars.length, bars }, ...(prov.status === 'UNAVAILABLE' ? { reason: 'Feed not connected - last known candles.' } : {}) }
       : unavailable(source, `No ${tf.value} candles for ${id}.`),
     engines,
+    news: newsCtx,
   };
   // Hard ceiling: drop engine values (keeping their status) if the whole snapshot is still too large.
   if (JSON.stringify(ctx).length > AI_CONTEXT_LIMITS.totalChars) {
@@ -211,6 +215,13 @@ export function buildAiContext(src: AiContextSources, now: number, storage: Pick
       if (e.value !== undefined) ctx.engines[k] = { ...e, value: '[omitted: context budget]' };
       if (JSON.stringify(ctx).length <= AI_CONTEXT_LIMITS.totalChars) break;
     }
+  }
+  // Then trim the news lists (oldest / least relevant last) — the AI backend rejects contexts above 24 KB.
+  const nv = ctx.news.value;
+  while (nv && JSON.stringify(ctx).length > AI_CONTEXT_LIMITS.totalChars) {
+    const list = [nv.headlines, nv.today, nv.recentReleases, nv.nextHighImpact].find((l) => l.length > 1);
+    if (!list) break;
+    list.pop();
   }
   return ctx;
 }

@@ -27,3 +27,4 @@
 .dbset__caps dd { margin: 0; color: var(--text); overflow-wrap: anywhere; }
 .dbset__cap--yes { color: #86e3c6; }
 .dbset__cap--no { color: #f3a0a0; }
+.dbset__why { color: var(--text-3); }

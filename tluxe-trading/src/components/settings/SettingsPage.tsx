@@ -11,6 +11,8 @@ import { useNow } from '../../store/clock';
 import { useStore } from '../../store/createStore';
 import { formatPrice, UNKNOWN } from '../../utils/format';
 import { TluxeAiSettingsPanel } from '../ai/TluxeAiSettings';
+import { NewsProvidersSettingsPanel } from '../newsProviders/NewsProvidersSettings';
+import '../databento/databento.css';
 import { DatabentoSettingsPanel } from '../databento/DatabentoSettings';
 import { Panel } from '../ui/Panel';
 import { StatusPill } from '../ui/StatusPill';
@@ -76,6 +78,7 @@ export function SettingsPage() {
           {mt5 && <DiscoveryPanel provider={mt5} />}
           <DatabentoSettingsPanel />
           <TluxeAiSettingsPanel />
+          <NewsProvidersSettingsPanel />
         </div>
       </main>
     </>

@@ -29,6 +29,36 @@ export interface AiCandle {
 export const AI_ENGINE_IDS = ['sr', 'liquidity', 'orderBlocks', 'hlReversal', 'highLow', 'smc', 'volumeProfile', 'volumeFootprint', 'newsAnalysis'] as const;
 export type AiEngineId = (typeof AI_ENGINE_IDS)[number];
 
+export interface AiNewsItem {
+  /** provider:providerEventId — the evidence key. */
+  key: string;
+  provider: string;
+  title: string;
+  kind: 'SCHEDULED' | 'HEADLINE';
+  currency: string | null;
+  country: string | null;
+  impact: string;
+  /** Scheduled release (calendar) or publish time (headline), epoch ms UTC. */
+  time: number | null;
+  status: string;
+  actual: string | null;
+  forecast: string | null;
+  previous: string | null;
+  surpriseVsForecast: string | null;
+  sourceUrl: string | null;
+  affectedSelected: boolean;
+}
+
+export interface AiNewsContext {
+  label: 'OBSERVED PROVIDER DATA (not AI interpretation)';
+  feeds: Record<'calendar' | 'breaking' | 'macro', { status: string; provider: string | null; lastMessageAt: number | null; detail: string | null }>;
+  risk: { state: string; reasons: { eventKey: string; title: string; state: string; from: number; to: number }[] } | null;
+  nextHighImpact: AiNewsItem[];
+  today: AiNewsItem[];
+  recentReleases: AiNewsItem[];
+  headlines: AiNewsItem[];
+}
+
 export interface AiContext {
   schema: 'tluxe.ai.context.v1';
   generatedAt: number;
@@ -40,4 +70,6 @@ export interface AiContext {
   quote: AiField<{ last: number | null; bid: number | null; ask: number | null; high: number | null; low: number | null; change: number | null; timestamp: number | null }>;
   candles: AiField<{ timeframe: string; count: number; bars: AiCandle[] }>;
   engines: Record<AiEngineId, AiField<unknown>>;
+  /** Economic calendar / headlines relevant to the selected instrument (bounded; UNAVAILABLE when no usable feed). */
+  news: AiField<AiNewsContext>;
 }

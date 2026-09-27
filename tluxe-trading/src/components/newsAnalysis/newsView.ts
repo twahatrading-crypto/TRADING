@@ -38,6 +38,13 @@ export function times(ms: number, tz = localTz()) {
 }
 
 export const STATUS_LABEL: Record<EventStatus, string> = { UPCOMING: 'UPCOMING', PRE_NEWS: 'PRE-NEWS', LIVE: 'LIVE', POST_NEWS: 'POST-NEWS', RELEASED: 'RELEASED', STALE: 'STALE', CANCELLED: 'CANCELLED' };
+/**
+ * A feed's data may be shown only when a provider is registered AND it is delivering (LIVE / DELAYED) or has
+ * delivered and gone quiet (STALE, shown with its marker). CONNECTING / NOT_CONNECTED / DISCONNECTED / ERROR are
+ * DATA UNAVAILABLE — exactly like having no provider at all.
+ */
+export const feedUsable = (f: { provider: string | null; status: string }): boolean => !!f.provider && (f.status === 'LIVE' || f.status === 'DELAYED' || f.status === 'STALE');
+
 export const RISK_LABEL: Record<RiskState, string> = { NORMAL: 'NORMAL', PRE_NEWS: 'PRE-NEWS RISK', NEWS_LIVE: 'NEWS LIVE', POST_NEWS: 'POST-NEWS VOLATILITY' };
 export const tone = (p: Pressure | string) => (p === 'BULLISH PRESSURE' ? 'bull' : p === 'BEARISH PRESSURE' ? 'bear' : p === 'MIXED' ? 'warn' : p === 'NEUTRAL' ? 'muted' : 'dim');
 export const arrow = (p: Pressure) => (p === 'BULLISH PRESSURE' ? '▲' : p === 'BEARISH PRESSURE' ? '▼' : p === 'MIXED' ? '◆' : p === 'NEUTRAL' ? '–' : '·');

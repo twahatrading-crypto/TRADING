@@ -35,6 +35,7 @@ Open ONLY the newest preview. Leave exactly one TLUXE preview running.
 - Bridge: **http://127.0.0.1:8765**, a separate process from the frontend (`tluxe-trading\bridge\mt5`).
 - Databento bridge: **http://127.0.0.1:8766** (`tluxe-trading\bridge\databento`), same origin / token rules; never touch other ports.
 - TLUXE AI backend: **http://127.0.0.1:8767** (`tluxe-trading\bridge\ai`), same origin / token rules.
+- News backend: **http://127.0.0.1:8768** (`tluxe-trading\bridge\news`), same origin / token rules.
 - The bridge must allow the current preview origin: `http://localhost:5182`, `http://127.0.0.1:5182`
   (plus 5181 kept from the previous preview and 4181 for the production preview). A refused origin looks exactly like an offline bridge.
   The bridge logs `Rejected browser origin ...`, and Settings shows which origin is required.
@@ -190,6 +191,15 @@ BUY/SELL setup states with entry zone / SL / TP / R:R appear ONLY on the High / 
   Phase 1: Chat only, READ-ONLY, no tools (Research / Analysis / Tools / quick actions disabled, never faked).
   `buildAiContext` = bounded read-only context with provenance (LIVE / DELAYED / STALE / UNAVAILABLE); engine NO_DATA
   placeholders are UNAVAILABLE; credential-named fields / key-shaped values are dropped. Start: `bridge\ai\start_ai.cmd`.
+- News providers (`bridge/news` Python backend, 127.0.0.1:8768, `TLUXE_NEWS_TOKEN` + exact origin allowlist;
+  `src/providers/newsBridge`, `src/components/newsProviders`): Trading Economics economic calendar (REST
+  `/calendar/country/...` + `/calendar/updates`, bounded refresh; websocket streaming only if entitled - DETECTED,
+  never assumed) and optional Trading Economics News (macro). Breaking News = adapter slot only (NOT CONNECTED).
+  `TRADING_ECONOMICS_API_KEY` lives ONLY in `bridge/news/.env`. Adapters implement the EXISTING provider contract
+  (`providers/news/types`); the News engine is unchanged. Presentation rule (`feedUsable`): a feed's data shows only
+  when LIVE / DELAYED / STALE — CONNECTING / NOT_CONNECTED / DISCONNECTED / ERROR = DATA UNAVAILABLE, and News Risk
+  never shows NORMAL without a usable calendar. TLUXE AI gets a bounded `ctx.news` (OBSERVED PROVIDER DATA with
+  evidence keys, filtered by the engine's `affected` mapping). Start: `bridge\news\start_news.cmd`.
 - Sweep / Reversal is not built yet (disabled SOON in the sidebar).
 
 ## Chart navigation (shared by every strategy chart)
