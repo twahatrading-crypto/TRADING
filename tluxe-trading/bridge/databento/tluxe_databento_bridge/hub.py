@@ -19,7 +19,7 @@ from collections import deque
 from .book import DEGRADED, INVALID, NO_DATA, SYNCING, VALID, OrderBook, _s
 from .candles import CandleStore
 from .config import DATASET, DEPTH_SCHEMA, NEVER_REQUESTED, ROOTS, TAPE_SCHEMAS, BridgeConfig
-from .entitlement import AUTH, ENTITLEMENT, classify
+from .entitlement import AUTH, ENTITLEMENT, START, classify, parse_start_boundary_ns
 from .redact import Redactor
 from .symbology import SymbolMap
 from .tape import TradeTape
@@ -31,6 +31,10 @@ CONNECTING, SYNCING_S, LIVE, DEGRADED_S, STALE, RECONNECTING, UNAVAILABLE, AUTH_
 MBO_DUP_WINDOW = 4096
 MAPPING_TIMEOUT_MS = 60_000
 TAPE_GAP_FLAG_MS = 10 * 60_000
+# After the gateway names the earliest allowed replay start, request this much later (its boundary moves forward
+# with time and is aligned by the gateway, so the exact value may already be stale when we reconnect).
+START_BOUNDARY_PAD_NS = 2 * 60 * 1_000_000_000
+MINUTE_NS = 60 * 1_000_000_000
 STANDARD_DEPTH_REASON = "Databento Standard does not include real-time MBO/MBP-10"
 LEVEL2_REQUIRED = "Level-2 provider required: IBKR / T4 / other supported depth provider"
 # Per-capability states reported to the browser.
@@ -106,6 +110,12 @@ class Hub:
         self.cursor = 0
         self.started_ms = self.now()
         self.resync_requests: dict[str, str | None] = {"book": None, "tape": None}
+        # Intraday replay start control ("Invalid start time. Must be ... or later" recovery).
+        self.replay_floor_ns: int | None = None  # earliest start the gateway accepts (from its error), padded
+        self.replay_disabled_reason: str | None = None  # live-only fallback after repeated start rejections
+        self.start_error_pending = False
+        self.start_rejections = 0
+        self.last_replay_start_ns: int | None = None
         self.metrics = {"records": 0, "unmapped": 0, "unknownRecords": 0, "malformed": 0, "queueDepth": 0, "maxQueueDepth": 0,
                         "ingestLagMs": None, "maxIngestLagMs": 0, "tapeLagMs": None, "published": 0, "processingMs": 0.0, "systemMessages": 0, "errors": 0}
         self._rate = deque(maxlen=64)  # (ms, records) samples for the ingest rate
@@ -169,6 +179,7 @@ class Hub:
             self.metrics["unknownRecords"] += 1
 
     def _mapping(self, r) -> None:
+        self.start_rejections = 0  # the gateway accepted the subscription (start included)
         change = self.symmap.on_mapping(r, self.now())
         if change is None:
             return
@@ -238,7 +249,23 @@ class Hub:
             s = self.sessions[session]
             code = "AUTH_ERROR" if kind == AUTH else "NOT_ENTITLED" if kind == ENTITLEMENT else "ERROR"
             s.last_error = {"code": code, "message": msg, "atMs": self.now(), "schema": schema}
-            if kind == AUTH:
+            if kind == START:
+                # The replay start was outside Databento's intraday window. Not an auth / entitlement problem:
+                # remember the gateway's boundary and reconnect ONCE with a valid start (bounded by the manager).
+                code = "START_TIME"
+                s.last_error["code"] = code
+                self.start_rejections += 1
+                self.start_error_pending = True
+                boundary = parse_start_boundary_ns(msg)
+                if boundary is not None:
+                    floor = boundary + START_BOUNDARY_PAD_NS
+                else:
+                    # Boundary not stated in a form we can parse: step one hour further inside the window instead.
+                    floor = self.replay_window_start_ns() + 60 * MINUTE_NS
+                self.replay_floor_ns = max(self.replay_floor_ns or 0, floor)
+                if not fatal:
+                    self.request_resync(session, "replay start rejected by the gateway - reconnecting with a valid start")
+            elif kind == AUTH:
                 s.state = AUTH_ERROR
             elif kind == ENTITLEMENT:
                 own = [DEPTH_SCHEMA] if session == "book" else list(TAPE_SCHEMAS)
@@ -293,11 +320,37 @@ class Hub:
             self.resync_requests[session] = None
             return r
 
-    def tape_replay_start_ns(self) -> int:
-        """Replay start for the trades / ohlcv session: overlap before the oldest root's last trade, or the full
-        replay window for a root without history. A root whose history is older than the window gets a GAP flag."""
+    def replay_window_start_ns(self) -> int:
+        """Earliest start this bridge will request: `replay_hours` back, kept `replay_margin_min` inside Databento's
+        rolling intraday window, rounded UP to a whole minute, and never before a boundary the gateway reported."""
+        start = (self.now() - self.cfg.replay_hours * 3_600_000 + self.cfg.replay_margin_min * 60_000) * 1_000_000
+        start = -(-start // MINUTE_NS) * MINUTE_NS
+        if self.replay_floor_ns is not None:
+            start = max(start, self.replay_floor_ns)
+        return min(start, self.now() * 1_000_000)  # never in the future
+
+    def take_start_error(self) -> bool:
         with self.lock:
-            window_start = (self.now() - self.cfg.replay_hours * 3_600_000) * 1_000_000
+            v, self.start_error_pending = self.start_error_pending, False
+            return v
+
+    def disable_replay(self, reason: str) -> None:
+        """Live-only fallback (no `start`): used only after repeated start rejections. History before the connect is
+        then missing - flagged as a gap, never filled."""
+        with self.lock:
+            if self.replay_disabled_reason is None:
+                self.replay_disabled_reason = reason
+                self.note_tape_gap(reason)
+
+    def tape_replay_start_ns(self) -> int | None:
+        """Replay start for the trades / ohlcv session: overlap before the oldest root's last trade, or the full
+        replay window for a root without history. A root whose history is older than the window gets a GAP flag.
+        None = live only (replay disabled after repeated start rejections)."""
+        with self.lock:
+            if self.replay_disabled_reason is not None:
+                self.last_replay_start_ns = None
+                return None
+            window_start = self.replay_window_start_ns()
             starts = []
             for st in self.roots.values():
                 s = st.tape.replay_start_ns() if st.tape else None
@@ -309,7 +362,8 @@ class Hub:
                     starts.append(window_start)
                 else:
                     starts.append(s)
-            return max(min(starts), window_start)
+            self.last_replay_start_ns = max(min(starts), window_start)
+            return self.last_replay_start_ns
 
     def note_tape_gap(self, reason: str) -> None:
         with self.lock:
@@ -453,6 +507,8 @@ class Hub:
                 "rolls": list(self.symmap.rolls),
                 "metrics": {**self.metrics, "ingestRatePerSec": round(rate, 1), "frames": len(self.frames), "cursor": self.cursor},
                 "retention": {"maxTrades": self.cfg.max_trades, "maxFrames": self.cfg.max_frames, "publishMs": self.cfg.publish_ms, "replayHours": self.cfg.replay_hours},
+                "replay": {"requestedStartNs": self.last_replay_start_ns, "floorNs": self.replay_floor_ns, "marginMin": self.cfg.replay_margin_min,
+                           "liveOnly": self.replay_disabled_reason is not None, "liveOnlyReason": self.replay_disabled_reason, "startRejections": self.start_rejections},
                 "timeMs": now,
             }
 

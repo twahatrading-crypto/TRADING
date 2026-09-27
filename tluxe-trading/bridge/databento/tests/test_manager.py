@@ -74,8 +74,11 @@ class TestManager(unittest.TestCase):
         self.assertTrue(rig.run_until(lambda: rig.hub.roots["GC"].tape is not None and rig.hub.roots["GC"].tape.counts["accepted"] == 1))
         schemas = [s["schema"] for s in tape.subs]
         self.assertEqual(schemas, ["trades", "ohlcv-1m"])
-        window = (MS0 + 10 - 24 * 3_600_000) * 1_000_000
+        # 24 h back, kept 30 min INSIDE Databento's rolling window, rounded up to a whole minute (never exactly now - 24 h).
+        raw = (MS0 + 10 - 24 * 3_600_000 + 30 * 60_000) * 1_000_000
+        window = -(-raw // 60_000_000_000) * 60_000_000_000
         self.assertTrue(all(s["start"] == window for s in tape.subs))
+        self.assertGreater(window, (MS0 + 10 - 24 * 3_600_000) * 1_000_000)
         rig.stop()
 
     def test_auth_error_is_reported_redacted_and_not_retried_in_a_tight_loop(self):

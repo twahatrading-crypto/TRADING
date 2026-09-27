@@ -87,6 +87,11 @@ reported (CVD shows PARTIAL).
   `NOT_ENTITLED` and is dropped from the subscription; a session with no entitled schema left stops. Never an
   `AUTH_ERROR`, never a reconnect loop, and the other capabilities keep working.
 - MBO (`mbo` plan): a new session with `snapshot=True` (SYNCING → VALID). The old book is frozen and never served as live.
+- Replay start: `TLUXE_DB_REPLAY_HOURS` back, kept `TLUXE_DB_REPLAY_MARGIN_MIN` (30) minutes inside Databento's
+  rolling intraday window and rounded up to a minute (never exactly `now - 24 h`). If the gateway still answers
+  `Invalid start time. Must be <T> or later`, the start is clamped to `<T>` + 2 min and the session reconnects ONCE;
+  a second rejection switches to live-only (no `start`; missing history flagged as a gap). Never an AUTH_ERROR, never
+  counted as a reconnect storm, never a loop. `/v1/health → replay` shows the requested start, floor and mode.
 - Trades: replay from 60 s before the last processed trade; replayed records are dropped exactly (de-dup key +
   occurrence index) — no double volume. An outage longer than the replay window is flagged as a **gap** (DEGRADED).
 

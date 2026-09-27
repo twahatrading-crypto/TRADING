@@ -81,6 +81,10 @@ class BridgeConfig:
     max_frames: int = 1200
     publish_ms: int = 250
     replay_hours: int = 24
+    # Intraday replay is limited to Databento's rolling window (about the last 24 h, boundary aligned by the gateway).
+    # The requested start stays this many minutes INSIDE the window, so clock skew / boundary alignment never makes
+    # the gateway reject the subscription ("Invalid start time. Must be ... or later").
+    replay_margin_min: int = 30
     # Freshness rules (see README): no Databento message (data or heartbeat) for stale_ms -> STALE;
     # ingest lag (now - ts_recv of the newest processed record) above lag_ms -> DEGRADED (consumer behind).
     heartbeat_s: int = 10
@@ -156,4 +160,5 @@ def from_env(env: dict | None = None) -> BridgeConfig:
         max_frames=_int(e, "TLUXE_DB_MAX_FRAMES", 1200, 60, 20_000),
         publish_ms=_int(e, "TLUXE_DB_PUBLISH_MS", 250, 50, 5000),
         replay_hours=_int(e, "TLUXE_DB_REPLAY_HOURS", 24, 0, 24),
+        replay_margin_min=_int(e, "TLUXE_DB_REPLAY_MARGIN_MIN", 30, 0, 240),
     )

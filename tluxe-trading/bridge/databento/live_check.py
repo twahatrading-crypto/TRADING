@@ -77,6 +77,10 @@ def main() -> int:
     ok_all = True
     authenticated = tape_s["connectedAtMs"] is not None and tape_s["state"] != "AUTH_ERROR"
     print(f"\nPlan mode: {cfg.plan} · dataset {h['dataset']} · requested schemas {h['schemas']['requested']}")
+    rp = h["replay"]
+    fmt = lambda ns: "-" if ns is None else time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ns / 1e9))  # noqa: E731
+    print(f"Replay start requested: {fmt(rp['requestedStartNs'])} · gateway floor {fmt(rp['floorNs'])} · margin {rp['marginMin']} min"
+          f" · live-only {rp['liveOnly']}{' (' + rp['liveOnlyReason'] + ')' if rp['liveOnly'] else ''} · local clock {fmt(time.time_ns())}")
     for root, i in h["instruments"].items():
         s = seen[root]
         caps = i["capabilities"]

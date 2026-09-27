@@ -16,6 +16,9 @@ Recovery (Databento documented behaviour):
     the tape drops the overlap exactly (de-dup keys). An outage longer than the replay window is flagged as a GAP.
   * backoff 1 s -> 60 s with jitter; > STORM_MAX reconnects in STORM_WINDOW_S -> reconnect storm hold-off.
   * authentication failure -> AUTH_ERROR, retried only every AUTH_RETRY_S (never a tight loop).
+  * replay start outside Databento's intraday window ("Invalid start time. Must be <T> or later"): the next start
+    is clamped to the gateway's boundary (+ pad) and the session reconnects ONCE; a further rejection switches the
+    tape session to live-only (no `start`, history gap flagged). Never counted as a disconnect storm, never a loop.
   * entitlement ("Not authorized for <schema> schema") -> that schema is dropped from the subscription (NOT_ENTITLED);
     a session with no entitled schema left stops. Never an AUTH_ERROR, never a reconnect loop.
 """
@@ -30,7 +33,7 @@ from collections import deque
 from typing import Callable
 
 from .config import DATASET, BridgeConfig, Secret
-from .entitlement import AUTH, ENTITLEMENT
+from .entitlement import AUTH, ENTITLEMENT, START
 from .hub import Hub
 
 log = logging.getLogger("tluxe.databento")
@@ -40,6 +43,7 @@ STORM_WINDOW_S = 300
 STORM_MAX = 8
 STORM_HOLD_S = 120
 RESYNC_MIN_INTERVAL_S = 15
+MAX_START_CORRECTIONS = 1  # reconnects with a corrected start before falling back to live-only
 HARD_QUEUE_LIMIT = 2_000_000
 BATCH = 1000
 BATCH_MAX_S = 0.02  # never hold the hub lock longer than this: frames keep flowing under load
@@ -219,7 +223,8 @@ class SessionRunner(threading.Thread):
         except Exception as exc:
             # Applied synchronously (thread-safe) so the next attempt already knows an entitlement / auth outcome.
             kind = self.hub.on_error(self.session, str(exc), fatal=True)
-            return "auth" if kind == AUTH else "entitlement" if kind == ENTITLEMENT else "reconnect"
+            self.hub.take_start_error()
+            return "auth" if kind == AUTH else "entitlement" if kind == ENTITLEMENT else "start" if kind == START else "reconnect"
         self.client = client
         self.ingest.control(self.session, "connected")
         done = threading.Event()
@@ -260,10 +265,13 @@ class SessionRunner(threading.Thread):
                 why = "auth"
             elif kind == ENTITLEMENT and why != "stop":
                 why = "entitlement"
+        if why != "stop" and self.hub.take_start_error():
+            why = "start"  # also covers an in-stream ErrorMsg (resync requested by the hub)
         return why
 
     def run(self) -> None:
         backoff = 1.0
+        start_corrections = 0
         while not self.stop_evt.is_set():
             self.ingest.wait_applied()
             if not self.hub.requested_schemas(self.session):
@@ -278,6 +286,17 @@ class SessionRunner(threading.Thread):
             if why == "auth":
                 self._sleep(AUTH_RETRY_S)
                 continue
+            if why == "start":
+                start_corrections += 1
+                if start_corrections > MAX_START_CORRECTIONS:
+                    msg = "Databento rejected the intraday replay start again - live-only (history before connect unavailable, gap flagged)"
+                    log.warning("%s session: %s", self.session, msg)
+                    self.hub.disable_replay(msg)
+                else:
+                    log.warning("%s session: replay start rejected - reconnecting once with a start inside the allowed window", self.session)
+                self._sleep(1.0)
+                continue
+            start_corrections = 0
             if why in ("resync", "entitlement"):
                 # entitlement: the rejected schema is now excluded; reconnect once with the remaining schemas.
                 self._sleep(0.2 if why == "resync" else 1.0)
