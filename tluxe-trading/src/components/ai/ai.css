@@ -98,6 +98,7 @@
 .ai__action span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ai__action svg { color: var(--gold); flex: none; }
 .ai__action:hover:not(:disabled) { border-color: var(--border-gold); background: var(--panel-hover); }
+.ai__action:disabled { opacity: 0.5; cursor: not-allowed; }
 .ai__action:last-child:nth-child(odd) { grid-column: 1 / -1; justify-content: center; }
 
 .ai__log {
@@ -209,3 +210,36 @@
   color: var(--text-4);
   text-align: center;
 }
+/* Chat controls (Stop / Retry / Clear) and Markdown answers. */
+.ai__stop { background: var(--bg-raised); color: var(--text); border: 1px solid var(--border-strong); }
+.ai__input input:disabled { opacity: 0.55; cursor: not-allowed; }
+.ai__retry,
+.ai__clear {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-2);
+  font-size: var(--fs-2xs);
+  cursor: pointer;
+}
+.ai__retry:hover,
+.ai__clear:hover { border-color: var(--border-gold); color: var(--text); }
+.ai__clear { margin-left: 8px; }
+.ai__msg.is-error .ai__bubble { border-color: rgba(239, 93, 93, 0.45); color: #f3a0a0; }
+.ai__thinking { color: var(--text-3); font-style: italic; }
+.ai-md > :first-child { margin-top: 0; }
+.ai-md > :last-child { margin-bottom: 0; }
+.ai-md p, .ai-md ul, .ai-md ol, .ai-md blockquote, .ai-md pre { margin: 0 0 8px; }
+.ai-md ul, .ai-md ol { padding-left: 18px; }
+.ai-md li + li { margin-top: 2px; }
+.ai-md code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.92em; padding: 1px 4px; border-radius: 4px; background: var(--bg); border: 1px solid var(--border); }
+.ai-md pre { padding: 8px 10px; border-radius: var(--radius-sm); background: var(--bg); border: 1px solid var(--border); overflow-x: auto; max-width: 100%; }
+.ai-md pre code { padding: 0; border: 0; background: none; white-space: pre; }
+.ai-md blockquote { padding-left: 10px; border-left: 3px solid var(--border-gold); color: var(--text-2); }
+.ai-md__h { font-weight: 700; color: var(--text); margin: 4px 0 6px; }
+.ai-md__h1 { font-size: var(--fs-md); }
+.ai-md a { color: var(--gold-bright); }

@@ -6,20 +6,37 @@ import {
   FlaskConical,
   Hammer,
   Microscope,
+  RotateCcw,
   Send,
+  Square,
+  Trash2,
   Wrench,
   type LucideIcon,
 } from 'lucide-react';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useServices } from '../../app/servicesContext';
+import { QUOTE_STALE_AFTER_MS } from '../../config/instrument';
 import { useDisplayTimeZone } from '../../hooks/useDisplayTimeZone';
 import { useActiveInstrument, useMarket } from '../../hooks/useMarket';
 import { AI_ACTION_LABELS } from '../../services/ai/AiService';
+import { getQuoteDisplayMode } from '../../services/market/normalize';
+import { useNow } from '../../store/clock';
 import { useStore } from '../../store/createStore';
 import type { AiActionId, AiTab } from '../../types/ai';
 import { formatHm24 } from '../../utils/format';
 import { StatusPill } from '../ui/StatusPill';
+import { Markdown } from './Markdown';
 import './ai.css';
+
+/** Phase 1: only Chat is real. The other modes are shown but not faked. */
+const NOT_READY = 'Not available yet — Phase 1 is Chat only (read-only).';
+const MARKET_LABEL: Record<string, { text: string; tone: string }> = {
+  live: { text: 'Live', tone: 'is-ok' },
+  delayed: { text: 'Delayed', tone: 'is-warn' },
+  stale: { text: 'Stale', tone: 'is-warn' },
+  connecting: { text: 'Not connected', tone: 'is-warn' },
+  unavailable: { text: 'Not connected', tone: 'is-warn' },
+};
 
 const TABS: { id: AiTab; label: string; icon: LucideIcon }[] = [
   { id: 'chat', label: 'Chat', icon: BrainCircuit },
@@ -67,24 +84,28 @@ export function AiPanel() {
   const { ai } = useServices();
   const state = useStore(ai.store, (s) => s);
   const instrument = useActiveInstrument();
-  const marketConnection = useMarket((s) => s.connection);
+  const market = useMarket((s) => s);
+  const now = useNow('second');
   const tz = useDisplayTimeZone();
   const [tab, setTab] = useState<AiTab>('chat');
   const [draft, setDraft] = useState('');
   const logRef = useRef<HTMLDivElement>(null);
   const connected = state.status === 'CONNECTED';
-  const marketLive = marketConnection === 'LIVE' || marketConnection === 'DELAYED';
+  const marketMode = MARKET_LABEL[getQuoteDisplayMode(market, now, QUOTE_STALE_AFTER_MS)] ?? MARKET_LABEL.unavailable!;
   const intro = TAB_INTRO[tab];
+  const chatTab = tab === 'chat';
+  const lastRetry = [...state.messages].reverse().find((m) => m.role === 'system')?.retryOf ? [...state.messages].reverse().find((m) => m.role === 'system') : undefined;
 
   useEffect(() => ai.setInstrument(instrument.id), [ai, instrument.id]);
 
   useEffect(() => {
     const el = logRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [state.messages.length]);
+  }, [state.messages.length, state.pending]);
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
+    if (state.pending || !draft.trim() || !chatTab) return; // no duplicate / blank / not-ready sends
     void ai.send(tab, draft);
     setDraft('');
   };
@@ -103,7 +124,7 @@ export function AiPanel() {
           tone={connected ? 'ok' : 'warn'}
           label={connected ? 'Connected' : 'Not Connected'}
           compact
-          title={connected ? state.providerName ?? undefined : 'No AI provider configured'}
+          title={connected ? state.providerName ?? undefined : state.statusReason ?? 'No AI provider configured'}
         />
       </header>
 
@@ -117,7 +138,7 @@ export function AiPanel() {
 
       <div className="ai__actions" aria-label="Quick actions">
         {ACTIONS.map(({ id, icon: Icon }) => (
-          <button key={id} type="button" className="ai__action" onClick={() => void ai.runAction(tab, id)} disabled={state.pending}>
+          <button key={id} type="button" className="ai__action" onClick={() => void ai.runAction(tab, id)} disabled title={NOT_READY}>
             <Icon size={15} />
             <span>{AI_ACTION_LABELS[id]}</span>
           </button>
@@ -132,37 +153,54 @@ export function AiPanel() {
               <li key={i}>{i}</li>
             ))}
           </ul>
+          {!chatTab && (
+            <p className="ai__offline" role="note" data-testid="ai-not-ready">
+              {NOT_READY}
+            </p>
+          )}
           <dl className="ai__ws">
             <div>
               <dt>AI provider</dt>
-              <dd className={connected ? 'is-ok' : 'is-warn'}>{connected ? state.providerName : 'Not connected'}</dd>
+              <dd className={connected ? 'is-ok' : 'is-warn'} data-testid="ai-provider-status" title={connected ? undefined : state.statusReason ?? undefined}>
+                {connected ? 'Connected' : 'Not connected'}
+              </dd>
             </div>
             <div>
               <dt>Instrument</dt>
               <dd className="is-ctx" data-testid="ai-instrument">{instrument.shortName}</dd>
             </div>
             <div>
-              <dt>{instrument.shortName} data</dt>
-              <dd className={marketLive ? 'is-ok' : 'is-warn'}>{marketLive ? 'Live feed' : 'Not connected'}</dd>
+              <dt>Market data</dt>
+              <dd className={marketMode.tone} data-testid="ai-market-status">{marketMode.text}</dd>
             </div>
             <div>
               <dt>Engine access</dt>
-              <dd className="is-off">Disabled · Phase 1</dd>
+              <dd className={state.contextAvailable ? 'is-ok' : 'is-off'} data-testid="ai-engine-access">{state.contextAvailable ? 'Read Only' : 'Disabled'}</dd>
             </div>
           </dl>
           {!connected && (
             <p className="ai__offline" role="note">
               Requests are not sent and no responses are generated until an AI provider is configured.
+              {state.statusReason ? ` ${state.statusReason}` : ''}
             </p>
           )}
         </div>
         {state.messages.map((m) => (
-          <div key={m.id} className={`ai__msg ai__msg--${m.role}`}>
-            <div className="ai__bubble">{m.text}</div>
+          <div key={m.id} className={`ai__msg ai__msg--${m.role}${m.state === 'error' ? ' is-error' : ''}`}>
+            <div className="ai__bubble">{m.role === 'assistant' ? <Markdown text={m.text} /> : m.text}</div>
+            {m.retryOf && m === lastRetry && !state.pending && (
+              <button type="button" className="ai__retry" onClick={() => void ai.retry(tab)}>
+                <RotateCcw size={12} /> Retry
+              </button>
+            )}
             <span className="ai__stamp num">{formatHm24(m.createdAt, tz)}</span>
           </div>
         ))}
-        {state.pending && <div className="ai__msg ai__msg--assistant"><div className="ai__bubble">…</div></div>}
+        {state.pending && (
+          <div className="ai__msg ai__msg--assistant" aria-busy="true">
+            <div className="ai__bubble ai__thinking">Thinking…</div>
+          </div>
+        )}
       </div>
 
       <div className="ai__composer">
@@ -172,14 +210,29 @@ export function AiPanel() {
             id="ai-input"
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
-            placeholder={`${intro.placeholder.replace('…', '')} (${instrument.shortName})…`}
+            placeholder={chatTab ? `${intro.placeholder.replace('…', '')} (${instrument.shortName})…` : NOT_READY}
             autoComplete="off"
+            disabled={!chatTab}
+            maxLength={8000}
           />
-          <button type="submit" className="ai__send" aria-label="Send" disabled={!draft.trim() || state.pending}>
-            <Send size={16} />
-          </button>
+          {state.pending ? (
+            <button type="button" className="ai__send ai__stop" aria-label="Stop" title="Stop generating" onClick={() => ai.cancel()}>
+              <Square size={14} />
+            </button>
+          ) : (
+            <button type="submit" className="ai__send" aria-label="Send" disabled={!draft.trim() || !chatTab}>
+              <Send size={16} />
+            </button>
+          )}
         </form>
-        <p className="ai__foot">{connected ? `Model: ${state.providerName}` : 'Offline — messages are not sent while the AI provider is disconnected.'}</p>
+        <p className="ai__foot">
+          {connected ? `Model: ${state.providerName} · read-only` : 'Offline — messages are not sent while the AI provider is disconnected.'}
+          {state.messages.length > 0 && (
+            <button type="button" className="ai__clear" onClick={() => ai.clear()}>
+              <Trash2 size={11} /> Clear conversation
+            </button>
+          )}
+        </p>
       </div>
     </section>
   );

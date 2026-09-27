@@ -5,6 +5,9 @@ import type { NewsItem } from '../types/news';
 import type { ProviderStatus } from '../types/providers';
 import { NullAiProvider, type AiProvider } from './ai/AiProvider';
 import { AiService } from './ai/AiService';
+import { buildAiContext } from './ai/context/buildAiContext';
+import { loadTluxeAiConfig } from '../providers/ai/config';
+import { TluxeAiProvider } from '../providers/ai/TluxeAiProvider';
 import { createCalendarService, type CalendarProvider, type CalendarService } from './calendar/CalendarProvider';
 import { NullFeedProvider } from './feed/FeedProvider';
 import { InstrumentSelection } from './instruments/InstrumentSelection';
@@ -111,7 +114,8 @@ export function defaultProviders(storage: Pick<Storage, 'getItem' | 'setItem'> |
     depth: [],
     news: new NullFeedProvider<NewsItem>(),
     calendar: new NullFeedProvider<EconomicEvent>(),
-    ai: new NullAiProvider(),
+    // TLUXE AI only when the user configured the local backend (bridge/ai). The OpenAI key never reaches the browser.
+    ai: aiProvider(storage),
   };
 }
 
@@ -122,7 +126,7 @@ export function createServices(providers: ProviderSet = defaultProviders(), opts
   const storage = opts.storage === undefined ? browserStorage() : opts.storage;
   const sr = new SRService(market, selection, storage);
   const smc = new SmcService(market, selection);
-  return {
+  const services: Services = {
     instruments: selection,
     market,
     news: createNewsService(providers.news),
@@ -142,6 +146,14 @@ export function createServices(providers: ProviderSet = defaultProviders(), opts
     databento: providers.databento ?? null,
     databaseStatus: 'NOT_CONNECTED',
   };
+  // READ-ONLY context for TLUXE AI: reads the stores above at send time (never calls providers or changes settings).
+  services.ai.setContextSource(() => buildAiContext(services, Date.now(), storage));
+  return services;
+}
+
+function aiProvider(storage: Pick<Storage, 'getItem' | 'setItem'> | null): AiProvider {
+  const cfg = loadTluxeAiConfig(storage);
+  return cfg.enabled && cfg.token ? new TluxeAiProvider(cfg) : new NullAiProvider();
 }
 
 /** Production never runs on TEST order-flow data: a test provider is refused unless explicitly allowed. */
@@ -191,6 +203,7 @@ export function connectServices(s: Services): () => void {
   const stopNews = s.newsAnalysis.start();
   const stopVP = s.volumeProfile.start();
   const stopFP = s.volumeFootprint.start();
+  const stopAi = s.ai.start();
   const teardown = () => {
     if (connected.get(s) !== teardown) return;
     connected.delete(s);
@@ -205,6 +218,7 @@ export function connectServices(s: Services): () => void {
     stopNews();
     stopVP();
     stopFP();
+    stopAi();
     s.market.disconnect();
     s.news.disconnect();
     s.calendar.disconnect();

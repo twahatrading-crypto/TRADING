@@ -20,6 +20,10 @@ private bridge in [`bridge/mt5`](bridge/mt5/README.md), enabled in **Settings**.
 [`docs/MT5_DATA.md`](docs/MT5_DATA.md) for the data pipeline and time handling. Unknown values are `null` and render as `—`.
 Nothing is simulated.
 
+**TLUXE AI** (Chat, read-only) talks to a local backend in [`bridge/ai`](bridge/ai/README.md) (127.0.0.1:8767,
+`bridge\ai\start_ai.cmd`), which calls the OpenAI Responses API. The OpenAI key lives only in `bridge/ai/.env`;
+without it the panel stays **Not Connected**.
+
 ## Instruments
 
 Canonical registry: `src/config/instruments.ts` — GC, SI (COMEX futures), XAUUSD,

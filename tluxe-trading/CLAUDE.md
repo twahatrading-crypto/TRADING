@@ -34,6 +34,7 @@ Open ONLY the newest preview. Leave exactly one TLUXE preview running.
 ## 6. MT5
 - Bridge: **http://127.0.0.1:8765**, a separate process from the frontend (`tluxe-trading\bridge\mt5`).
 - Databento bridge: **http://127.0.0.1:8766** (`tluxe-trading\bridge\databento`), same origin / token rules; never touch other ports.
+- TLUXE AI backend: **http://127.0.0.1:8767** (`tluxe-trading\bridge\ai`), same origin / token rules.
 - The bridge must allow the current preview origin: `http://localhost:5182`, `http://127.0.0.1:5182`
   (plus 5181 kept from the previous preview and 4181 for the production preview). A refused origin looks exactly like an offline bridge.
   The bridge logs `Rejected browser origin ...`, and Settings shows which origin is required.
@@ -182,6 +183,13 @@ BUY/SELL setup states with entry zone / SL / TP / R:R appear ONLY on the High / 
   Aggressor from the source side only (B BUY / A SELL / N UNKNOWN). Header label is provider-aware ("DATABENTO · LIVE",
   never "MT5 · LIVE"); `DatabentoStrip` (GC / SI only) shows `DATABENTO • GLBX.MDP3 • status`, `GC • <contract>` and
   diagnostics. MT5 stays the source for XAUUSD / XAGUSD. Not configured -> GC / SI order flow DATA UNAVAILABLE.
+- TLUXE AI (`bridge/ai` Python backend with the official `openai` SDK, Responses API; `src/providers/ai`,
+  `src/services/ai`, `src/components/ai`): browser → 127.0.0.1:8767 (`TLUXE_AI_TOKEN`, exact origin allowlist) →
+  OpenAI. `OPENAI_API_KEY` lives ONLY in `bridge/ai/.env` (gitignored; never in the browser / logs / Git). Model is
+  server-side (`TLUXE_AI_MODEL`, default gpt-5.5). "Connected" only when the backend reports OpenAI verified key + model.
+  Phase 1: Chat only, READ-ONLY, no tools (Research / Analysis / Tools / quick actions disabled, never faked).
+  `buildAiContext` = bounded read-only context with provenance (LIVE / DELAYED / STALE / UNAVAILABLE); engine NO_DATA
+  placeholders are UNAVAILABLE; credential-named fields / key-shaped values are dropped. Start: `bridge\ai\start_ai.cmd`.
 - Sweep / Reversal is not built yet (disabled SOON in the sidebar).
 
 ## Chart navigation (shared by every strategy chart)
