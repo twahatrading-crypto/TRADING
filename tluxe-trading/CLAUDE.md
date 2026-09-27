@@ -31,6 +31,7 @@ Open ONLY the newest preview. Leave exactly one TLUXE preview running.
 
 ## 6. MT5
 - Bridge: **http://127.0.0.1:8765**, a separate process from the frontend (`tluxe-trading\bridge\mt5`).
+- Databento bridge: **http://127.0.0.1:8766** (`tluxe-trading\bridge\databento`), same origin / token rules; never touch other ports.
 - The bridge must allow the current preview origin: `http://localhost:5181`, `http://127.0.0.1:5181`
   (plus 4181 for the production preview). A refused origin looks exactly like an offline bridge.
   The bridge logs `Rejected browser origin ...`, and Settings shows which origin is required.
@@ -110,7 +111,7 @@ BUY/SELL setup states with entry zone / SL / TP / R:R appear ONLY on the High / 
   module for exchange Level-2 depth + time & sales of a FUTURE (GC — COMEX), never XAUUSD spot/CFD. MT5 is never a
   source (no exchange book, no aggressor side). Depth and trades come ONLY from `OrderFlowDepthProvider` /
   `OrderFlowTradeProvider` adapters (Rithmic / T4 / CQG later) via normalized, sequenced messages; gaps → SEQUENCE GAP →
-  snapshot resync → rebuild → LIVE. No real provider exists yet: production shows LEVEL-2 DATA UNAVAILABLE.
+  snapshot resync → rebuild → LIVE. Real provider: Databento GLBX.MDP3 (see below); without it production shows LEVEL-2 DATA UNAVAILABLE.
   NO FAKE ORDER-BOOK DATA: synthetic streams live only in `engines/orderFlow/testing` and
   `providers/orderFlow/testing` (TEST DATA, `info.test = true`, refused by the registry unless `allowTestProviders`).
   Events are evidence-only (never spoofing / iceberg claims); no trading signals. Dev visual harness:
@@ -149,7 +150,7 @@ BUY/SELL setup states with entry zone / SL / TP / R:R appear ONLY on the High / 
   COMEX; other futures later). Built ONLY from genuine exchange time & sales via `FootprintTradeProvider` (Rithmic / T4 /
   CQG adapters later), which declares its aggressor source (EXCHANGE / CLASSIFIED with a named method / NONE). Never from
   MT5, OHLC candles or tick volume; never splits volume; UNKNOWN aggressor stays UNKNOWN (NONE → FOOTPRINT DATA
-  UNAVAILABLE for Bid × Ask). No provider exists yet: production shows FOOTPRINT DATA UNAVAILABLE and names the missing
+  UNAVAILABLE for Bid × Ask). Real provider: Databento (see below); without it production shows FOOTPRINT DATA UNAVAILABLE and names the missing
   capability. Bid × Ask / delta / POC / diagonal imbalance / stacked imbalance / absorption, exhaustion, delta-divergence
   and unfinished-auction CANDIDATES (evidence only — never BUY / SELL / entry / SL / TP). Integrity: duplicates dropped,
   sequence gaps flagged (never filled), late trades excluded (closed candles never repaint), disconnects flagged,
@@ -157,6 +158,19 @@ BUY/SELL setup states with entry zone / SL / TP / R:R appear ONLY on the High / 
   in `volumeFootprint/replay.ts` + `services/volumeFootprint/FPReplay.ts`. Canvas rendering via `FootprintPrimitive`
   on the shared ChartStage. TEST DATA only in `engines/volumeFootprint/testing` / `providers/footprint/testing`
   (refused unless `allowTestProviders`). Dev visual harness: `/footprint-harness.html` (TEST DATA, bannered, dev only).
+- Databento market data (`bridge/databento` Python bridge with the official `databento` SDK, `src/providers/databento`,
+  `src/components/databento`): REAL CME Globex MDP 3.0 (`GLBX.MDP3`) for GC and SI only - MARKET DATA ONLY (no order
+  entry). `DATABENTO_API_KEY` lives ONLY in `bridge/databento/.env` (gitignored; server-side; fail closed if missing;
+  never logged, never returned, never in the browser). Bridge: 127.0.0.1:8766, `TLUXE_DB_BRIDGE_TOKEN` + origin
+  allowlist; start with `bridge/databento/start_bridge.cmd`; live validation `live_check.py` on the user's machine.
+  Sessions: `mbo` (snapshot=True) -> order-level books (SYNCING until F_SNAPSHOT|F_LAST, DEGRADED + resync on
+  F_MAYBE_BAD_BOOK / inconsistency); `trades` + `ohlcv-1m` with intraday replay (exact de-dup, gaps flagged).
+  Continuous `GC.v.0` / `SI.v.0` (or manual raw contracts); SymbolMappingMsg -> actual contract always shown; a roll
+  rebuilds book / tape / candles (contracts never merged). ONE browser `DatabentoFeed` (ref-counted poll chain) feeds
+  thin adapters for the EXISTING interfaces (MarketDataProvider 'futures-feed', OrderFlow depth+trade, Footprint).
+  Aggressor from the source side only (B BUY / A SELL / N UNKNOWN). Header label is provider-aware ("DATABENTO · LIVE",
+  never "MT5 · LIVE"); `DatabentoStrip` (GC / SI only) shows `DATABENTO • GLBX.MDP3 • status`, `GC • <contract>` and
+  diagnostics. MT5 stays the source for XAUUSD / XAGUSD. Not configured -> GC / SI order flow DATA UNAVAILABLE.
 - Sweep / Reversal is not built yet (disabled SOON in the sidebar).
 
 ## Chart navigation (shared by every strategy chart)

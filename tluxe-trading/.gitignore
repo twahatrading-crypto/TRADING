@@ -4,3 +4,10 @@ dist
 .vite
 coverage
 *.tsbuildinfo
+# Secrets (API keys, bridge tokens) - never committed. Placeholders live in *.env.example only.
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example

@@ -3,7 +3,8 @@ import { QUOTE_STALE_AFTER_MS } from '../../config/instrument';
 import { UPCOMING_WINDOW_MS } from '../../config/sessions';
 import { useActiveInstrument, useMarket } from '../../hooks/useMarket';
 import { CONNECTION_LABEL, getQuoteDisplayMode, type QuoteDisplayMode } from '../../services/market/normalize';
-import { FEED_LABEL, FEED_TONE } from '../../services/mt5/freshness';
+import { feedLabelFor } from './feedLabel';
+import { FEED_TONE } from '../../services/mt5/freshness';
 import { useNow } from '../../store/clock';
 import type { ConnectionState, MarketState } from '../../types/market';
 import { directionOf, formatPercent, formatPrice, formatSigned, formatVolume, UNKNOWN } from '../../utils/format';
@@ -116,7 +117,7 @@ export function MarketBar({ onMenu, menuOpen }: { onMenu?: () => void; menuOpen?
         <div className="mbar__conn">
           <StatusPill
             tone={feed ? FEED_TONE[feed.code] : CONNECTION_TONE[connection]}
-            label={feed ? FEED_LABEL[feed.code] : CONNECTION_LABEL[connection]}
+            label={feed ? feedLabelFor(feed.code, provider) : CONNECTION_LABEL[connection]}
             pulse={feed ? feed.code === 'LIVE' : connection === 'LIVE' || connection === 'CONNECTING'}
             title={feed?.message ?? undefined}
             compact

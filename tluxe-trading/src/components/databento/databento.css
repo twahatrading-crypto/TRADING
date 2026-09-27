@@ -1,0 +1,16 @@
+/* Databento provider strip (GC / SI only) - compact, below the market bar. */
+.dbstrip { border-bottom: 1px solid var(--border); background: var(--panel); padding: 5px clamp(10px, 1.2vw, 18px); font-size: 11.5px; color: var(--text-2); }
+.dbstrip__row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; min-width: 0; }
+.dbstrip__badge { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border-radius: 999px; font-weight: 800; letter-spacing: 0.06em; font-size: 10.5px; border: 1px solid var(--border); }
+.dbstrip__contract { font-weight: 700; color: var(--text); letter-spacing: 0.04em; }
+.dbstrip__note { color: var(--text-3); overflow-wrap: anywhere; }
+.dbstrip__toggle { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; background: none; border: 1px solid var(--border); border-radius: 6px; color: var(--text-2); font: inherit; font-size: 11px; padding: 2px 8px; cursor: pointer; }
+.dbstrip.is-ok .dbstrip__badge { color: #86e3c6; border-color: rgba(60, 201, 160, 0.5); background: rgba(60, 201, 160, 0.1); }
+.dbstrip.is-warn .dbstrip__badge { color: var(--amber); border-color: rgba(240, 180, 60, 0.5); background: var(--amber-soft); }
+.dbstrip.is-bad .dbstrip__badge { color: #f3a0a0; border-color: rgba(239, 93, 93, 0.5); background: rgba(239, 93, 93, 0.1); }
+.dbstrip.is-info .dbstrip__badge { color: #a9c1ff; border-color: rgba(91, 140, 255, 0.45); }
+.dbstrip.is-off .dbstrip__badge { color: var(--text-3); }
+.dbstrip__diag { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 4px 18px; margin: 8px 0 4px; }
+.dbstrip__diag div { display: flex; gap: 8px; min-width: 0; }
+.dbstrip__diag dt { color: var(--text-3); flex: none; width: 128px; }
+.dbstrip__diag dd { margin: 0; color: var(--text); overflow-wrap: anywhere; }

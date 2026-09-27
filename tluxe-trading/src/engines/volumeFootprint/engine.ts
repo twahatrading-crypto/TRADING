@@ -382,7 +382,7 @@ export class FootprintEngine {
     if (reasons.length) state = 'UNAVAILABLE';
     else {
       if (this.problemAt !== null && this.lastExch !== null && this.lastExch - this.problemAt <= FP_DEGRADED_WINDOW_MS) reasons.push('Gap / late trade / disconnect in the last 30 minutes.');
-      if (!this.caps.sequenced) reasons.push('Feed is not sequenced — missing trades cannot be detected.');
+      if (!this.caps.sequenced && !this.caps.providerGapReporting) reasons.push('Feed is not sequenced — missing trades cannot be detected.');
       if (!this.caps.exchangeTimestamps) reasons.push('No exchange timestamps — receive time used.');
       if (reasons.length) state = 'DEGRADED';
     }

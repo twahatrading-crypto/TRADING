@@ -1,0 +1,2 @@
+# Official Databento Python client (pinned; upgrade deliberately and re-run the tests).
+databento==0.87.0

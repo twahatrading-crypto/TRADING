@@ -22,6 +22,10 @@ export function chooseVolume(bars: readonly Candle[], ctx: InstrumentVolumeConte
     return { source: { mode, label, detail, usedBars: used, missingBars: bars.length - used }, vol };
   };
   if (!bars.length) return mk('NONE', 'VOLUME DATA UNAVAILABLE', 'No closed candles for this profile.', () => null);
+  if (ctx.kind === 'future' && bars.every((b) => b.source === 'databento' && pos(b.volume))) {
+    const contracts = [...new Set(bars.map((b) => b.providerSymbol).filter(Boolean))];
+    return mk('EXCHANGE', 'Databento / CME Globex / COMEX', `Real exchange volume (Databento GLBX.MDP3 ohlcv-1m) · contract ${contracts.join(', ') || 'unknown'}.`, (c) => (pos(c.volume) ? c.volume! : null));
+  }
   if (ctx.kind === 'future' && bars.every((b) => b.source !== 'mt5' && pos(b.volume)))
     return mk('EXCHANGE', `${ctx.exchange ?? 'Exchange'} Exchange Volume`, 'Exchange-traded contracts from the futures data provider.', (c) => (pos(c.volume) ? c.volume! : null));
   if (bars.every((b) => pos(b.realVolume)))

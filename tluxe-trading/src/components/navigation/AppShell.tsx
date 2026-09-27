@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
+import { DatabentoStrip } from '../databento/DatabentoStrip';
 import { MarketBar } from '../market/MarketBar';
 import { SideNav } from './SideNav';
 import './nav.css';
@@ -24,6 +25,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       {navOpen && <button type="button" className="shell__scrim" aria-label="Close menu" onClick={() => setNavOpen(false)} />}
       <div className="shell__main">
         <MarketBar onMenu={() => setNavOpen(true)} menuOpen={navOpen} />
+        <DatabentoStrip />
         <div className="shell__page">{children}</div>
       </div>
     </div>

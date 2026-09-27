@@ -28,6 +28,11 @@ export interface FootprintCapabilities {
   tradeIds: boolean;
   /** Exchange timestamps on trades (else only receive time). */
   exchangeTimestamps: boolean;
+  /**
+   * The provider detects missing trades itself (e.g. Databento: gap-free intraday replay after reconnects, gaps
+   * reported as status) even though its per-trade sequence is not contiguous per instrument.
+   */
+  providerGapReporting?: boolean;
 }
 export const NO_FOOTPRINT_CAPS: Readonly<FootprintCapabilities> = Object.freeze({ trades: false, aggressor: 'NONE', classificationMethod: null, sequenced: false, tradeIds: false, exchangeTimestamps: false });
 

@@ -10,6 +10,7 @@ import type { Mt5Provider, Mt5ProviderState } from '../../services/mt5/Mt5Provid
 import { useNow } from '../../store/clock';
 import { useStore } from '../../store/createStore';
 import { formatPrice, UNKNOWN } from '../../utils/format';
+import { DatabentoSettingsPanel } from '../databento/DatabentoSettings';
 import { Panel } from '../ui/Panel';
 import { StatusPill } from '../ui/StatusPill';
 import './settings.css';
@@ -72,6 +73,7 @@ export function SettingsPage() {
           {mt5 ? <BridgePanel provider={mt5} /> : <DisabledPanel />}
           <FeedPanel />
           {mt5 && <DiscoveryPanel provider={mt5} />}
+          <DatabentoSettingsPanel />
         </div>
       </main>
     </>

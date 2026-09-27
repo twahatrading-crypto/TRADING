@@ -26,6 +26,9 @@ import { OrderBlockService } from './orderBlocks/OrderBlockService';
 import { HLRService } from './hlReversal/HLRService';
 import { HighLowEngineService } from './highLowEngine/HighLowEngineService';
 import { loadMt5Config } from './mt5/config';
+import { loadDatabentoConfig } from '../providers/databento/config';
+import { DatabentoFeed } from '../providers/databento/DatabentoFeed';
+import { DatabentoFootprintProvider, DatabentoMarketProvider, DatabentoOrderFlowProvider } from '../providers/databento/adapters';
 import { Mt5Provider } from './mt5/Mt5Provider';
 
 export interface Services {
@@ -51,6 +54,8 @@ export interface Services {
   volumeFootprint: VolumeFootprintService;
   /** MT5 price provider, when enabled in Settings (null otherwise). */
   mt5: Mt5Provider | null;
+  /** Databento (CME Globex / COMEX) bridge feed, when enabled in Settings (null otherwise). Market data only. */
+  databento: DatabentoFeed | null;
   /** Phase 1 has no persistence layer. */
   databaseStatus: ProviderStatus;
 }
@@ -69,6 +74,8 @@ export interface ProviderSet {
   newsAnalysis?: Partial<NewsProviders>;
   /** Exchange time & sales for the Volume Footprint (none connected by default → FOOTPRINT DATA UNAVAILABLE). */
   footprint?: FootprintTradeProvider | null;
+  /** The single Databento bridge feed behind the Databento adapters (diagnostics / UI badge). */
+  databento?: DatabentoFeed | null;
 }
 
 export interface ServiceOptions {
@@ -86,8 +93,16 @@ export interface ServiceOptions {
 export function defaultProviders(storage: Pick<Storage, 'getItem' | 'setItem'> | null = null): ProviderSet {
   // Real MT5 data only when the user has configured and enabled the private bridge.
   const mt5 = loadMt5Config(storage);
+  // Real CME Globex / COMEX data (GC, SI) only when the user enabled the private Databento bridge. No fallback:
+  // without it GC / SI order flow stays DATA UNAVAILABLE (never MT5, never test data).
+  const db = loadDatabentoConfig(storage);
+  const feed = db.enabled && db.token ? new DatabentoFeed(db) : null;
+  const dbFlow = feed ? new DatabentoOrderFlowProvider(feed) : null;
   return {
-    price: mt5.enabled && mt5.token ? [new Mt5Provider(mt5)] : [],
+    databento: feed,
+    orderFlow: dbFlow ? { depth: dbFlow, trade: dbFlow } : undefined,
+    footprint: feed ? new DatabentoFootprintProvider(feed) : null,
+    price: [...(mt5.enabled && mt5.token ? [new Mt5Provider(mt5)] : []), ...(feed ? [new DatabentoMarketProvider(feed)] : [])],
     depth: [],
     news: new NullFeedProvider<NewsItem>(),
     calendar: new NullFeedProvider<EconomicEvent>(),
@@ -119,6 +134,7 @@ export function createServices(providers: ProviderSet = defaultProviders(), opts
     volumeFootprint: new VolumeFootprintService(selection, providers.footprint && (!providers.footprint.info.test || opts.allowTestProviders) ? providers.footprint : null),
     newsAnalysis: new NewsAnalysisService(market, selection, newsProviders(providers.newsAnalysis, opts.allowTestProviders ?? false)),
     mt5: (providers.price.find((p) => p instanceof Mt5Provider) as Mt5Provider | undefined) ?? null,
+    databento: providers.databento ?? null,
     databaseStatus: 'NOT_CONNECTED',
   };
 }

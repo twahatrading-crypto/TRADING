@@ -3,7 +3,7 @@ import { useServices } from '../../app/servicesContext';
 import { ENGINES } from '../../config/engines';
 import { useActiveInstrument, useMarket } from '../../hooks/useMarket';
 import { useOnline } from '../../hooks/useOnline';
-import { FEED_LABEL } from '../../services/mt5/freshness';
+import { feedLabelFor } from '../market/feedLabel';
 import { buildSystemStatus, STATUS_TONE } from '../../services/status/systemStatus';
 import { useStore } from '../../store/createStore';
 import type { SystemStatusItem } from '../../types/status';
@@ -39,6 +39,7 @@ export function SystemStatusPanel() {
   const def = useActiveInstrument();
   const depth = useMarket((s) => s.depth);
   const feed = useMarket((s) => s.feed);
+  const provider = useMarket((s) => s.provider);
   const ai = useStore(services.ai.store, (s) => s.status);
   const news = useStore(services.news.store, (s) => s.status);
   const calendar = useStore(services.calendar.store, (s) => s.status);
@@ -52,7 +53,7 @@ export function SystemStatusPanel() {
       connection,
       error: priceError,
       supported: def.providerMappings.some((m) => m.role === 'price'),
-      detail: feed ? [FEED_LABEL[feed.code], feed.providerSymbol, feed.message].filter(Boolean).join(' · ') : undefined,
+      detail: feed ? [feedLabelFor(feed.code, provider), feed.providerSymbol, feed.message].filter(Boolean).join(' · ') : undefined,
     },
     depth: { connection: depth.connection, error: depth.error, supported: depth.supported },
     ai,
