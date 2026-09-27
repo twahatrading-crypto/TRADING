@@ -3,9 +3,11 @@
     .venv\\Scripts\\python.exe live_check.py            (default 120 s)
     .venv\\Scripts\\python.exe live_check.py --seconds 300
 
-It opens the same two sessions as the bridge (mbo snapshot + trades/ohlcv-1m replay), observes real records and
-prints a PASS / FAIL / NOT OBSERVED checklist per instrument. The API key is never printed. Nothing is
-fabricated: when the exchange is closed or quiet, items are reported as NOT OBSERVED.
+It opens exactly the sessions the bridge opens for the configured plan (TLUXE_DB_PLAN, default `standard`:
+trades + ohlcv-1m only - mbo / mbp-10 are never requested), observes real records and prints a
+PASS / FAIL / NOT OBSERVED checklist per instrument. On Standard, depth is reported as
+"NOT ENTITLED - EXPECTED FOR STANDARD", never as a failure. The API key is never printed. Nothing is fabricated:
+when the exchange is closed or quiet, data items are reported as NOT OBSERVED.
 """
 import argparse
 import json
@@ -64,45 +66,55 @@ def main() -> int:
         while time.time() < t_end:
             time.sleep(5)
             h = hub.health()
-            line = " | ".join(f"{r}: {i['status']} {i['contract'] or '?'} book={i['book']['state']} trades={seen[r]['trades']} mbo={seen[r]['mboLive']}" for r, i in h["instruments"].items())
+            line = " | ".join(f"{r}: {i['status']} {i['contract'] or '?'} trades={seen[r]['trades']} bars={i['candles']['bars']} depth={i['capabilities']['depth']}" for r, i in h["instruments"].items())
             print(f"[{int(t_end - time.time()):>4}s left] {line}", flush=True)
     finally:
         mgr.stop()
     h = hub.health()
     sess = h["sessions"]
+    tape_s = sess["tape"]
     results = {}
     ok_all = True
+    authenticated = tape_s["connectedAtMs"] is not None and tape_s["state"] != "AUTH_ERROR"
+    print(f"\nPlan mode: {cfg.plan} · dataset {h['dataset']} · requested schemas {h['schemas']['requested']}")
     for root, i in h["instruments"].items():
         s = seen[root]
-        auth_ok = sess["book"]["state"] not in ("AUTH_ERROR",) and sess["book"]["connectedAtMs"] is not None
+        caps = i["capabilities"]
         st = hub.roots[root]
-        checks = [
-            ("1 authentication successful", auth_ok),
-            ("2 dataset GLBX.MDP3", h["dataset"] == "GLBX.MDP3" and auth_ok),
-            ("3 symbol mapping received", i["instrumentId"] is not None),
-            ("4 actual contract resolved", bool(i["contract"])),
-            ("5 MBO snapshot received", s["mboSnapshot"] > 0),
-            ("6 snapshot reached valid state", st.book is not None and st.book.epoch > 0),
-            ("7 incremental MBO events received", s["mboLive"] > 0),
-            ("8 real trades received", s["trades"] > 0),
-            ("9 timestamps moving", s["firstEventNs"] is not None and s["lastEventNs"] is not None and s["lastEventNs"] > s["firstEventNs"]),
-            ("10 sequence / integrity diagnostics", i["book"]["counts"].get("outOfOrder", 0) == 0 and i["book"]["counts"].get("maybeBadBook", 0) == 0),
-            ("11 heatmap input (book levels)", (i["book"]["bidLevels"] + i["book"]["askLevels"]) > 0 and i["book"]["state"] == VALID),
-            ("12 footprint input (classified trades)", i["tape"]["counts"].get("accepted", 0) > 0),
-            ("13 volume-profile input (ohlcv-1m bars)", i["candles"]["bars"] > 0),
+        # (name, outcome) outcome: True = PASS, False = FAIL, None = NOT OBSERVED, str = informational verdict
+        checks: list[tuple[str, object]] = [
+            ("Authentication", authenticated),
+            ("Dataset connection (GLBX.MDP3)", authenticated and h["dataset"] == "GLBX.MDP3"),
+            ("Symbol mapping", True if i["instrumentId"] is not None else (None if authenticated else False)),
+            ("Actual contract", True if i["contract"] else (None if authenticated else False)),
+            ("Trades", True if s["trades"] > 0 else "NOT ENTITLED" if caps["trades"] == "NOT_ENTITLED" else (None if authenticated else False)),
+            ("OHLCV (ohlcv-1m)", True if i["candles"]["bars"] > 0 else "NOT ENTITLED" if caps["ohlcv"] == "NOT_ENTITLED" else (None if authenticated else False)),
+            ("Volume (real exchange volume)", True if (i["candles"]["bars"] > 0 or sum(i["tape"]["volume"].values()) > 0) else (None if authenticated else False)),
+            ("Timestamps moving", True if (s["firstEventNs"] is not None and s["lastEventNs"] and s["lastEventNs"] > s["firstEventNs"]) else (None if authenticated else False)),
         ]
-        results[root] = {"contract": i["contract"], "instrumentId": i["instrumentId"], "status": i["status"], "checks": {k: v for k, v in checks},
-                         "observed": s, "book": i["book"], "tape": i["tape"]["counts"], "volume": i["tape"]["volume"]}
-        print(f"\n=== {root} -> actual contract {i['contract']} (instrument_id {i['instrumentId']}) · status {i['status']} ===")
-        for name, ok in checks:
-            label = "PASS" if ok else ("NOT OBSERVED" if name[0] in "5678912" and auth_ok else "FAIL")
-            ok_all &= bool(ok)
-            print(f"  {label:<13} {name}")
-        print(f"  records: mbo snapshot {s['mboSnapshot']} · mbo live {s['mboLive']} · trades {s['trades']} · volume {i['tape']['volume']}")
+        if cfg.depth_plan and caps["mbo"] != "NOT_ENTITLED":
+            checks += [
+                ("Depth: MBO snapshot received", True if s["mboSnapshot"] > 0 else None),
+                ("Depth: book valid", True if (st.book is not None and st.book.epoch > 0 and i["book"]["state"] == VALID) else None),
+                ("Depth: incremental MBO", True if s["mboLive"] > 0 else None),
+            ]
+        elif cfg.depth_plan:
+            checks.append(("Depth entitlement", "NOT ENTITLED - your plan does not include real-time MBO (depth unavailable)"))
+        else:
+            checks.append(("Depth entitlement", "NOT ENTITLED - EXPECTED FOR STANDARD (mbo / mbp-10 never requested)"))
+        results[root] = {"contract": i["contract"], "instrumentId": i["instrumentId"], "status": i["status"], "capabilities": caps,
+                         "checks": {k: v for k, v in checks}, "observed": s, "tape": i["tape"]["counts"], "volume": i["tape"]["volume"]}
+        print(f"\n=== {root} -> actual contract {i['contract']} (instrument_id {i['instrumentId']}) · subscribed {i['subscribed']} · status {i['status']} ===")
+        for name, outcome in checks:
+            label = "PASS" if outcome is True else "FAIL" if outcome is False else "NOT OBSERVED" if outcome is None else "INFO"
+            ok_all &= outcome is not False
+            print(f"  {label:<13} {name}{'' if isinstance(outcome, (bool, type(None))) else ': ' + str(outcome)}")
+        print(f"  capabilities: trades {caps['trades']} · ohlcv {caps['ohlcv']} · volume {caps['volume']} · depth {caps['depth']} · MBO {caps['mbo']} · MBP-10 {caps['mbp10']}")
+        print(f"  records: trades {s['trades']} · ohlcv bars {i['candles']['bars']} · volume {i['tape']['volume']}")
     print("\nSessions:", json.dumps({k: {x: v[x] for x in ("state", "reconnects", "resyncs", "lastError")} for k, v in sess.items()}))
     if a.json:
         print(json.dumps(results, default=str))
-    print("\nRESULT:", "ALL CHECKS PASSED (real Databento records observed)" if ok_all else "NOT ALL CHECKS PASSED - see above (market closed / quiet is reported as NOT OBSERVED, never faked)")
+    print("\nRESULT:", "NO FAILURES (PASS items = real Databento records observed; NOT OBSERVED = market closed / quiet, never faked)" if ok_all else "FAILURES - see above")
     return 0 if ok_all else 1
 
 

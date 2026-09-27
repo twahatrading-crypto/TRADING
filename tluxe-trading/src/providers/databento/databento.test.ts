@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { feedLabelFor } from '../../components/market/feedLabel';
 import { connectServices, createServices, defaultProviders, type Services } from '../../services/registry';
 import { ManualPriceProvider, memoryStorage } from '../../test/providers';
-import { DatabentoFootprintProvider, DatabentoMarketProvider, DatabentoOrderFlowProvider } from './adapters';
+import { DatabentoFootprintProvider, DatabentoMarketProvider, DatabentoMboOrderFlowProvider } from './adapters';
 import { DatabentoBridgeClient } from './client';
 import { DATABENTO_CONFIG_KEY, DEFAULT_DATABENTO_CONFIG, sanitizeDatabentoConfig } from './config';
 import { DatabentoFeed } from './DatabentoFeed';
@@ -27,7 +27,7 @@ function rig(o: { instrument?: string; before?: (b: FakeBridge) => void } = {}) 
   let now = T;
   const feed = new DatabentoFeed({ ...DEFAULT_DATABENTO_CONFIG, enabled: true, token: 'x'.repeat(40), pollMs: 3_600_000, healthMs: 3_600_000 }, { api: bridge, timers: { setTimeout: (...a) => setTimeout(...a), clearTimeout: (t) => clearTimeout(t), now: () => now } });
   const market = new DatabentoMarketProvider(feed, () => now);
-  const flow = new DatabentoOrderFlowProvider(feed, () => now);
+  const flow = new DatabentoMboOrderFlowProvider(feed, () => now); // MBO-plan rig (Standard: databentoStandard.test.ts)
   const fp = new DatabentoFootprintProvider(feed);
   const mt5 = new ManualPriceProvider('mt5');
   const services = createServices({ ...defaultProviders(), price: [mt5, market], orderFlow: { depth: flow, trade: flow }, footprint: fp, databento: feed }, { storage: memoryStorage({ 'tluxe.instrument.v1': o.instrument ?? 'GC' }) });
@@ -67,7 +67,10 @@ describe('Databento — configuration & security', () => {
     const p = defaultProviders(on);
     expect(p.databento).toBeInstanceOf(DatabentoFeed);
     expect(p.price.some((x) => x.info.id === 'databento')).toBe(true);
-    expect(p.orderFlow?.depth?.info.test).toBe(false);
+    // Standard (default): Databento is the TRADE source only; no depth provider (Level-2 slot empty).
+    expect(p.orderFlow?.trade?.info.test).toBe(false);
+    expect(p.orderFlow?.trade?.stream).toBe('trade');
+    expect(p.orderFlow?.depth).toBeNull();
     expect(sanitizeDatabentoConfig({ enabled: true, token: 'db-ABCDEFGHIJKLMNOPQRSTUVWXYZ012345' }).token).toBe('');
     expect(defaultProviders(memoryStorage({ [DATABENTO_CONFIG_KEY]: JSON.stringify({ enabled: true, token: 'db-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789' }) })).databento).toBeNull();
   });
@@ -254,7 +257,7 @@ describe('Databento — SI, isolation, market data, volume profile', () => {
     expect(feedLabelFor('LIVE', { id: 'mt5' })).toBe('MT5 · LIVE');
   });
 
-  it('Volume Profile uses real Databento volume, labelled Databento / CME Globex / COMEX with the contract', async () => {
+  it('Volume Profile uses real Databento volume, labelled DATABENTO / GLBX.MDP3 / CME/COMEX / REAL VOLUME with the contract', async () => {
     const m0 = Math.floor(T / 1000 / 86400) * 86400 - 86400 * 2;
     const r = rig({
       before: (b) => {
@@ -271,7 +274,7 @@ describe('Databento — SI, isolation, market data, volume profile', () => {
     const vp = r.services.volumeProfile.store.getState().snapshot!;
     const p = vp.profiles.PREVIOUS_DAY!;
     expect(p.source.mode).toBe('EXCHANGE');
-    expect(p.source.label).toBe('Databento / CME Globex / COMEX');
+    expect(p.source.label).toBe('DATABENTO / GLBX.MDP3 / CME/COMEX / REAL VOLUME');
     expect(p.source.detail).toMatch(/GCZ6/);
     expect(p.poc).not.toBeNull();
     expect(r.services.market.getCandles('GC', 'M5').every((c) => c.source === 'databento' && c.providerSymbol === 'GCZ6')).toBe(true);

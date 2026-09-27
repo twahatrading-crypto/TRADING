@@ -7,7 +7,7 @@ foundation only: no strategy engines, signals or execution.
 
 ```bash
 npm install
-npm run dev        # http://localhost:5181
+npm run dev        # http://localhost:5182
 npm run check      # typecheck + lint + tests + production build
 npm run preview    # serve dist/ at http://localhost:4181
 ```

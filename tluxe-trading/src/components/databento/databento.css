@@ -14,3 +14,16 @@
 .dbstrip__diag div { display: flex; gap: 8px; min-width: 0; }
 .dbstrip__diag dt { color: var(--text-3); flex: none; width: 128px; }
 .dbstrip__diag dd { margin: 0; color: var(--text); overflow-wrap: anywhere; }
+/* Per-capability status (trades / OHLCV / volume / depth / MBO / MBP-10). */
+.dbstrip__caps { display: inline-flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
+.dbcap { padding: 1px 6px; border-radius: 4px; border: 1px solid var(--border); font-size: 10px; font-weight: 700; letter-spacing: 0.04em; white-space: nowrap; color: var(--text-3); }
+.dbcap.is-ok { color: #86e3c6; border-color: rgba(60, 201, 160, 0.45); }
+.dbcap.is-warn { color: var(--amber); border-color: rgba(240, 180, 60, 0.45); }
+.dbcap.is-bad { color: #f3a0a0; border-color: rgba(239, 93, 93, 0.45); }
+.dbstrip__depth { margin: 5px 0 1px; padding: 4px 8px; border-left: 3px solid var(--amber); background: var(--amber-soft); color: var(--text); font-size: 11px; overflow-wrap: anywhere; }
+.dbstrip__depth strong { color: var(--amber); letter-spacing: 0.05em; }
+.dbset__caps { display: grid; grid-template-columns: max-content 1fr; gap: 3px 14px; margin: 4px 0 8px; font-size: 12px; }
+.dbset__caps dt { color: var(--text-3); }
+.dbset__caps dd { margin: 0; color: var(--text); overflow-wrap: anywhere; }
+.dbset__cap--yes { color: #86e3c6; }
+.dbset__cap--no { color: #f3a0a0; }

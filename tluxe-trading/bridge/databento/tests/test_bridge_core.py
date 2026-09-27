@@ -22,8 +22,9 @@ class Clock:
 
 
 def live_hub(**over):
+    """MBO-plan hub (order-book tests). Standard-plan behaviour is covered in test_standard_plan.py."""
     clock = Clock()
-    h = Hub(cfg(**over), clock=clock)
+    h = Hub(cfg(**{"TLUXE_DB_PLAN": "mbo", **over}), clock=clock)
     for sess in ("book", "tape"):
         h.on_session_connected(sess)
         h.on_record(sess, mapping("GC.v.0", "GCZ6", GC_ID))

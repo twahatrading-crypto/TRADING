@@ -1,12 +1,24 @@
 # Trading by TLUXE — Databento market-data bridge (CME Globex / COMEX)
 
 **MARKET DATA ONLY.** No order entry, no trading. Real Databento `GLBX.MDP3` data for **GC** (COMEX Gold) and **SI**
-(COMEX Silver) → the TLUXE Liquidity Heatmap, Volume Footprint and Volume Profile.
+(COMEX Silver) → the TLUXE Volume Footprint, Volume Profile and the Liquidity Heatmap's trade prints.
 
 ```
 CME / COMEX → Databento GLBX.MDP3 (MDP 3.0) → THIS bridge (official `databento` SDK, server-side key)
-  → normalized frames (127.0.0.1:8766, bridge token) → ONE browser feed → Heatmap · Footprint · Volume Profile
+  → normalized frames (127.0.0.1:8766, bridge token) → ONE browser feed → Footprint · Volume Profile · Heatmap prints
+Level-2 depth (future) → IBKR / T4 / other depth provider → the same normalized order-flow layer → Heatmap
 ```
+
+## Plans
+
+| `TLUXE_DB_PLAN` | Databento subscription | schemas requested | depth |
+|---|---|---|---|
+| `standard` (default) | CME Globex MDP 3.0 **Standard** | `trades`, `ohlcv-1m` | **UNSUPPORTED** — MBO / MBP-10 NOT ENTITLED, never requested |
+| `mbo` | a plan that includes real-time MBO | `trades`, `ohlcv-1m`, `mbo` (snapshot) | MBO order book |
+
+`mbp-10` is never requested in any plan. On Standard the Liquidity Heatmap shows **DEPTH DATA UNAVAILABLE** —
+"Databento Standard does not include real-time MBO/MBP-10 · Level-2 provider required: IBKR / T4 / other supported
+depth provider". Depth is never approximated from trades or bars.
 
 ## Setup (Windows)
 
@@ -22,7 +34,7 @@ Edit `.env` (gitignored — never commit it):
 - `DATABENTO_API_KEY=` your key (server-side only; never in the browser, chat, source files or Git).
 - `TLUXE_DB_BRIDGE_TOKEN=` a new random secret: `.venv\Scripts\python -c "import secrets; print(secrets.token_urlsafe(32))"`.
 
-Start: `start_bridge.cmd`. Then in TLUXE (http://localhost:5181) → **Settings → Databento Bridge**: enable, URL
+Start: `start_bridge.cmd`. Then in TLUXE (http://localhost:5182) → **Settings → Databento Bridge**: enable, URL
 `http://127.0.0.1:8766`, paste the **bridge token** (NOT the Databento key) → Save.
 
 The bridge refuses to start without `DATABENTO_API_KEY` (fail closed), refuses a second instance, never shares its
@@ -34,17 +46,18 @@ port, binds to 127.0.0.1, checks the browser origin allowlist and the bridge tok
 .venv\Scripts\python live_check.py --seconds 180
 ```
 
-Prints PASS / FAIL / NOT OBSERVED per item for GC and SI (authentication, dataset, symbol mapping, actual contract,
-MBO snapshot, snapshot valid, incremental MBO, real trades, timestamps moving, integrity, heatmap / footprint / volume
-profile inputs). The key is never printed. A closed or quiet market is reported as NOT OBSERVED — never faked.
+Prints PASS / FAIL / NOT OBSERVED per item for GC and SI: authentication, dataset connection, symbol mapping, actual
+contract, trades, OHLCV, volume, timestamps moving, and depth entitlement — on Standard reported as
+`NOT ENTITLED - EXPECTED FOR STANDARD` (information, not a failure). The key is never printed. A closed or quiet
+market is reported as NOT OBSERVED — never faked.
 
 ## What is subscribed
 
 | session | schema | options | feeds |
 |---|---|---|---|
-| book | `mbo` | `snapshot=True`, `GC.v.0`, `SI.v.0` (continuous, volume leader) | order-level books → Liquidity Heatmap |
-| tape | `trades` | intraday replay `start` (24 h window / overlap after reconnect) | Footprint, Heatmap prints, forming bar |
-| tape | `ohlcv-1m` | same `start` | Volume Profile / charts (real exchange volume) |
+| tape | `trades` | `GC.v.0`, `SI.v.0` (continuous, volume leader); intraday replay `start` (24 h / overlap after reconnect) | Footprint, Heatmap prints, forming bar |
+| tape | `ohlcv-1m` | same | Volume Profile / charts (real exchange volume) |
+| book (`mbo` plan only) | `mbo` | `snapshot=True` | order-level books → Liquidity Heatmap |
 
 `TLUXE_DB_CONTRACT_MODE=manual` + `TLUXE_DB_CONTRACT_GC=GCZ6` / `..._SI=SIZ6` subscribes raw contracts instead.
 Every `SymbolMappingMsg` is stored; records are routed by instrument ID only. A mapping change is a **roll**:
@@ -69,12 +82,20 @@ reported (CVD shows PARTIAL).
 ## Reconnect / recovery
 
 - Backoff 1 s → 60 s with jitter; > 8 reconnects in 5 min → reconnect-storm hold-off (120 s, DEGRADED).
-- Auth failure → `AUTH_ERROR`, retried only every 5 min. Entitlement errors → `UNAVAILABLE`.
-- MBO: a new session with `snapshot=True` (SYNCING → VALID). The old book is frozen and never served as live.
+- Genuine authentication failure (`Authentication failed`, invalid key) → `AUTH_ERROR`, retried only every 5 min.
+- Entitlement (`Not authorized for <schema> schema`, not entitled / licensed) → that **schema only** becomes
+  `NOT_ENTITLED` and is dropped from the subscription; a session with no entitled schema left stops. Never an
+  `AUTH_ERROR`, never a reconnect loop, and the other capabilities keep working.
+- MBO (`mbo` plan): a new session with `snapshot=True` (SYNCING → VALID). The old book is frozen and never served as live.
 - Trades: replay from 60 s before the last processed trade; replayed records are dropped exactly (de-dup key +
   occurrence index) — no double volume. An outage longer than the replay window is flagged as a **gap** (DEGRADED).
 
 ## Status / freshness
+
+Per instrument, `/v1/health → instruments.GC.capabilities` reports each data kind on its own:
+`trades · ohlcv · volume` = `LIVE | STALE | WAITING (connected, nothing observed yet) | OFFLINE | NOT_ENTITLED`,
+`depth` = `UNSUPPORTED` (Standard) / `NOT_ENTITLED` / book state, `mbo` / `mbp10` entitlement, `level2Provider`.
+The instrument `status` on Standard depends on the trades / OHLCV session only (no SYNCING BOOK).
 
 `CONNECTING · SYNCING · LIVE · DEGRADED · STALE · RECONNECTING · UNAVAILABLE · AUTH_ERROR` per instrument;
 freshness `LIVE · DELAYED · STALE · OFFLINE · UNAVAILABLE`:

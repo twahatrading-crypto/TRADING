@@ -62,7 +62,7 @@ def generate(n: int, seed: int = 7):
 
 class TestStress(unittest.TestCase):
     def test_high_frequency_mbo(self):
-        hub = Hub(cfg(TLUXE_DB_PUBLISH_MS="100"), clock=lambda: int(time.time() * 1000))
+        hub = Hub(cfg(TLUXE_DB_PUBLISH_MS="100", TLUXE_DB_PLAN="mbo"), clock=lambda: int(time.time() * 1000))
         ing = M.Ingest(hub)
         for s in ("book", "tape"):
             hub.on_session_connected(s)

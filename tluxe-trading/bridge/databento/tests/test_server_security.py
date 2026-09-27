@@ -41,7 +41,7 @@ def script():
 class TestServer(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.hub = Hub(dataclasses.replace(cfg(), port=0))  # ephemeral test port
+        cls.hub = Hub(dataclasses.replace(cfg(TLUXE_DB_PLAN="mbo"), port=0))  # ephemeral test port
         b, t = script()
         feed(cls.hub, b, t)
         cls.hub.on_error("tape", f"transient failure mentioning {KEY}", fatal=False)
@@ -77,6 +77,12 @@ class TestServer(unittest.TestCase):
         self.assertEqual(h.get("Access-Control-Allow-Origin"), "http://localhost:5181")
         _, h2, _ = self.get("/v1/health", origin="http://localhost:5180")
         self.assertNotIn("Access-Control-Allow-Origin", h2)
+        for origin in ("http://localhost:5182", "http://127.0.0.1:5182"):  # fresh preview port
+            status, h3, _ = self.get("/v1/health", origin=origin)
+            self.assertEqual(status, 200)
+            self.assertEqual(h3.get("Access-Control-Allow-Origin"), origin)
+        # 5182 origin still needs the bridge token.
+        self.assertEqual(self.get("/v1/health", token=None, origin="http://localhost:5182")[0], 401)
 
     def test_endpoints_and_no_secret_anywhere(self):
         bodies = []
@@ -128,7 +134,7 @@ class TestDeterminism(unittest.TestCase):
     def test_same_databento_input_same_book_trades_candles(self):
         outs = []
         for _ in range(2):
-            h = Hub(cfg(), clock=lambda: T0 // 1_000_000)
+            h = Hub(cfg(TLUXE_DB_PLAN="mbo"), clock=lambda: T0 // 1_000_000)
             b, t = script()
             feed(h, b, t)
             outs.append(json.dumps([h.book_snapshot("GC"), h.book_snapshot("SI"), h.trades_after("GC", 0, 10_000), h.trades_after("SI", 0, 10_000),

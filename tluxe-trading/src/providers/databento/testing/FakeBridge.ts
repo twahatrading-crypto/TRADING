@@ -2,7 +2,7 @@
  * TEST DATA ONLY — an in-memory stand-in for the LOCAL Databento bridge HTTP API, used by automated tests.
  * It never talks to Databento, is never imported by production code, and there is no setting that enables it.
  */
-import type { DbBar, DbBookResponse, DbCandlesResponse, DbFeedResponse, DbFrame, DbFrameInstrument, DbHealth, DbInstrumentStatus, DbRoot, DbTrade, DbTradesResponse } from '../protocol';
+import type { DbBar, DbBookResponse, DbCapabilities, DbCandlesResponse, DbFeedResponse, DbFrame, DbFrameInstrument, DbHealth, DbInstrumentStatus, DbRoot, DbTrade, DbTradesResponse } from '../protocol';
 
 export const NS = 1_000_000;
 
@@ -31,7 +31,31 @@ export function status(root: DbRoot, o: Partial<DbInstrumentStatus> & { bookStat
   };
 }
 
+/** Databento Standard-plan status (TEST DATA): trades + ohlcv only, no book, depth UNSUPPORTED, MBO / MBP-10 not entitled. */
+export function standardStatus(root: DbRoot, caps: Partial<DbCapabilities> = {}, o: Partial<DbInstrumentStatus> = {}): DbInstrumentStatus {
+  return status(root, {
+    bookState: 'NO_DATA',
+    plan: 'standard',
+    capabilities: {
+      trades: 'LIVE',
+      ohlcv: 'LIVE',
+      volume: 'LIVE',
+      depth: 'UNSUPPORTED',
+      depthReason: 'Databento Standard does not include real-time MBO/MBP-10',
+      mbo: 'NOT_ENTITLED',
+      mbp10: 'NOT_ENTITLED',
+      level2Provider: 'NOT_CONNECTED',
+      level2Required: 'Level-2 provider required: IBKR / T4 / other supported depth provider',
+      ...caps,
+    },
+    ...o,
+    book: { state: 'NO_DATA', epoch: 0, reason: null, orders: 0, bidLevels: 0, askLevels: 0, counts: {}, best: [null, null] },
+  });
+}
+
 export class FakeBridge {
+  /** 'standard' -> health reports the Standard plan (book session DISABLED, schemas trades + ohlcv-1m). */
+  plan: 'standard' | 'mbo' | undefined = undefined;
   cursor = 0;
   frames: DbFrame[] = [];
   startedAtMs = 1;
@@ -75,8 +99,17 @@ export class FakeBridge {
       provider: 'Databento',
       dataset: 'GLBX.MDP3',
       contractMode: 'auto',
+      ...(this.plan
+        ? {
+            plan: this.plan,
+            schemas: {
+              requested: { book: this.plan === 'mbo' ? ['mbo'] : [], tape: ['trades', 'ohlcv-1m'] },
+              entitlements: this.plan === 'mbo' ? { 'mbp-10': { state: 'NOT_REQUESTED' as const, source: 'plan', message: '' } } : { mbo: { state: 'NOT_ENTITLED' as const, source: 'plan', message: '' }, 'mbp-10': { state: 'NOT_ENTITLED' as const, source: 'plan', message: '' } },
+            },
+          }
+        : {}),
       sessions: {
-        book: { state: 'CONNECTED', connectedAtMs: 1, reconnects: 0, resyncs: 0, lastMessageMs: 1, lastError: null, reconnectStorm: false },
+        book: { state: this.plan === 'standard' ? 'DISABLED' : 'CONNECTED', connectedAtMs: 1, reconnects: 0, resyncs: 0, lastMessageMs: 1, lastError: null, reconnectStorm: false },
         tape: { state: 'CONNECTED', connectedAtMs: 1, reconnects: 0, resyncs: 0, lastMessageMs: 1, lastError: null, reconnectStorm: false },
       },
       instruments: this.statuses,

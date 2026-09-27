@@ -17,6 +17,18 @@ ROOTS = ("GC", "SI")
 # Databento continuous-contract symbology: `.v.0` = the contract with the highest volume (resolved by Databento).
 AUTO_SYMBOL = {"GC": "GC.v.0", "SI": "SI.v.0"}
 RAW_CONTRACT_RE = re.compile(r"^(GC|SI)[FGHJKMNQUVXZ]\d{1,2}$")
+# Databento subscription plans. "standard" = CME Globex MDP 3.0 Standard: trades + ohlcv-1m only; real-time MBO /
+# MBP-10 are NOT included, so they are never requested. "mbo" = a plan that includes real-time MBO (order books).
+# mbp-10 is never requested by this bridge in any plan.
+PLANS = ("standard", "mbo")
+TAPE_SCHEMAS = ("trades", "ohlcv-1m")
+DEPTH_SCHEMA = "mbo"
+NEVER_REQUESTED = ("mbp-10",)
+DEFAULT_ORIGINS = (
+    "http://localhost:5182", "http://127.0.0.1:5182",
+    "http://localhost:5181", "http://127.0.0.1:5181",
+    "http://localhost:4181", "http://127.0.0.1:4181",
+)
 
 
 class ConfigError(ValueError):
@@ -61,7 +73,8 @@ class BridgeConfig:
     token: Secret = field(repr=False)
     host: str = "127.0.0.1"
     port: int = 8766
-    allowed_origins: tuple[str, ...] = ("http://localhost:5181", "http://127.0.0.1:5181", "http://localhost:4181", "http://127.0.0.1:4181")
+    allowed_origins: tuple[str, ...] = DEFAULT_ORIGINS
+    plan: str = "standard"
     contract_mode: str = "auto"
     manual_contracts: dict = field(default_factory=dict)
     max_trades: int = 100_000
@@ -74,6 +87,11 @@ class BridgeConfig:
     stale_ms: int = 25_000
     lag_ms: int = 5_000
 
+    @property
+    def depth_plan(self) -> bool:
+        """True only for a plan that includes real-time MBO. Standard never opens an MBO session."""
+        return self.plan == "mbo"
+
     def symbol_for(self, root: str) -> tuple[str, str]:
         """(symbol, stype_in) subscribed for a root. Manual mode keeps the provider design unchanged."""
         if self.contract_mode == "manual":
@@ -81,7 +99,7 @@ class BridgeConfig:
         return AUTO_SYMBOL[root], "continuous"
 
     def __repr__(self) -> str:  # never expose secrets
-        return f"BridgeConfig(host={self.host!r}, port={self.port}, origins={self.allowed_origins!r}, mode={self.contract_mode!r})"
+        return f"BridgeConfig(host={self.host!r}, port={self.port}, origins={self.allowed_origins!r}, mode={self.contract_mode!r}, plan={self.plan!r})"
 
 
 def _int(e: dict, key: str, default: int, lo: int, hi: int) -> int:
@@ -112,6 +130,9 @@ def from_env(env: dict | None = None) -> BridgeConfig:
     if host in ("0.0.0.0", "::") and e.get("TLUXE_DB_BRIDGE_ALLOW_ALL_INTERFACES") != "1":
         raise ConfigError("Refusing to listen on all interfaces. Bind to 127.0.0.1 or a private address.")
     origins = tuple(o.strip() for o in e.get("TLUXE_DB_BRIDGE_ALLOWED_ORIGINS", ",".join(BridgeConfig.allowed_origins)).split(",") if o.strip())
+    plan = (e.get("TLUXE_DB_PLAN") or "standard").strip().lower()
+    if plan not in PLANS:
+        raise ConfigError("TLUXE_DB_PLAN must be 'standard' (trades + ohlcv-1m) or 'mbo' (plan that includes real-time MBO)")
     mode = (e.get("TLUXE_DB_CONTRACT_MODE") or "auto").strip().lower()
     if mode not in ("auto", "manual"):
         raise ConfigError("TLUXE_DB_CONTRACT_MODE must be 'auto' or 'manual'")
@@ -129,6 +150,7 @@ def from_env(env: dict | None = None) -> BridgeConfig:
         port=_int(e, "TLUXE_DB_BRIDGE_PORT", 8766, 1, 65535),
         allowed_origins=origins,
         contract_mode=mode,
+        plan=plan,
         manual_contracts=manual,
         max_trades=_int(e, "TLUXE_DB_MAX_TRADES", 100_000, 1_000, 2_000_000),
         max_frames=_int(e, "TLUXE_DB_MAX_FRAMES", 1200, 60, 20_000),

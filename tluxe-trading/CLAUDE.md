@@ -17,7 +17,8 @@ Never open or redirect to `http://localhost:5180` or any preview belonging to xa
 The project never auto-opens a browser (`open: false` in `vite.config.ts`).
 
 ## 4. One active local preview
-- Canonical local preview: **http://localhost:5181** (`npm run dev`, HMR, `strictPort`). Production preview: http://localhost:4181.
+- Canonical local preview: **http://localhost:5182** (`npm run dev`, HMR, `strictPort`). Production preview: http://localhost:4181.
+  (5181 was the previous TLUXE dev port; its origins stay in the bridge allowlists but no server runs on it.)
 - Before opening or using a preview, verify that the listening process belongs to this project.
   Never assume a port belongs to this project just because something is listening on it.
 - Exactly ONE TLUXE dev server may run at a time.
@@ -26,14 +27,15 @@ The project never auto-opens a browser (`open: false` in `vite.config.ts`).
 Stop ONLY the previous TLUXE preview process (never the old project's). Start TLUXE at the new address.
 Update every setting that depends on the origin: `vite.config.ts`, the bridge default origins in
 `bridge/mt5/tluxe_mt5_bridge/config.py`, `bridge/mt5/.env.example`, the user's bridge `.env` (give the user the command),
-READMEs, `scripts/preview-check.cjs` and this file. Remove the old TLUXE address when it is no longer needed.
+READMEs, `scripts/preview-check.cjs`, the Databento bridge origins (`bridge/databento/tluxe_databento_bridge/config.py`,
+`bridge/databento/.env.example`) and this file. Remove the old TLUXE address when it is no longer needed.
 Open ONLY the newest preview. Leave exactly one TLUXE preview running.
 
 ## 6. MT5
 - Bridge: **http://127.0.0.1:8765**, a separate process from the frontend (`tluxe-trading\bridge\mt5`).
 - Databento bridge: **http://127.0.0.1:8766** (`tluxe-trading\bridge\databento`), same origin / token rules; never touch other ports.
-- The bridge must allow the current preview origin: `http://localhost:5181`, `http://127.0.0.1:5181`
-  (plus 4181 for the production preview). A refused origin looks exactly like an offline bridge.
+- The bridge must allow the current preview origin: `http://localhost:5182`, `http://127.0.0.1:5182`
+  (plus 5181 kept from the previous preview and 4181 for the production preview). A refused origin looks exactly like an offline bridge.
   The bridge logs `Rejected browser origin ...`, and Settings shows which origin is required.
 - Keep the token/security setup (Bearer token ≥32 chars, bound to 127.0.0.1, origin allowlist).
   Never expose the token in logs, UI, commits, screenshots or reports.
@@ -69,7 +71,7 @@ Never kill a process based only on its port number.
 Check: the correct repository and branch · `npm run typecheck` · relevant tests (`npm test`; for bridge changes also
 `python -m unittest discover -s tests` in `bridge/mt5`) · `npm run build` · `npm run preview:check`
 (console errors, routing, HMR, a single polling loop) · the sidebar · the MT5 connection where applicable (REAL data,
-confirmed with the user on localhost:5181, before saying it works) · that only the correct preview is used ·
+confirmed with the user on localhost:5182, before saying it works) · that only the correct preview is used ·
 that `git status` shows changes only inside `tluxe-trading/` (old project untouched).
 
 ## 12. End-of-task report (only these)
@@ -163,11 +165,20 @@ BUY/SELL setup states with entry zone / SL / TP / R:R appear ONLY on the High / 
   entry). `DATABENTO_API_KEY` lives ONLY in `bridge/databento/.env` (gitignored; server-side; fail closed if missing;
   never logged, never returned, never in the browser). Bridge: 127.0.0.1:8766, `TLUXE_DB_BRIDGE_TOKEN` + origin
   allowlist; start with `bridge/databento/start_bridge.cmd`; live validation `live_check.py` on the user's machine.
-  Sessions: `mbo` (snapshot=True) -> order-level books (SYNCING until F_SNAPSHOT|F_LAST, DEGRADED + resync on
-  F_MAYBE_BAD_BOOK / inconsistency); `trades` + `ohlcv-1m` with intraday replay (exact de-dup, gaps flagged).
+  PLAN: the user's subscription is CME Globex MDP 3.0 **Standard** (`TLUXE_DB_PLAN=standard`, the default): ONLY
+  `trades` + `ohlcv-1m` (intraday replay, exact de-dup, gaps flagged) are requested; `mbo` / `mbp-10` are NEVER
+  requested (not entitled). "Not authorized for <schema> schema" is an ENTITLEMENT (that schema -> NOT_ENTITLED,
+  dropped from the subscription, no reconnect loop), never AUTH_ERROR. Health reports per-root `capabilities`
+  (trades / ohlcv / volume LIVE|STALE|WAITING|OFFLINE|NOT_ENTITLED, depth UNSUPPORTED, mbo / mbp10 NOT_ENTITLED).
+  Depth on Standard: DEPTH DATA UNAVAILABLE ("Databento Standard does not include real-time MBO/MBP-10 · Level-2
+  provider required: IBKR / T4 / other supported depth provider"); the browser registers Databento as the TRADE
+  source only (`orderFlow.depth` null). Future Level-2: an IBKR / T4 `OrderFlowDepthProvider` goes into
+  `composeOrderFlowProviders(depth, databentoTrades)` (`src/providers/level2`) - no Heatmap / Footprint / VP change.
+  Only with `TLUXE_DB_PLAN=mbo` + Settings "plan includes MBO": `mbo` (snapshot=True) -> order-level books.
   Continuous `GC.v.0` / `SI.v.0` (or manual raw contracts); SymbolMappingMsg -> actual contract always shown; a roll
   rebuilds book / tape / candles (contracts never merged). ONE browser `DatabentoFeed` (ref-counted poll chain) feeds
-  thin adapters for the EXISTING interfaces (MarketDataProvider 'futures-feed', OrderFlow depth+trade, Footprint).
+  thin adapters for the EXISTING interfaces (MarketDataProvider 'futures-feed', OrderFlow trades (+depth on MBO), Footprint).
+  Volume Profile label: "DATABENTO / GLBX.MDP3 / CME/COMEX / REAL VOLUME" (MT5 tick volume never gets a CME label).
   Aggressor from the source side only (B BUY / A SELL / N UNKNOWN). Header label is provider-aware ("DATABENTO · LIVE",
   never "MT5 · LIVE"); `DatabentoStrip` (GC / SI only) shows `DATABENTO • GLBX.MDP3 • status`, `GC • <contract>` and
   diagnostics. MT5 stays the source for XAUUSD / XAGUSD. Not configured -> GC / SI order flow DATA UNAVAILABLE.

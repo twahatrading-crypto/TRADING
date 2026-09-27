@@ -30,12 +30,21 @@ def load_dotenv(path: Path) -> None:
         os.environ.setdefault(key, value)
 
 
+# Browser origins allowed by default: the TLUXE dev server (5182, and the earlier 5181) and `vite preview` (4181).
+# The old project's port 5180 is intentionally NOT included.
+DEFAULT_ORIGINS = (
+    "http://localhost:5182", "http://127.0.0.1:5182",
+    "http://localhost:5181", "http://127.0.0.1:5181",
+    "http://localhost:4181", "http://127.0.0.1:4181",
+)
+
+
 @dataclass(frozen=True)
 class BridgeConfig:
     token: str
     host: str = "127.0.0.1"
     port: int = 8765
-    allowed_origins: tuple[str, ...] = ("http://localhost:5181", "http://127.0.0.1:5181", "http://localhost:4181", "http://127.0.0.1:4181")
+    allowed_origins: tuple[str, ...] = DEFAULT_ORIGINS
     server_timezone: str | None = None
     terminal_path: str | None = None
     login: int | None = None
@@ -59,7 +68,7 @@ def from_env(env: dict[str, str] | None = None) -> BridgeConfig:
     if host in ("0.0.0.0", "::") and e.get("TLUXE_BRIDGE_ALLOW_ALL_INTERFACES") != "1":
         raise ConfigError("Refusing to listen on all interfaces. Bind to 127.0.0.1 or a private address, "
                           "or set TLUXE_BRIDGE_ALLOW_ALL_INTERFACES=1 if you really mean it.")
-    origins = tuple(o.strip() for o in e.get("TLUXE_BRIDGE_ALLOWED_ORIGINS", "http://localhost:5181,http://127.0.0.1:5181,http://localhost:4181,http://127.0.0.1:4181").split(",") if o.strip())
+    origins = tuple(o.strip() for o in e.get("TLUXE_BRIDGE_ALLOWED_ORIGINS", ",".join(DEFAULT_ORIGINS)).split(",") if o.strip())
     login_raw = e.get("TLUXE_MT5_LOGIN", "").strip()
     return BridgeConfig(
         token=token,

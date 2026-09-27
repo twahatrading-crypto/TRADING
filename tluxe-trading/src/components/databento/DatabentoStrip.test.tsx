@@ -3,7 +3,7 @@ import { StrictMode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../../app/App';
 import { ServicesProvider } from '../../app/ServicesProvider';
-import { DatabentoFootprintProvider, DatabentoMarketProvider, DatabentoOrderFlowProvider } from '../../providers/databento/adapters';
+import { DatabentoFootprintProvider, DatabentoMarketProvider, DatabentoMboOrderFlowProvider } from '../../providers/databento/adapters';
 import { DEFAULT_DATABENTO_CONFIG } from '../../providers/databento/config';
 import { DatabentoFeed } from '../../providers/databento/DatabentoFeed';
 import { FakeBridge } from '../../providers/databento/testing/FakeBridge';
@@ -38,7 +38,7 @@ afterEach(() => {
 function mount(instrument = 'GC', bridge = new FakeBridge()) {
   window.location.hash = '#/settings';
   const feed = new DatabentoFeed({ ...DEFAULT_DATABENTO_CONFIG, enabled: true, token: 'x'.repeat(40), pollMs: 3_600_000, healthMs: 3_600_000 }, { api: bridge });
-  const flow = new DatabentoOrderFlowProvider(feed);
+  const flow = new DatabentoMboOrderFlowProvider(feed);
   const services = createServices({ ...defaultProviders(), price: [new DatabentoMarketProvider(feed)], orderFlow: { depth: flow, trade: flow }, footprint: new DatabentoFootprintProvider(feed), databento: feed }, { storage: memoryStorage({ 'tluxe.instrument.v1': instrument }) });
   teardown = connectServices(services);
   const listenersBefore = feed.listenerCount();

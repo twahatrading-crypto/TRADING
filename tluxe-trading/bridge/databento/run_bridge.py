@@ -81,7 +81,7 @@ def main() -> int:
             logging.error("Port %s on %s is already in use (%s).", cfg.port, cfg.host, exc)
             return EXIT_PORT
         mgr.start()
-        logging.info("TLUXE Databento bridge on http://%s:%s · dataset GLBX.MDP3 · mode %s · origins %s", cfg.host, cfg.port, cfg.contract_mode, ", ".join(cfg.allowed_origins))
+        logging.info("TLUXE Databento bridge on http://%s:%s · dataset GLBX.MDP3 · plan %s (schemas %s; never mbp-10%s) · mode %s · origins %s", cfg.host, cfg.port, cfg.plan, ", ".join(["trades", "ohlcv-1m"] + (["mbo"] if cfg.depth_plan else [])), "" if cfg.depth_plan else ", never mbo", cfg.contract_mode, ", ".join(cfg.allowed_origins))
         try:
             httpd.serve_forever()
         except KeyboardInterrupt:

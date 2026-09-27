@@ -1,5 +1,5 @@
 /*
- * Live-preview health check for the running dev server (npm run dev, port 5181).
+ * Live-preview health check for the running dev server (npm run dev, port 5182).
  *   node scripts/preview-check.cjs            → render + console check on every page
  *   node scripts/preview-check.cjs --hmr      → also edits a component, verifies HMR
  *                                               (no full reload, state kept, no duplicate polling)
@@ -16,7 +16,7 @@ try {
   ({ chromium } = require(execSync('npm root -g').toString().trim() + '/playwright'));
 }
 
-const BASE = process.env.PREVIEW_URL || 'http://localhost:5181';
+const BASE = process.env.PREVIEW_URL || 'http://localhost:5182';
 const PAGES = ['/#/', '/#/engines/support-resistance', '/#/engines/liquidity', '/#/engines/order-blocks', '/#/engines/high-low-reversal', '/#/engines/high-low-engine', '/#/engines/liquidity-heatmap', '/#/engines/smc', '/#/engines/volume-profile', '/#/engines/volume-footprint', '/#/engines/news-analysis', '/#/settings'];
 const HMR = process.argv.includes('--hmr');
 const HMR_FILE = path.join(__dirname, '../src/components/market/MarketBar.tsx');

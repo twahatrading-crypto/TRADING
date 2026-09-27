@@ -12,7 +12,10 @@ import { DB_ROOTS, nsToMs, type DbBar, type DbInstrumentStatus, type DbRoot, typ
  * Thin adapters: the SAME normalized Databento feed (one bridge connection) exposed through the existing TLUXE
  * provider interfaces - nothing about the engines changes:
  *   DatabentoMarketProvider     -> MarketDataService   (GC / SI quotes + real ohlcv-1m candles -> Volume Profile, charts)
- *   DatabentoOrderFlowProvider  -> OrderFlowService    (reconstructed MBO price levels + trades -> Liquidity Heatmap)
+ *   DatabentoOrderFlowProvider  -> OrderFlowService    (trades -> Liquidity Heatmap prints; MBO price levels ONLY in
+ *                                                       'mbo' mode - CME Globex MDP 3.0 Standard has no MBO / MBP-10,
+ *                                                       so by default this is a TRADE-ONLY provider and depth comes
+ *                                                       from a separate Level-2 provider, see providers/level2)
  *   DatabentoFootprintProvider  -> VolumeFootprintService (exchange trades with source aggressor side -> Footprint)
  * Every record carries the ACTUAL contract; a contract change resets the consumer's contract state.
  */
@@ -189,6 +192,23 @@ export class DatabentoMarketProvider implements MarketDataProvider {
 
 /* ---------------------------------------------------------------- order flow ---------------------------------------------------------------- */
 
+/** Databento Standard (default): exchange trades with the source aggressor side, NO depth (never approximated). */
+export const DATABENTO_TRADE_ONLY_CAPS: OrderFlowCapabilities = {
+  depth: 'NONE',
+  depthLevels: null,
+  incrementalDepth: false,
+  trades: true,
+  aggressorSide: true,
+  depthReasons: false,
+  sequenced: false,
+  snapshotOnDemand: false,
+};
+
+/** Text shown wherever depth is missing because of the Databento Standard plan. */
+export const DATABENTO_STANDARD_DEPTH_REASON = 'Databento Standard does not include real-time MBO/MBP-10';
+export const LEVEL2_REQUIRED = 'Level-2 provider required: IBKR / T4 / other supported depth provider';
+
+/** Databento plan that includes real-time MBO ('mbo' mode). */
 export const DATABENTO_ORDER_FLOW_CAPS: OrderFlowCapabilities = {
   depth: 'MBO',
   depthLevels: null,
@@ -214,16 +234,31 @@ interface FlowSub {
   fetching: boolean;
 }
 
-export class DatabentoOrderFlowProvider implements OrderFlowDepthProvider, OrderFlowTradeProvider {
-  readonly stream = 'both' as const;
+export type DatabentoFlowMode = 'trades' | 'mbo';
+
+export class DatabentoOrderFlowProvider implements OrderFlowTradeProvider {
+  readonly stream: 'trade' | 'both';
   readonly info = DB_INFO;
+  readonly caps: OrderFlowCapabilities;
   private sink: OrderFlowSink | null = null;
   private subs = new Map<InstrumentId, FlowSub>();
 
+  /**
+   * mode 'trades' (default, Databento Standard): trades only - never a snapshot, depth update or depth status.
+   * mode 'mbo': also the bridge's reconstructed MBO book (only for a plan that includes real-time MBO).
+   */
   constructor(
     private readonly feed: DatabentoFeed,
     private readonly now: () => number = () => Date.now(),
-  ) {}
+    readonly mode: DatabentoFlowMode = 'trades',
+  ) {
+    this.stream = mode === 'mbo' ? 'both' : 'trade';
+    this.caps = mode === 'mbo' ? DATABENTO_ORDER_FLOW_CAPS : DATABENTO_TRADE_ONLY_CAPS;
+  }
+
+  private get mbo(): boolean {
+    return this.mode === 'mbo';
+  }
 
   connect(sink: OrderFlowSink): void {
     this.sink = sink;
@@ -237,8 +272,8 @@ export class DatabentoOrderFlowProvider implements OrderFlowDepthProvider, Order
     if (!sink || this.subs.has(def.id) || !isRoot(def.id)) return;
     const s: FlowSub = { root: def.id, off: () => {}, epoch: -1, bookCursor: -1, lastI: 0, contract: null, depthStatus: '', tradeStatus: '', fetching: false };
     this.subs.set(def.id, s);
-    sink.capabilities(def.id, DATABENTO_ORDER_FLOW_CAPS);
-    this.setStatus(def.id, s, 'depth', 'CONNECTING', 'Connecting to the Databento bridge.');
+    sink.capabilities(def.id, this.caps);
+    if (this.mbo) this.setStatus(def.id, s, 'depth', 'CONNECTING', 'Connecting to the Databento bridge.');
     this.setStatus(def.id, s, 'trade', 'CONNECTING', 'Connecting to the Databento bridge.');
     s.off = this.feed.subscribe(def.id, (e) => this.onEvent(def.id, s, e));
     void this.loadTrades(def.id, s, true);
@@ -251,7 +286,7 @@ export class DatabentoOrderFlowProvider implements OrderFlowDepthProvider, Order
   }
   requestSnapshot(id: InstrumentId): void {
     const s = this.subs.get(id);
-    if (s) void this.loadBook(id, s);
+    if (s && this.mbo) void this.loadBook(id, s);
   }
 
   private setStatus(id: InstrumentId, s: FlowSub, stream: 'depth' | 'trade', st: FeedStatus, detail: string | null): void {
@@ -271,13 +306,14 @@ export class DatabentoOrderFlowProvider implements OrderFlowDepthProvider, Order
       // Never merge two contracts' books / tapes: the consumer rebuilds from the new contract's snapshot.
       s.epoch = -1;
       s.lastI = 0;
-      this.setStatus(id, s, 'depth', 'DISCONNECTED', `Contract roll -> ${contract}: rebuilding the book.`);
+      if (this.mbo) this.setStatus(id, s, 'depth', 'DISCONNECTED', `Contract roll -> ${contract}: rebuilding the book.`);
       this.setStatus(id, s, 'trade', 'DISCONNECTED', `Contract roll -> ${contract}.`);
-      this.sink?.capabilities(id, DATABENTO_ORDER_FLOW_CAPS);
+      this.sink?.capabilities(id, this.caps);
     }
   }
 
   private async loadBook(id: InstrumentId, s: FlowSub): Promise<void> {
+    if (!this.mbo) return;
     try {
       const r = await this.feed.api.book(s.root);
       if (this.subs.get(id) !== s || !this.sink || !r.book) return;
@@ -321,14 +357,14 @@ export class DatabentoOrderFlowProvider implements OrderFlowDepthProvider, Order
     if (!sink) return;
     if (e.kind === 'offline') {
       // The book can no longer be trusted as current: the consumer clears it (never shown as live).
-      this.setStatus(id, s, 'depth', 'DISCONNECTED', 'Databento bridge offline.');
+      if (this.mbo) this.setStatus(id, s, 'depth', 'DISCONNECTED', 'Databento bridge offline.');
       this.setStatus(id, s, 'trade', 'DISCONNECTED', 'Databento bridge offline.');
       s.epoch = -1;
       return;
     }
     if (e.kind === 'reset') {
       s.epoch = -1;
-      void this.loadBook(id, s);
+      if (this.mbo) void this.loadBook(id, s);
       void this.loadTrades(id, s, false);
       return;
     }
@@ -336,22 +372,30 @@ export class DatabentoOrderFlowProvider implements OrderFlowDepthProvider, Order
     const d = e.data;
     this.setContract(id, s, d.contract);
     const st = d.status;
-    // depth stream status
-    if (st.status === 'AUTH_ERROR' || st.status === 'UNAVAILABLE') this.setStatus(id, s, 'depth', 'DATA_UNAVAILABLE', st.reasons.join(' ') || 'DATA UNAVAILABLE');
+    const caps = st.capabilities;
+    // depth stream status ('mbo' mode only - a trade-only provider never reports or sends depth)
+    if (!this.mbo) {
+      /* no depth stream */
+    } else if (caps && (caps.depth === 'NOT_ENTITLED' || caps.depth === 'UNSUPPORTED'))
+      this.setStatus(id, s, 'depth', 'DATA_UNAVAILABLE', `DEPTH DATA UNAVAILABLE - ${caps.depthReason ?? DATABENTO_STANDARD_DEPTH_REASON}. ${LEVEL2_REQUIRED}`);
+    else if (st.status === 'AUTH_ERROR' || st.status === 'UNAVAILABLE') this.setStatus(id, s, 'depth', 'DATA_UNAVAILABLE', st.reasons.join(' ') || 'DATA UNAVAILABLE');
     else if (st.status === 'CONNECTING') this.setStatus(id, s, 'depth', 'CONNECTING', 'Connecting to Databento.');
     else if (st.status === 'RECONNECTING') this.setStatus(id, s, 'depth', 'DISCONNECTED', 'Databento reconnecting - book frozen.');
     else if (st.status === 'STALE') this.setStatus(id, s, 'depth', 'STALE', st.reasons.join(' '));
     else if (st.book.state !== 'VALID') this.setStatus(id, s, 'depth', 'RESYNCING', st.book.state === 'DEGRADED' ? `DEGRADED - ${st.book.reason ?? 'book integrity'}: resyncing from a fresh snapshot.` : 'SYNCING BOOK - waiting for the complete MBO snapshot.');
     else this.setStatus(id, s, 'depth', 'LIVE', st.status === 'DEGRADED' ? st.reasons.join(' ') : null);
     // trade stream status
-    if (st.status === 'AUTH_ERROR' || st.status === 'UNAVAILABLE') this.setStatus(id, s, 'trade', 'DATA_UNAVAILABLE', st.reasons.join(' ') || 'DATA UNAVAILABLE');
+    if (caps?.trades === 'NOT_ENTITLED') this.setStatus(id, s, 'trade', 'DATA_UNAVAILABLE', 'Databento trades schema not entitled for this subscription.');
+    else if (st.status === 'AUTH_ERROR' || st.status === 'UNAVAILABLE') this.setStatus(id, s, 'trade', 'DATA_UNAVAILABLE', st.reasons.join(' ') || 'DATA UNAVAILABLE');
     else if (st.status === 'CONNECTING' || st.status === 'RECONNECTING') this.setStatus(id, s, 'trade', st.status === 'CONNECTING' ? 'CONNECTING' : 'DISCONNECTED', 'Databento trades session not connected.');
     else if (st.status === 'STALE') this.setStatus(id, s, 'trade', 'STALE', st.reasons.join(' '));
     else this.setStatus(id, s, 'trade', 'LIVE', null);
 
     const exch = st.lastEventNs ? nsToMs(st.lastEventNs) : e.timeMs;
     const recv = st.lastRecvNs ? nsToMs(st.lastRecvNs) : exch;
-    if (d.snapshot && d.snapshot.epoch !== s.epoch) {
+    if (!this.mbo) {
+      /* trade-only: bridge depth fields are ignored even if present (never a book from a trades feed) */
+    } else if (d.snapshot && d.snapshot.epoch !== s.epoch) {
       s.epoch = d.snapshot.epoch;
       s.bookCursor = e.cursor;
       sink.message({ type: 'snapshot', instrumentId: id, seq: null, exchTime: exch, recvTime: recv, bids: d.snapshot.bids.map(([price, size, orders]) => ({ price, size, orders })), asks: d.snapshot.asks.map(([price, size, orders]) => ({ price, size, orders })) });
@@ -365,14 +409,29 @@ export class DatabentoOrderFlowProvider implements OrderFlowDepthProvider, Order
       else this.emitTrades(id, s, d.trades);
     }
     if (st.freshness === 'LIVE' || st.freshness === 'DELAYED') {
-      sink.message({ type: 'heartbeat', instrumentId: id, seq: null, exchTime: exch, recvTime: recv, stream: 'depth' });
+      if (this.mbo) sink.message({ type: 'heartbeat', instrumentId: id, seq: null, exchTime: exch, recvTime: recv, stream: 'depth' });
       sink.message({ type: 'heartbeat', instrumentId: id, seq: null, exchTime: exch, recvTime: recv, stream: 'trade' });
     }
   }
 }
 
+/** Databento as the Level-2 depth source - ONLY for a Databento plan that includes real-time MBO (bridge TLUXE_DB_PLAN=mbo). */
+export class DatabentoMboOrderFlowProvider extends DatabentoOrderFlowProvider implements OrderFlowDepthProvider {
+  declare readonly stream: 'both';
+  constructor(feed: DatabentoFeed, now?: () => number) {
+    super(feed, now, 'mbo');
+  }
+}
+
 /* ----------------------------------------------------------------- footprint ----------------------------------------------------------------- */
 
+/*
+ * Footprint side mapping (Databento `trades` schema, CME MDP 3.0 aggressor as supplied - available on Standard):
+ *   side 'B' -> BUY aggressor  -> ASK volume
+ *   side 'A' -> SELL aggressor -> BID volume
+ *   side 'N' -> UNKNOWN (kept separate: never guessed, never split; delta / CVD become PARTIAL)
+ * No tick rule / quote rule is applied (classificationMethod null): there is no quote stream on Standard.
+ */
 export const DATABENTO_FOOTPRINT_CAPS: FootprintCapabilities = {
   trades: true,
   // CME MDP 3.0 aggressor side as supplied by Databento (`side`: B = buyer-initiated, A = seller-initiated, N = none).
@@ -478,7 +537,8 @@ export class DatabentoFootprintProvider implements FootprintTradeProvider {
     if (e.kind === 'health') return;
     const d = e.data;
     const st = d.status;
-    if (st.status === 'AUTH_ERROR' || st.status === 'UNAVAILABLE') this.setStatus(id, s, 'DATA_UNAVAILABLE', st.reasons.join(' ') || 'DATA UNAVAILABLE');
+    if (st.capabilities?.trades === 'NOT_ENTITLED') this.setStatus(id, s, 'DATA_UNAVAILABLE', 'Databento trades schema not entitled for this subscription.');
+    else if (st.status === 'AUTH_ERROR' || st.status === 'UNAVAILABLE') this.setStatus(id, s, 'DATA_UNAVAILABLE', st.reasons.join(' ') || 'DATA UNAVAILABLE');
     else if (st.status === 'CONNECTING') this.setStatus(id, s, 'CONNECTING', null);
     else if (st.status === 'RECONNECTING' || st.status === 'STALE') this.setStatus(id, s, 'DISCONNECTED', st.reasons.join(' ') || `Databento ${st.status.toLowerCase()}`);
     else this.setStatus(id, s, 'LIVE', null);

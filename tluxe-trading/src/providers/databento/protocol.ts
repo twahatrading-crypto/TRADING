@@ -6,6 +6,24 @@ export const DB_ROOTS: readonly DbRoot[] = ['GC', 'SI'];
 export type DbStatus = 'CONNECTING' | 'SYNCING' | 'LIVE' | 'DEGRADED' | 'STALE' | 'RECONNECTING' | 'UNAVAILABLE' | 'AUTH_ERROR';
 export type DbFreshness = 'LIVE' | 'DELAYED' | 'STALE' | 'OFFLINE' | 'UNAVAILABLE';
 export type DbBookState = 'NO_DATA' | 'SYNCING' | 'VALID' | 'DEGRADED' | 'INVALID';
+/** `standard` = CME Globex MDP 3.0 Standard: trades + ohlcv-1m only (no MBO / MBP-10). `mbo` = plan with real-time MBO. */
+export type DbPlan = 'standard' | 'mbo';
+/** Per-capability state (each data kind reported on its own; missing depth never takes trades / OHLCV down). */
+export type DbCapState = 'LIVE' | 'STALE' | 'WAITING' | 'OFFLINE' | 'NOT_ENTITLED' | 'UNAVAILABLE';
+export type DbDepthState = DbCapState | 'UNSUPPORTED' | 'SYNCING' | 'DEGRADED';
+export type DbEntitlement = 'NOT_ENTITLED' | 'NOT_REQUESTED' | 'REQUESTED' | 'ENTITLED';
+
+export interface DbCapabilities {
+  trades: DbCapState;
+  ohlcv: DbCapState;
+  volume: DbCapState;
+  depth: DbDepthState;
+  depthReason: string | null;
+  mbo: DbEntitlement;
+  mbp10: DbEntitlement;
+  level2Provider: 'NOT_CONNECTED' | 'DATABENTO_MBO';
+  level2Required: string | null;
+}
 
 export interface DbInstrumentStatus {
   root: DbRoot;
@@ -18,6 +36,9 @@ export interface DbInstrumentStatus {
   status: DbStatus;
   freshness: DbFreshness;
   reasons: string[];
+  /** Absent only from a pre-Standard bridge build. */
+  plan?: DbPlan;
+  capabilities?: DbCapabilities;
   book: { state: DbBookState; epoch: number; reason: string | null; orders: number; bidLevels: number; askLevels: number; counts: Record<string, number>; best: [number | null, number | null] };
   tape: { replaying: boolean; lagMs: number | null; contract: string | null; counts: Record<string, number>; volume: Record<string, number>; retained: number; lastIndex: number };
   candles: { bars: number; lastClosed: number | null };
@@ -34,7 +55,7 @@ export interface DbSession {
   reconnects: number;
   resyncs: number;
   lastMessageMs: number | null;
-  lastError: { code: string; message: string; atMs: number } | null;
+  lastError: { code: string; message: string; atMs: number; schema?: string | null } | null;
   reconnectStorm: boolean;
 }
 
@@ -42,6 +63,8 @@ export interface DbHealth {
   provider: 'Databento';
   dataset: string;
   contractMode: 'auto' | 'manual';
+  plan?: DbPlan;
+  schemas?: { requested: Record<string, string[]>; entitlements: Record<string, { state: DbEntitlement; source: string; message: string }> };
   sessions: { book: DbSession; tape: DbSession };
   instruments: Record<DbRoot, DbInstrumentStatus>;
   rolls: { root: DbRoot; from: string; to: string; fromId: number; toId: number; tsEventNs: number; atMs: number }[];

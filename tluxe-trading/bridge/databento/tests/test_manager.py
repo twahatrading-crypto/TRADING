@@ -24,7 +24,7 @@ class Rig:
 
     def __init__(self, session: str, scripts: list, **over) -> None:
         self.clock = mh.Clock(MS0 + 10)
-        self.hub = Hub(cfg(**over), clock=self.clock)
+        self.hub = Hub(cfg(**{"TLUXE_DB_PLAN": "mbo", **over}), clock=self.clock)
         self.ingest = M.Ingest(self.hub)
         self.sleeps: list[float] = []
         self.runner = M.SessionRunner(session, self.hub.cfg, self.hub, self.ingest, factory_from(scripts), sleep=self._sleep, rand=lambda: 0.5)
@@ -135,7 +135,7 @@ class TestManager(unittest.TestCase):
         rig.stop()
 
     def test_backpressure_sheds_book_backlog_and_resyncs_never_silently(self):
-        hub = Hub(cfg(), clock=mh.Clock(MS0))
+        hub = Hub(cfg(TLUXE_DB_PLAN="mbo"), clock=mh.Clock(MS0))
         ing = M.Ingest(hub)
         for r in maps():
             ing.put("book", r)

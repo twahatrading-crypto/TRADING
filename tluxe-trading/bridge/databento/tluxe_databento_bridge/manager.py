@@ -1,7 +1,9 @@
 """The ONE Databento connection architecture of the bridge.
 
-  book session : Live(GLBX.MDP3)  subscribe(mbo, snapshot=True)                -> order books (GC, SI)
   tape session : Live(GLBX.MDP3)  subscribe(trades, start=S) + (ohlcv-1m, start=S) -> trades, candles (GC, SI)
+  book session : Live(GLBX.MDP3)  subscribe(mbo, snapshot=True)                -> order books (GC, SI)
+                 ONLY with TLUXE_DB_PLAN=mbo. On CME Globex MDP 3.0 Standard (default) no book session exists:
+                 mbo and mbp-10 are never requested.
 
 Both sessions are owned by this manager (never by a browser tab / React component). The SDK callback only
 enqueues records; a single worker applies them to the hub in arrival order, so the Databento reader is never
@@ -14,6 +16,8 @@ Recovery (Databento documented behaviour):
     the tape drops the overlap exactly (de-dup keys). An outage longer than the replay window is flagged as a GAP.
   * backoff 1 s -> 60 s with jitter; > STORM_MAX reconnects in STORM_WINDOW_S -> reconnect storm hold-off.
   * authentication failure -> AUTH_ERROR, retried only every AUTH_RETRY_S (never a tight loop).
+  * entitlement ("Not authorized for <schema> schema") -> that schema is dropped from the subscription (NOT_ENTITLED);
+    a session with no entitled schema left stops. Never an AUTH_ERROR, never a reconnect loop.
 """
 from __future__ import annotations
 
@@ -26,6 +30,7 @@ from collections import deque
 from typing import Callable
 
 from .config import DATASET, BridgeConfig, Secret
+from .entitlement import AUTH, ENTITLEMENT
 from .hub import Hub
 
 log = logging.getLogger("tluxe.databento")
@@ -67,6 +72,15 @@ class Ingest:
 
     def qsize(self) -> int:
         return self.q.qsize()
+
+    def wait_applied(self, timeout: float = 2.0) -> None:
+        """Wait until the worker has applied everything queued so far (errors / entitlement are then known to the hub).
+        No-op when the worker thread is not running (tests drain manually)."""
+        if not self.thread.is_alive():
+            return
+        done = threading.Event()
+        self.q.put(("mark", None, done, None))
+        done.wait(timeout)
 
     def start(self) -> None:
         self.thread.start()
@@ -119,12 +133,14 @@ class Ingest:
 
     def _apply(self, item) -> None:
         kind, session, a, b = item
-        if kind == "rec":
+        if kind == "mark":
+            a.set()
+        elif kind == "rec":
             self.hub.on_record(session, a, b)
         elif kind == "ctl":
             if a == "connecting":
                 s = self.hub.sessions[session]
-                if s.state not in ("AUTH_ERROR", "UNAVAILABLE"):
+                if s.state not in ("AUTH_ERROR", "UNAVAILABLE", "DISABLED"):
                     s.state = "RECONNECTING" if s.ever_connected else "CONNECTING"
             elif a == "connected":
                 self.hub.on_session_connected(session)
@@ -170,14 +186,14 @@ class SessionRunner(threading.Thread):
         groups: dict[str, list[str]] = {}
         for st in self.hub.roots.values():
             groups.setdefault(st.stype, []).append(st.symbol)
+        schemas = self.hub.requested_schemas(self.session)
         subs = []
         for stype, symbols in groups.items():
             if self.session == "book":
-                subs.append({"schema": "mbo", "symbols": symbols, "stype_in": stype, "snapshot": True})
-            else:
+                subs += [{"schema": sc, "symbols": symbols, "stype_in": stype, "snapshot": True} for sc in schemas]
+            elif schemas:
                 start = self.hub.tape_replay_start_ns() if self.cfg.replay_hours > 0 else None
-                subs.append({"schema": "trades", "symbols": symbols, "stype_in": stype, "start": start})
-                subs.append({"schema": "ohlcv-1m", "symbols": symbols, "stype_in": stype, "start": start})
+                subs += [{"schema": sc, "symbols": symbols, "stype_in": stype, "start": start} for sc in schemas]
         return subs
 
     def stop(self) -> None:
@@ -190,7 +206,7 @@ class SessionRunner(threading.Thread):
                 pass
 
     def _connect_once(self) -> str:
-        """One session lifetime. Returns why it ended: 'stop' | 'resync' | 'reconnect' | 'auth'."""
+        """One session lifetime. Returns why it ended: 'stop' | 'resync' | 'reconnect' | 'auth' | 'entitlement'."""
         self.ingest.control(self.session, "connecting")
         errbox: list[BaseException] = []
         try:
@@ -201,9 +217,9 @@ class SessionRunner(threading.Thread):
                 client.subscribe(dataset=DATASET, schema=sub["schema"], symbols=sub["symbols"], stype_in=sub["stype_in"], **kwargs)
             client.start()
         except Exception as exc:
-            msg = self.hub.redact(exc)
-            self.ingest.control(self.session, "error", msg)
-            return "auth" if "auth" in msg.lower() else "reconnect"
+            # Applied synchronously (thread-safe) so the next attempt already knows an entitlement / auth outcome.
+            kind = self.hub.on_error(self.session, str(exc), fatal=True)
+            return "auth" if kind == AUTH else "entitlement" if kind == ENTITLEMENT else "reconnect"
         self.client = client
         self.ingest.control(self.session, "connected")
         done = threading.Event()
@@ -239,14 +255,21 @@ class SessionRunner(threading.Thread):
             done.wait(5)
         self.client = None
         for exc in errbox:
-            self.ingest.control(self.session, "error", self.hub.redact(exc))
-            if "auth" in str(exc).lower():
+            kind = self.hub.on_error(self.session, str(exc), fatal=True)
+            if kind == AUTH:
                 why = "auth"
+            elif kind == ENTITLEMENT and why != "stop":
+                why = "entitlement"
         return why
 
     def run(self) -> None:
         backoff = 1.0
         while not self.stop_evt.is_set():
+            self.ingest.wait_applied()
+            if not self.hub.requested_schemas(self.session):
+                # Nothing entitled / nothing in the plan for this session: it stays closed (no retry loop).
+                log.warning("%s session: no entitled schema to subscribe - session stopped", self.session)
+                break
             started = time.monotonic()
             why = self._connect_once()
             self.ingest.control(self.session, "closed", "stop" if why == "stop" else "resync" if why == "resync" else "reconnect")
@@ -255,8 +278,9 @@ class SessionRunner(threading.Thread):
             if why == "auth":
                 self._sleep(AUTH_RETRY_S)
                 continue
-            if why == "resync":
-                self._sleep(0.2)
+            if why in ("resync", "entitlement"):
+                # entitlement: the rejected schema is now excluded; reconnect once with the remaining schemas.
+                self._sleep(0.2 if why == "resync" else 1.0)
                 continue
             if time.monotonic() - started > 60:
                 backoff = 1.0
@@ -281,7 +305,9 @@ class Manager:
         self.hub = hub or Hub(cfg)
         self.ingest = Ingest(self.hub)
         factory = factory or default_client_factory
-        self.runners = [SessionRunner("book", cfg, self.hub, self.ingest, factory), SessionRunner("tape", cfg, self.hub, self.ingest, factory)]
+        # Standard plan: ONE Databento session (trades + ohlcv-1m). The MBO book session exists only on a MBO plan.
+        names = ["book", "tape"] if cfg.depth_plan else ["tape"]
+        self.runners = [SessionRunner(n, cfg, self.hub, self.ingest, factory) for n in names]
         self._stop = threading.Event()
         self._pub = threading.Thread(target=self._publish_loop, name="databento-publish", daemon=True)
 

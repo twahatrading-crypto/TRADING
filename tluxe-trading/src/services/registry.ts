@@ -9,7 +9,8 @@ import { createCalendarService, type CalendarProvider, type CalendarService } fr
 import { NullFeedProvider } from './feed/FeedProvider';
 import { InstrumentSelection } from './instruments/InstrumentSelection';
 import type { DepthProvider } from './market/DepthProvider';
-import { NO_ORDER_FLOW_PROVIDERS, type OrderFlowProviders } from '../providers/orderFlow/types';
+import { NO_ORDER_FLOW_PROVIDERS, type OrderFlowDepthProvider, type OrderFlowProviders } from '../providers/orderFlow/types';
+import { composeOrderFlowProviders } from '../providers/level2/composeOrderFlow';
 import { OrderFlowService } from './orderFlow/OrderFlowService';
 import { SmcService } from './smc/SmcService';
 import { NewsAnalysisService } from './newsAnalysis/NewsAnalysisService';
@@ -28,7 +29,7 @@ import { HighLowEngineService } from './highLowEngine/HighLowEngineService';
 import { loadMt5Config } from './mt5/config';
 import { loadDatabentoConfig } from '../providers/databento/config';
 import { DatabentoFeed } from '../providers/databento/DatabentoFeed';
-import { DatabentoFootprintProvider, DatabentoMarketProvider, DatabentoOrderFlowProvider } from '../providers/databento/adapters';
+import { DatabentoFootprintProvider, DatabentoMarketProvider, DatabentoMboOrderFlowProvider, DatabentoOrderFlowProvider } from '../providers/databento/adapters';
 import { Mt5Provider } from './mt5/Mt5Provider';
 
 export interface Services {
@@ -97,10 +98,14 @@ export function defaultProviders(storage: Pick<Storage, 'getItem' | 'setItem'> |
   // without it GC / SI order flow stays DATA UNAVAILABLE (never MT5, never test data).
   const db = loadDatabentoConfig(storage);
   const feed = db.enabled && db.token ? new DatabentoFeed(db) : null;
-  const dbFlow = feed ? new DatabentoOrderFlowProvider(feed) : null;
+  // Databento Standard (default): trades only - depth is never taken from it. With a MBO plan it is also the depth source.
+  const dbMbo = feed && db.mboDepth ? new DatabentoMboOrderFlowProvider(feed) : null;
+  const dbFlow = dbMbo ?? (feed ? new DatabentoOrderFlowProvider(feed) : null);
+  // Level-2 depth adapter slot (IBKR / T4 / …): none is connected yet -> the heatmap reports LEVEL-2 PROVIDER NOT CONNECTED.
+  const level2Depth: OrderFlowDepthProvider | null = dbMbo;
   return {
     databento: feed,
-    orderFlow: dbFlow ? { depth: dbFlow, trade: dbFlow } : undefined,
+    orderFlow: dbFlow ? composeOrderFlowProviders(level2Depth, dbFlow) : undefined,
     footprint: feed ? new DatabentoFootprintProvider(feed) : null,
     price: [...(mt5.enabled && mt5.token ? [new Mt5Provider(mt5)] : []), ...(feed ? [new DatabentoMarketProvider(feed)] : [])],
     depth: [],

@@ -4,11 +4,15 @@ import type { VolumeMode, VolumeSource } from './types';
 /*
  * VOLUME SOURCE (one type per profile, never mixed, never synthesized):
  *   EXCHANGE  instrument is an exchange future AND the candles come from a non-MT5 futures feed AND
- *             every bar carries `volume` > 0                     → "COMEX Exchange Volume" (or "<exchange> Exchange Volume")
+ *             every bar carries `volume` > 0                     → "DATABENTO / GLBX.MDP3 / CME/COMEX / REAL VOLUME"
+ *                                                                  (Databento) or "<exchange> Exchange Volume"
  *   MT5_REAL  every bar carries MT5 `real_volume` > 0             → "MT5 Real Volume (broker-reported)" — never exchange volume
  *   MT5_TICK  otherwise MT5 `tick_volume` (bars without it are excluded and counted) → "MT5 Tick Volume"
  *   NONE      no usable volume at all                             → "VOLUME DATA UNAVAILABLE"
  */
+/** Databento exchange volume. MT5 tick / real volume is NEVER given this (or any CME) label. */
+export const DATABENTO_VOLUME_LABEL = 'DATABENTO / GLBX.MDP3 / CME/COMEX / REAL VOLUME';
+
 export interface InstrumentVolumeContext {
   kind: string;
   exchange: string | null;
@@ -24,7 +28,7 @@ export function chooseVolume(bars: readonly Candle[], ctx: InstrumentVolumeConte
   if (!bars.length) return mk('NONE', 'VOLUME DATA UNAVAILABLE', 'No closed candles for this profile.', () => null);
   if (ctx.kind === 'future' && bars.every((b) => b.source === 'databento' && pos(b.volume))) {
     const contracts = [...new Set(bars.map((b) => b.providerSymbol).filter(Boolean))];
-    return mk('EXCHANGE', 'Databento / CME Globex / COMEX', `Real exchange volume (Databento GLBX.MDP3 ohlcv-1m) · contract ${contracts.join(', ') || 'unknown'}.`, (c) => (pos(c.volume) ? c.volume! : null));
+    return mk('EXCHANGE', DATABENTO_VOLUME_LABEL, `Real CME Globex exchange volume (Databento GLBX.MDP3 ohlcv-1m, available on the Standard plan) · contract ${contracts.join(', ') || 'unknown'}.`, (c) => (pos(c.volume) ? c.volume! : null));
   }
   if (ctx.kind === 'future' && bars.every((b) => b.source !== 'mt5' && pos(b.volume)))
     return mk('EXCHANGE', `${ctx.exchange ?? 'Exchange'} Exchange Volume`, 'Exchange-traded contracts from the futures data provider.', (c) => (pos(c.volume) ? c.volume! : null));

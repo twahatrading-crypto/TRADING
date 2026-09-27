@@ -5,6 +5,10 @@ Record flow:  Databento Live callback -> ingest queue -> worker (this hub, under
 
 Nothing here invents data: levels come from the reconstructed MBO book, trades from the `trades` schema, bars
 from `ohlcv-1m`. Unknown / malformed input is counted and surfaced, never repaired.
+
+Plans: on CME Globex MDP 3.0 Standard (the default) there is NO order book - mbo / mbp-10 are never requested and
+depth is reported as UNSUPPORTED (never approximated). A schema the gateway reports as not entitled is marked
+NOT_ENTITLED for that schema only; it is never an authentication failure of the whole provider.
 """
 from __future__ import annotations
 
@@ -14,7 +18,8 @@ from collections import deque
 
 from .book import DEGRADED, INVALID, NO_DATA, SYNCING, VALID, OrderBook, _s
 from .candles import CandleStore
-from .config import DATASET, ROOTS, BridgeConfig
+from .config import DATASET, DEPTH_SCHEMA, NEVER_REQUESTED, ROOTS, TAPE_SCHEMAS, BridgeConfig
+from .entitlement import AUTH, ENTITLEMENT, classify
 from .redact import Redactor
 from .symbology import SymbolMap
 from .tape import TradeTape
@@ -26,12 +31,18 @@ CONNECTING, SYNCING_S, LIVE, DEGRADED_S, STALE, RECONNECTING, UNAVAILABLE, AUTH_
 MBO_DUP_WINDOW = 4096
 MAPPING_TIMEOUT_MS = 60_000
 TAPE_GAP_FLAG_MS = 10 * 60_000
+STANDARD_DEPTH_REASON = "Databento Standard does not include real-time MBO/MBP-10"
+LEVEL2_REQUIRED = "Level-2 provider required: IBKR / T4 / other supported depth provider"
+# Per-capability states reported to the browser.
+CAP_LIVE, CAP_STALE, CAP_OFFLINE, CAP_WAITING, CAP_NOT_ENTITLED, CAP_UNSUPPORTED, CAP_UNAVAILABLE = (
+    "LIVE", "STALE", "OFFLINE", "WAITING", "NOT_ENTITLED", "UNSUPPORTED", "UNAVAILABLE")
+_CAP_RANK = (CAP_LIVE, CAP_STALE, CAP_WAITING, CAP_OFFLINE, CAP_UNAVAILABLE, CAP_NOT_ENTITLED)
 
 
 class SessionState:
     def __init__(self, name: str) -> None:
         self.name = name
-        self.state = "IDLE"  # IDLE | CONNECTING | CONNECTED | RECONNECTING | AUTH_ERROR | UNAVAILABLE | STOPPED
+        self.state = "IDLE"  # IDLE | CONNECTING | CONNECTED | RECONNECTING | AUTH_ERROR | UNAVAILABLE | STOPPED | DISABLED
         self.connected_at: int | None = None
         self.ever_connected = False
         self.reconnects = 0
@@ -81,6 +92,16 @@ class Hub:
             symbols[sym] = root
         self.symmap = SymbolMap(symbols)
         self.sessions = {"book": SessionState("book"), "tape": SessionState("tape")}
+        # Schema entitlement as known to the bridge. "plan": excluded by the configured Databento plan (never
+        # requested); "gateway": the Databento gateway rejected the subscription for that schema.
+        self.schema_state: dict[str, dict] = {}
+        if not cfg.depth_plan:
+            for schema in (DEPTH_SCHEMA, *NEVER_REQUESTED):
+                self.schema_state[schema] = {"state": CAP_NOT_ENTITLED, "source": "plan", "message": f"{STANDARD_DEPTH_REASON} - not requested."}
+            self.sessions["book"].state = "DISABLED"
+        else:
+            for schema in NEVER_REQUESTED:
+                self.schema_state[schema] = {"state": "NOT_REQUESTED", "source": "plan", "message": "Never requested by this bridge."}
         self.frames: deque = deque(maxlen=cfg.max_frames)
         self.cursor = 0
         self.started_ms = self.now()
@@ -89,6 +110,22 @@ class Hub:
                         "ingestLagMs": None, "maxIngestLagMs": 0, "tapeLagMs": None, "published": 0, "processingMs": 0.0, "systemMessages": 0, "errors": 0}
         self._rate = deque(maxlen=64)  # (ms, records) samples for the ingest rate
         self.last_roll: list = []
+
+    # ------------------------------------------------------------------ plan / entitlement
+    def not_entitled(self, schema: str) -> bool:
+        return self.schema_state.get(schema, {}).get("state") == CAP_NOT_ENTITLED
+
+    def depth_active(self) -> bool:
+        """An MBO order book is maintained only on a plan that includes MBO and while MBO is not rejected."""
+        return self.cfg.depth_plan and not self.not_entitled(DEPTH_SCHEMA)
+
+    def requested_schemas(self, session: str) -> list[str]:
+        """Exactly the schemas a session subscribes to now. Never mbp-10; never mbo on Standard; never a schema the
+        gateway already rejected (no subscribe / reject / reconnect loop)."""
+        with self.lock:
+            if session == "book":
+                return [DEPTH_SCHEMA] if self.depth_active() else []
+            return [sc for sc in TAPE_SCHEMAS if not self.not_entitled(sc)]
 
     # ------------------------------------------------------------------ records
     def on_record(self, session: str, r, recv_ms: int | None = None) -> None:
@@ -138,7 +175,7 @@ class Hub:
         root, prev, new = change
         st = self.roots[root]
         st.contract, st.instrument_id = new.contract, new.instrument_id
-        st.book = OrderBook(new.instrument_id)
+        st.book = OrderBook(new.instrument_id) if self.depth_active() else None
         st.tape = TradeTape(root, new.contract, new.instrument_id, self.cfg.max_trades)
         st.candles = CandleStore(new.instrument_id, max_bars=max(60, self.cfg.replay_hours * 60 + 120))
         st.pending_trades, st.pending_bars, st.framed_epoch = [], {}, -1
@@ -148,7 +185,8 @@ class Hub:
             # ROLL: never merge contracts - new book (needs a fresh snapshot), new tape, new candle history.
             st.counts["rolls"] += 1
             st.roll_note = {"from": prev.contract, "to": new.contract, "fromId": prev.instrument_id, "toId": new.instrument_id, "atMs": self.now()}
-            self.request_resync("book", f"contract roll {root}: {prev.contract} -> {new.contract}")
+            if self.depth_active():
+                self.request_resync("book", f"contract roll {root}: {prev.contract} -> {new.contract}")
             self.request_resync("tape", f"contract roll {root}: history for {new.contract}")
 
     def _mbo(self, st: RootState, r) -> None:
@@ -188,18 +226,36 @@ class Hub:
         st.last_recv_ns = max(st.last_recv_ns or 0, t["tsRecvNs"])
 
     # ------------------------------------------------------------------ sessions
-    def on_error(self, session: str, message: str, fatal: bool) -> None:
+    def on_error(self, session: str, message: str, fatal: bool) -> str:
+        """Record a gateway / SDK error. Returns AUTH | ENTITLEMENT | ERROR.
+
+        ENTITLEMENT with a schema ("Not authorized for mbo schema") disables that schema only - the session keeps
+        (or reconnects with) its other schemas. AUTH_ERROR is reserved for a genuine authentication failure."""
         with self.lock:
             msg = self.redact(message)[:300]
-            low = msg.lower()
-            code = "AUTH_ERROR" if ("auth" in low or "api key" in low or "unauthor" in low) else "ENTITLEMENT" if ("entitle" in low or "licen" in low or "permission" in low or "not authorized" in low) else "ERROR"
+            kind, schema = classify(msg)
             self.metrics["errors"] += 1
             s = self.sessions[session]
-            s.last_error = {"code": code, "message": msg, "atMs": self.now()}
-            if code == "AUTH_ERROR":
+            code = "AUTH_ERROR" if kind == AUTH else "NOT_ENTITLED" if kind == ENTITLEMENT else "ERROR"
+            s.last_error = {"code": code, "message": msg, "atMs": self.now(), "schema": schema}
+            if kind == AUTH:
                 s.state = AUTH_ERROR
-            elif code == "ENTITLEMENT":
-                s.state = UNAVAILABLE
+            elif kind == ENTITLEMENT:
+                own = [DEPTH_SCHEMA] if session == "book" else list(TAPE_SCHEMAS)
+                targets = [schema] if schema else own  # no schema named -> the session's dataset access itself
+                for sc in targets:
+                    self.schema_state[sc] = {"state": CAP_NOT_ENTITLED, "source": "gateway", "message": msg}
+                depth_lost = DEPTH_SCHEMA in targets and self.cfg.depth_plan
+                if depth_lost:
+                    for st in self.roots.values():
+                        st.book, st.framed_epoch = None, -1
+                if not any(not self.not_entitled(sc) for sc in own):
+                    s.state = UNAVAILABLE  # nothing left to subscribe on this session: it stops (no retry loop)
+                if not fatal and (depth_lost or schema in own or s.state == UNAVAILABLE):
+                    # In-stream error on an open session: close it; the runner re-subscribes without the schema
+                    # (or stops when nothing entitled is left).
+                    self.request_resync(session, f"not entitled: {schema or 'dataset'}")
+            return kind
 
     def on_session_connected(self, session: str) -> None:
         with self.lock:
@@ -216,7 +272,7 @@ class Hub:
     def on_session_closed(self, session: str, reconnecting: bool) -> None:
         with self.lock:
             s = self.sessions[session]
-            if s.state not in (AUTH_ERROR, UNAVAILABLE):
+            if s.state not in (AUTH_ERROR, UNAVAILABLE, "DISABLED"):
                 s.state = RECONNECTING if reconnecting else "STOPPED"
             if session == "book":
                 for st in self.roots.values():
@@ -270,28 +326,30 @@ class Hub:
     def root_status(self, st: RootState) -> dict:
         now = self.now()
         b, t = self.sessions["book"], self.sessions["tape"]
+        depth = self.depth_active()
+        needed = [t, b] if depth else [t]  # Standard: the provider status depends on the trades/ohlcv session only
         reasons: list[str] = []
-        if AUTH_ERROR in (b.state, t.state):
+        if any(s.state == AUTH_ERROR for s in needed):
             status = AUTH_ERROR
             reasons.append("Databento rejected the API key (authentication failed).")
-        elif UNAVAILABLE in (b.state, t.state):
+        elif t.state == UNAVAILABLE:
             status = UNAVAILABLE
-            reasons.append((b.last_error or t.last_error or {}).get("message", "Databento reported the data as unavailable."))
-        elif b.state != "CONNECTED" or t.state != "CONNECTED":
-            status = RECONNECTING if (b.ever_connected or t.ever_connected) else CONNECTING
+            reasons.append((t.last_error or {}).get("message", "Databento reported the data as unavailable."))
+        elif any(s.state != "CONNECTED" for s in needed):
+            status = RECONNECTING if any(s.ever_connected for s in needed) else CONNECTING
         elif st.instrument_id is None:
-            status = UNAVAILABLE if now - (b.connected_at or now) > MAPPING_TIMEOUT_MS else CONNECTING
+            status = UNAVAILABLE if now - (t.connected_at or now) > MAPPING_TIMEOUT_MS else CONNECTING
             reasons.append("Waiting for Databento symbol mapping (actual contract).")
-        elif st.book is None or st.book.state in (SYNCING, INVALID, NO_DATA):
+        elif depth and (st.book is None or st.book.state in (SYNCING, INVALID, NO_DATA)):
             status = SYNCING_S
             reasons.append("SYNCING BOOK - waiting for the complete MBO snapshot.")
         else:
             status = LIVE
-            if st.book.state == DEGRADED:
+            if depth and st.book is not None and st.book.state == DEGRADED:
                 status = DEGRADED_S
                 reasons.append(st.book.reason or "Book integrity degraded.")
             lag = self.metrics["ingestLagMs"]
-            if lag is not None and lag > self.cfg.lag_ms:
+            if depth and lag is not None and lag > self.cfg.lag_ms:
                 status = DEGRADED_S
                 reasons.append(f"Consumer behind the feed: ingest lag {lag} ms.")
             if self.metrics["queueDepth"] > 50_000:
@@ -300,14 +358,15 @@ class Hub:
             if st.tape_gap_at is not None and now - st.tape_gap_at < TAPE_GAP_FLAG_MS:
                 status = DEGRADED_S
                 reasons.append("Trade history gap (outage longer than the replay window) - never filled.")
-            if b.storm or t.storm:
+            if any(s.storm for s in needed):
                 status = DEGRADED_S
                 reasons.append("Reconnect storm - backing off.")
-            if max(now - (b.last_msg_ms or 0), now - (t.last_msg_ms or 0)) > self.cfg.stale_ms:
+            if max(now - (s.last_msg_ms or 0) for s in needed) > self.cfg.stale_ms:
                 status = STALE
                 reasons.append("No Databento message (data or heartbeat) within the stale window.")
         freshness = ("UNAVAILABLE" if status in (AUTH_ERROR, UNAVAILABLE) else "OFFLINE" if status in (CONNECTING, RECONNECTING) else
-                     "STALE" if status == STALE else "DELAYED" if (self.metrics["ingestLagMs"] or 0) > self.cfg.lag_ms else "LIVE")
+                     "STALE" if status == STALE else "DELAYED" if depth and (self.metrics["ingestLagMs"] or 0) > self.cfg.lag_ms else "LIVE")
+        caps = self.capabilities(st, status)
         book = st.book
         return {
             "root": st.root,
@@ -320,6 +379,8 @@ class Hub:
             "status": status,
             "freshness": freshness,
             "reasons": reasons,
+            "plan": self.cfg.plan,
+            "capabilities": caps,
             "book": {"state": book.state if book else NO_DATA, "epoch": book.epoch if book else 0, "reason": book.reason if book else None,
                      "orders": len(book.orders) if book else 0, "bidLevels": len(book.levels["B"]) if book else 0, "askLevels": len(book.levels["A"]) if book else 0,
                      "counts": dict(book.counts) if book else {}, "best": list(book.best()) if book else [None, None]},
@@ -333,6 +394,47 @@ class Hub:
             "roll": st.roll_note,
         }
 
+    def capabilities(self, st: RootState, status: str) -> dict:
+        """Capability-based status: each data kind is reported on its own, so missing depth never takes the
+        trades / OHLCV / volume path down (and vice versa)."""
+        now = self.now()
+        t = self.sessions["tape"]
+
+        def cap(schema: str, observed: bool) -> str:
+            if self.not_entitled(schema):
+                return CAP_NOT_ENTITLED
+            if status == AUTH_ERROR or t.state in (AUTH_ERROR, UNAVAILABLE):
+                return CAP_UNAVAILABLE
+            if t.state != "CONNECTED":
+                return CAP_OFFLINE
+            if now - (t.last_msg_ms or 0) > self.cfg.stale_ms:
+                return CAP_STALE
+            return CAP_LIVE if observed else CAP_WAITING  # WAITING = connected, no record observed yet (quiet / closed)
+
+        trades = cap("trades", st.counts["trades"] > 0)
+        ohlcv = cap("ohlcv-1m", st.counts["ohlcv"] > 0)
+        volume = min((trades, ohlcv), key=_CAP_RANK.index)
+        if not self.cfg.depth_plan:
+            depth, depth_reason = CAP_UNSUPPORTED, STANDARD_DEPTH_REASON
+        elif self.not_entitled(DEPTH_SCHEMA):
+            depth, depth_reason = CAP_NOT_ENTITLED, self.schema_state[DEPTH_SCHEMA]["message"]
+        else:
+            bs = st.book.state if st.book is not None else NO_DATA
+            depth = {VALID: CAP_LIVE, DEGRADED: "DEGRADED", SYNCING: "SYNCING"}.get(bs, CAP_OFFLINE)
+            depth_reason = None if depth == CAP_LIVE else (st.book.reason if st.book is not None else None)
+        mbo_state = self.schema_state.get(DEPTH_SCHEMA, {}).get("state") or ("ENTITLED" if st.counts["mbo"] > 0 else "REQUESTED")
+        return {
+            "trades": trades,
+            "ohlcv": ohlcv,
+            "volume": volume,
+            "depth": depth,
+            "depthReason": depth_reason,
+            "mbo": mbo_state,
+            "mbp10": self.schema_state.get("mbp-10", {}).get("state", "NOT_REQUESTED"),
+            "level2Provider": "NOT_CONNECTED" if depth != CAP_LIVE else "DATABENTO_MBO",
+            "level2Required": LEVEL2_REQUIRED if depth in (CAP_UNSUPPORTED, CAP_NOT_ENTITLED) else None,
+        }
+
     def health(self) -> dict:
         with self.lock:
             now = self.now()
@@ -344,6 +446,8 @@ class Hub:
                 "provider": "Databento",
                 "dataset": DATASET,
                 "contractMode": self.cfg.contract_mode,
+                "plan": self.cfg.plan,
+                "schemas": {"requested": {k: self.requested_schemas(k) for k in self.sessions}, "entitlements": {k: dict(v) for k, v in self.schema_state.items()}},
                 "sessions": {k: v.view() for k, v in self.sessions.items()},
                 "instruments": {root: self.root_status(st) for root, st in self.roots.items()},
                 "rolls": list(self.symmap.rolls),

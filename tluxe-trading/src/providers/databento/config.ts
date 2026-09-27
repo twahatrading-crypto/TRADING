@@ -15,6 +15,12 @@ export interface DatabentoConfig {
   requestTimeoutMs: number;
   /** No successful bridge response for this long -> OFFLINE. */
   offlineMs: number;
+  /**
+   * Use Databento MBO as the Level-2 depth provider. ONLY for a Databento plan that includes real-time MBO (bridge
+   * TLUXE_DB_PLAN=mbo). Default false: CME Globex MDP 3.0 Standard has no MBO / MBP-10, so Databento supplies trades,
+   * OHLCV and volume only and depth comes from a separate Level-2 provider (IBKR / T4 / …) when one is connected.
+   */
+  mboDepth: boolean;
 }
 
 export const DATABENTO_CONFIG_KEY = 'tluxe.databento.config.v1';
@@ -27,6 +33,7 @@ export const DEFAULT_DATABENTO_CONFIG: Readonly<DatabentoConfig> = Object.freeze
   healthMs: 2000,
   requestTimeoutMs: 8000,
   offlineMs: 10_000,
+  mboDepth: false,
 });
 
 const num = (v: unknown, lo: number, hi: number, d: number) => (typeof v === 'number' && Number.isFinite(v) ? Math.min(hi, Math.max(lo, Math.round(v))) : d);
@@ -45,6 +52,7 @@ export function sanitizeDatabentoConfig(input: unknown): DatabentoConfig {
     healthMs: num(o.healthMs, 500, 60000, d.healthMs),
     requestTimeoutMs: num(o.requestTimeoutMs, 1000, 60000, d.requestTimeoutMs),
     offlineMs: num(o.offlineMs, 2000, 120000, d.offlineMs),
+    mboDepth: o.mboDepth === true,
   };
 }
 

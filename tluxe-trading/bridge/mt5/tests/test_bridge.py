@@ -254,6 +254,11 @@ class HttpTests(unittest.TestCase):
     def test_cors_only_for_allowed_origins(self):
         _, h, _ = self.req("/v1/health", origin="http://localhost:5181")
         self.assertEqual(h.get("Access-Control-Allow-Origin"), "http://localhost:5181")
+        for origin in ("http://localhost:5182", "http://127.0.0.1:5182"):  # fresh TLUXE preview port
+            status, h, _ = self.req("/v1/health", origin=origin)
+            self.assertEqual(status, 200)
+            self.assertEqual(h.get("Access-Control-Allow-Origin"), origin)
+        self.assertEqual(self.req("/v1/health", token=None, origin="http://localhost:5182")[0], 401)  # token still required
         _, h, _ = self.req("/v1/health", origin="https://evil.example")
         self.assertIsNone(h.get("Access-Control-Allow-Origin"))
         # The old project's dev port is not authorised by default.
