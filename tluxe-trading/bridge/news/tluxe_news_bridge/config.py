@@ -121,7 +121,9 @@ def from_env(env: dict | None = None) -> NewsConfig:
     if key and token == key:
         raise ConfigError("TLUXE_NEWS_TOKEN must not be the Trading Economics key (the backend token is given to the browser).")
     host = (e.get("TLUXE_NEWS_HOST") or "127.0.0.1").strip()
-    if host in ("0.0.0.0", "::", ""):
+    # Inside the service container (TLUXE_CONTAINER=1, set by its Dockerfile) it must listen on the private network;
+    # the bridge token is still required on every request. On a PC it stays local-only.
+    if host in ("0.0.0.0", "::", "") and e.get("TLUXE_CONTAINER") != "1":
         raise ConfigError("Refusing to listen on all interfaces. The news backend binds to 127.0.0.1 (local only).")
     origins = tuple(o.strip() for o in (e.get("TLUXE_NEWS_ALLOWED_ORIGINS") or ",".join(DEFAULT_ORIGINS)).split(",") if o.strip())
     for o in origins:

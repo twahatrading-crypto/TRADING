@@ -131,9 +131,12 @@ def from_env(env: dict | None = None) -> BridgeConfig:
     if token == key:
         raise ConfigError("TLUXE_DB_BRIDGE_TOKEN must not be the Databento API key (the bridge token is given to the browser).")
     host = e.get("TLUXE_DB_BRIDGE_HOST", "127.0.0.1").strip()
-    if host in ("0.0.0.0", "::") and e.get("TLUXE_DB_BRIDGE_ALLOW_ALL_INTERFACES") != "1":
+    if host in ("0.0.0.0", "::") and e.get("TLUXE_DB_BRIDGE_ALLOW_ALL_INTERFACES") != "1" and e.get("TLUXE_CONTAINER") != "1":
         raise ConfigError("Refusing to listen on all interfaces. Bind to 127.0.0.1 or a private address.")
     origins = tuple(o.strip() for o in e.get("TLUXE_DB_BRIDGE_ALLOWED_ORIGINS", ",".join(BridgeConfig.allowed_origins)).split(",") if o.strip())
+    dataset = (e.get("TLUXE_DB_DATASET") or DATASET).strip().upper()
+    if dataset != DATASET:
+        raise ConfigError(f"TLUXE_DB_DATASET: only {DATASET} (CME Globex MDP 3.0) is supported by this bridge")
     plan = (e.get("TLUXE_DB_PLAN") or "standard").strip().lower()
     if plan not in PLANS:
         raise ConfigError("TLUXE_DB_PLAN must be 'standard' (trades + ohlcv-1m) or 'mbo' (plan that includes real-time MBO)")

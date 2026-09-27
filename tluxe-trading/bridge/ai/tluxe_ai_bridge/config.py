@@ -100,7 +100,9 @@ def from_env(env: dict | None = None) -> AiConfig:
     if token.startswith("sk-") or (key and token == key):
         raise ConfigError("TLUXE_AI_TOKEN must not be the OpenAI API key (the bridge token is given to the browser).")
     host = (e.get("TLUXE_AI_HOST") or "127.0.0.1").strip()
-    if host in ("0.0.0.0", "::", ""):
+    # Inside the service container (TLUXE_CONTAINER=1, set by its Dockerfile) it must listen on the private network;
+    # the bridge token is still required on every request. On a PC it stays local-only.
+    if host in ("0.0.0.0", "::", "") and e.get("TLUXE_CONTAINER") != "1":
         raise ConfigError("Refusing to listen on all interfaces. TLUXE AI binds to 127.0.0.1 (local only).")
     model = (e.get("TLUXE_AI_MODEL") or DEFAULT_MODEL).strip()
     if not _MODEL_RE.match(model):

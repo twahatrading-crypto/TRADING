@@ -9,6 +9,7 @@ credentials are never accepted, echoed or returned.
 """
 from __future__ import annotations
 
+import errno
 import hmac
 import json
 import logging
@@ -83,6 +84,8 @@ def make_handler(cfg: NewsConfig, svc: NewsService, started_ms: int):
             self._error(405, "METHOD_NOT_ALLOWED", "The news backend is read-only.")
 
         def do_GET(self):  # noqa: N802
+            if self.path == "/healthz":  # container liveness probe: no auth, no details
+                return self._json(200, {"ok": True})
             if not self._origin_ok():
                 return self._error(403, "ORIGIN_NOT_ALLOWED", "This browser origin is not allowed.")
             auth = self.headers.get("Authorization", "")
@@ -128,5 +131,24 @@ class ExclusiveHTTPServer(ThreadingHTTPServer):
         super().server_bind()
 
 
+class DualStackHTTPServer(ExclusiveHTTPServer):
+    """IPv6 listener that also accepts IPv4 (Railway private networking is IPv6; container health checks use 127.0.0.1)."""
+
+    address_family = socket.AF_INET6
+
+    def server_bind(self) -> None:
+        if hasattr(socket, "IPV6_V6ONLY"):
+            self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+        super().server_bind()
+
+
 def serve(cfg: NewsConfig, svc: NewsService, started_ms: int = 0) -> ThreadingHTTPServer:
+    if ":" in cfg.host:
+        try:
+            return DualStackHTTPServer((cfg.host, cfg.port), make_handler(cfg, svc, started_ms))
+        except OSError as exc:
+            if exc.errno != errno.EAFNOSUPPORT:
+                raise
+            logging.getLogger(__name__).warning("IPv6 not available on this host - listening on 0.0.0.0 instead")
+            return ExclusiveHTTPServer(("0.0.0.0", cfg.port), make_handler(cfg, svc, started_ms))
     return ExclusiveHTTPServer((cfg.host, cfg.port), make_handler(cfg, svc, started_ms))

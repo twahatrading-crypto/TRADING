@@ -5,6 +5,7 @@ Exit codes: 0 stopped · 2 bad configuration (e.g. DATABENTO_API_KEY missing) ·
 """
 import logging
 import os
+import signal
 import sys
 from pathlib import Path
 
@@ -60,8 +61,24 @@ def _alive(pid: int) -> bool:
         return False
 
 
+def _setup_logging() -> None:
+    """LOG_FORMAT=json (containers) -> one JSON object per line; text otherwise. Redaction is added afterwards."""
+    if os.environ.get("LOG_FORMAT", "").lower() == "json":
+        import json as _json
+
+        class _Json(logging.Formatter):
+            def format(self, r: logging.LogRecord) -> str:
+                return _json.dumps({"ts": self.formatTime(r, "%Y-%m-%dT%H:%M:%S"), "level": r.levelname, "logger": r.name, "msg": r.getMessage()})
+
+        h = logging.StreamHandler(sys.stdout)
+        h.setFormatter(_Json())
+        logging.basicConfig(level=logging.INFO, handlers=[h])
+    else:
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+
+
 def main() -> int:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    _setup_logging()
     load_dotenv(HERE / ".env")
     install_log_redaction(Redactor(os.environ.get("DATABENTO_API_KEY", ""), os.environ.get("TLUXE_DB_BRIDGE_TOKEN", "")))
     try:
@@ -78,10 +95,14 @@ def main() -> int:
         try:
             httpd = serve(cfg, mgr.hub)
         except OSError as exc:
-            logging.error("Port %s on %s is already in use (%s).", cfg.port, cfg.host, exc)
+            logging.error("Cannot listen on %s:%s (%s) - is the port already in use?", cfg.host, cfg.port, exc)
             return EXIT_PORT
         mgr.start()
         logging.info("TLUXE Databento bridge on http://%s:%s · dataset GLBX.MDP3 · plan %s (schemas %s; never mbp-10%s) · mode %s · origins %s", cfg.host, cfg.port, cfg.plan, ", ".join(["trades", "ohlcv-1m"] + (["mbo"] if cfg.depth_plan else [])), "" if cfg.depth_plan else ", never mbo", cfg.contract_mode, ", ".join(cfg.allowed_origins))
+        def _stop(*_):  # SIGTERM (container stop / redeploy) -> same clean shutdown as Ctrl+C
+            raise KeyboardInterrupt
+
+        signal.signal(signal.SIGTERM, _stop)
         try:
             httpd.serve_forever()
         except KeyboardInterrupt:

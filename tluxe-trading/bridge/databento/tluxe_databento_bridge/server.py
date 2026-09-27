@@ -10,6 +10,7 @@ accepted, echoed or returned):
 """
 from __future__ import annotations
 
+import errno
 import hmac
 import json
 import logging
@@ -71,6 +72,8 @@ def make_handler(cfg: BridgeConfig, hub: Hub, started_ms: int):
             return hmac.compare_digest(given, token)
 
         def do_GET(self):  # noqa: N802
+            if self.path == "/healthz":  # container liveness probe: no auth, no details
+                return self._json(200, {"ok": True})
             if not self._authorised():
                 return self._json(401, {"error": {"code": "UNAUTHORIZED", "message": "Missing or invalid bridge token"}})
             url = urlparse(self.path)
@@ -123,5 +126,24 @@ class ExclusiveHTTPServer(ThreadingHTTPServer):
         super().server_bind()
 
 
+class DualStackHTTPServer(ExclusiveHTTPServer):
+    """IPv6 listener that also accepts IPv4 (Railway private networking is IPv6; container health checks use 127.0.0.1)."""
+
+    address_family = socket.AF_INET6
+
+    def server_bind(self) -> None:
+        if hasattr(socket, "IPV6_V6ONLY"):
+            self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+        super().server_bind()
+
+
 def serve(cfg: BridgeConfig, hub: Hub) -> ThreadingHTTPServer:
+    if ":" in cfg.host:
+        try:
+            return DualStackHTTPServer((cfg.host, cfg.port), make_handler(cfg, hub, hub.now()))
+        except OSError as exc:
+            if exc.errno != errno.EAFNOSUPPORT:
+                raise
+            logging.getLogger(__name__).warning("IPv6 not available on this host - listening on 0.0.0.0 instead")
+            return ExclusiveHTTPServer(("0.0.0.0", cfg.port), make_handler(cfg, hub, hub.now()))
     return ExclusiveHTTPServer((cfg.host, cfg.port), make_handler(cfg, hub, hub.now()))

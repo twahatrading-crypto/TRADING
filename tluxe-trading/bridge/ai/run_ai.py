@@ -63,8 +63,24 @@ def _alive(pid: int) -> bool:
         return False
 
 
+def _setup_logging() -> None:
+    """LOG_FORMAT=json (containers) -> one JSON object per line; text otherwise. Redaction is added afterwards."""
+    if os.environ.get("LOG_FORMAT", "").lower() == "json":
+        import json as _json
+
+        class _Json(logging.Formatter):
+            def format(self, r: logging.LogRecord) -> str:
+                return _json.dumps({"ts": self.formatTime(r, "%Y-%m-%dT%H:%M:%S"), "level": r.levelname, "logger": r.name, "msg": r.getMessage()})
+
+        h = logging.StreamHandler(sys.stdout)
+        h.setFormatter(_Json())
+        logging.basicConfig(level=logging.INFO, handlers=[h])
+    else:
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+
+
 def main() -> int:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    _setup_logging()
     load_dotenv(HERE / ".env")
     install_log_redaction(Redactor(os.environ.get("OPENAI_API_KEY", ""), os.environ.get("TLUXE_AI_TOKEN", "")))
     try:
@@ -81,7 +97,7 @@ def main() -> int:
         try:
             httpd = serve(cfg, provider, int(time.time() * 1000))
         except OSError as exc:
-            logging.error("Port %s on %s is already in use (%s).", cfg.port, cfg.host, exc)
+            logging.error("Cannot listen on %s:%s (%s) - is the port already in use?", cfg.host, cfg.port, exc)
             return EXIT_PORT
         logging.info("TLUXE AI backend on http://%s:%s · OpenAI Responses API · model %s · READ-ONLY (no tools) · origins %s",
                      cfg.host, cfg.port, cfg.model, ", ".join(cfg.allowed_origins))

@@ -8,6 +8,7 @@ Every request needs the bridge token (Bearer TLUXE_AI_TOKEN). Browser origins mu
 """
 from __future__ import annotations
 
+import errno
 import hmac
 import json
 import logging
@@ -109,6 +110,8 @@ def make_handler(cfg: AiConfig, provider: OpenAIProvider, started_ms: int):
             self.end_headers()
 
         def do_GET(self):  # noqa: N802
+            if self.path == "/healthz":  # container liveness probe: no auth, no details
+                return self._json(200, {"ok": True})
             if not self._guard():
                 return
             path = self.path.split("?", 1)[0].rstrip("/")
@@ -190,5 +193,24 @@ class ExclusiveHTTPServer(ThreadingHTTPServer):
         super().server_bind()
 
 
+class DualStackHTTPServer(ExclusiveHTTPServer):
+    """IPv6 listener that also accepts IPv4 (Railway private networking is IPv6; container health checks use 127.0.0.1)."""
+
+    address_family = socket.AF_INET6
+
+    def server_bind(self) -> None:
+        if hasattr(socket, "IPV6_V6ONLY"):
+            self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+        super().server_bind()
+
+
 def serve(cfg: AiConfig, provider: OpenAIProvider, started_ms: int = 0) -> ThreadingHTTPServer:
+    if ":" in cfg.host:
+        try:
+            return DualStackHTTPServer((cfg.host, cfg.port), make_handler(cfg, provider, started_ms))
+        except OSError as exc:
+            if exc.errno != errno.EAFNOSUPPORT:
+                raise
+            logging.getLogger(__name__).warning("IPv6 not available on this host - listening on 0.0.0.0 instead")
+            return ExclusiveHTTPServer(("0.0.0.0", cfg.port), make_handler(cfg, provider, started_ms))
     return ExclusiveHTTPServer((cfg.host, cfg.port), make_handler(cfg, provider, started_ms))
