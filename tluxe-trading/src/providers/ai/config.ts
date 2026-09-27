@@ -3,6 +3,8 @@
  * only. The OpenAI API key is NEVER configured, stored or sent here: it lives only in the backend's server-side
  * environment (OPENAI_API_KEY). The browser knows the backend URL and the backend token (TLUXE_AI_TOKEN).
  */
+import { defaultBackendUrl } from '../../config/deployment';
+
 export interface TluxeAiConfig {
   enabled: boolean;
   /** Backend base URL, private (the backend binds to 127.0.0.1). */
@@ -16,7 +18,7 @@ export interface TluxeAiConfig {
 }
 
 export const TLUXE_AI_CONFIG_KEY = 'tluxe.ai.config.v1';
-export const TLUXE_AI_DEFAULT_URL = 'http://127.0.0.1:8767';
+export const TLUXE_AI_DEFAULT_URL = defaultBackendUrl('ai');
 
 export const DEFAULT_TLUXE_AI_CONFIG: Readonly<TluxeAiConfig> = Object.freeze({
   enabled: false,

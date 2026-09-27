@@ -1,0 +1,17 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "build": {
+    "builder": "DOCKERFILE",
+    "dockerfilePath": "bridge/databento/Dockerfile",
+    "watchPatterns": [
+      "/tluxe-trading/bridge/databento/**"
+    ]
+  },
+  "deploy": {
+    "numReplicas": 1,
+    "healthcheckPath": "/healthz",
+    "healthcheckTimeout": 60,
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 10
+  }
+}

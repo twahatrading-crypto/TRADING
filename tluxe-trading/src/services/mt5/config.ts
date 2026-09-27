@@ -2,6 +2,8 @@
  * MT5 bridge connection settings. Stored in THIS browser only (localStorage) —
  * never compiled into the app bundle and never sent anywhere except the bridge.
  */
+import { defaultBackendUrl } from '../../config/deployment';
+
 export interface Mt5Config {
   enabled: boolean;
   /** Bridge base URL, private by default (the bridge binds to 127.0.0.1). */
@@ -31,7 +33,7 @@ export const MT5_CONFIG_KEY = 'tluxe.mt5.config.v1';
 
 export const DEFAULT_MT5_CONFIG: Readonly<Mt5Config> = Object.freeze({
   enabled: false,
-  bridgeUrl: 'http://127.0.0.1:8765',
+  bridgeUrl: defaultBackendUrl('mt5'),
   token: '',
   historyBars: 5000,
   resyncBars: 500,

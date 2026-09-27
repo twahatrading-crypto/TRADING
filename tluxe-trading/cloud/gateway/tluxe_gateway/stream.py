@@ -39,6 +39,8 @@ class StreamHub:
         self.last: dict[str, dict] = {}
         self.sent = 0
         self.slow_disconnects = 0
+        # Called when a browser stream connects / disconnects (the gateway refreshes its status right away).
+        self.on_clients_changed = lambda: None
 
     def subscribers(self, channel: str) -> int:
         return sum(1 for c in self.clients if channel in c.channels)
@@ -69,6 +71,7 @@ class StreamHub:
         """Run one authenticated connection until it closes."""
         c = Client(ws)
         self.clients.add(c)
+        self.on_clients_changed()
         writer = asyncio.create_task(self._writer(c))
         hb = asyncio.create_task(self._heartbeats(c))
         try:
@@ -90,6 +93,7 @@ class StreamHub:
                         c.queue.put_nowait(("databento", self.last["databento-health"]))
         finally:
             self.clients.discard(c)
+            self.on_clients_changed()
             writer.cancel()
             hb.cancel()
 

@@ -1,0 +1,24 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "build": {
+    "builder": "DOCKERFILE",
+    "dockerfilePath": "cloud/gateway/Dockerfile",
+    "watchPatterns": [
+      "/tluxe-trading/src/**",
+      "/tluxe-trading/public/**",
+      "/tluxe-trading/index.html",
+      "/tluxe-trading/package*.json",
+      "/tluxe-trading/vite.config.ts",
+      "/tluxe-trading/tsconfig.json",
+      "/tluxe-trading/scripts/**",
+      "/tluxe-trading/cloud/gateway/**"
+    ]
+  },
+  "deploy": {
+    "numReplicas": 1,
+    "healthcheckPath": "/healthz",
+    "healthcheckTimeout": 120,
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 10
+  }
+}

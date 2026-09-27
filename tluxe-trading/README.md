@@ -28,6 +28,14 @@ without it the panel stays **Not Connected**.
 (127.0.0.1:8768, `bridge\news\start_news.cmd`): Trading Economics economic calendar (and optionally its news API).
 Without a Trading Economics credential in `bridge/news/.env` the page stays **DATA UNAVAILABLE**.
 
+## Cloud (prepared, not deployed)
+
+The repository also builds a cloud deployment: Railway runs the web app, API gateway, AI, Databento, news and
+PostgreSQL, and a Windows VPS runs MT5 with an outbound link. Nothing is deployed until the owner approves.
+`npm run build:cloud` builds the gateway-served bundle. It has no localhost URLs and no credentials, and a scan
+enforces that. Architecture, variables, Railway steps and VPS requirements are in
+[`docs/CLOUD_DEPLOYMENT.md`](docs/CLOUD_DEPLOYMENT.md). Local development above is unchanged.
+
 ## Instruments
 
 Canonical registry: `src/config/instruments.ts` — GC, SI (COMEX futures), XAUUSD,

@@ -3,6 +3,8 @@
  * The Databento API key is NEVER configured, stored or sent here: it lives only in the bridge's server-side
  * environment (DATABENTO_API_KEY). The browser only knows the bridge URL and the bridge token.
  */
+import { defaultBackendUrl } from '../../config/deployment';
+
 export interface DatabentoConfig {
   enabled: boolean;
   /** Bridge base URL, private by default (the bridge binds to 127.0.0.1). */
@@ -27,7 +29,7 @@ export const DATABENTO_CONFIG_KEY = 'tluxe.databento.config.v1';
 
 export const DEFAULT_DATABENTO_CONFIG: Readonly<DatabentoConfig> = Object.freeze({
   enabled: false,
-  bridgeUrl: 'http://127.0.0.1:8766',
+  bridgeUrl: defaultBackendUrl('databento'),
   token: '',
   pollMs: 250,
   healthMs: 2000,

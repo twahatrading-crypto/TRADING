@@ -330,7 +330,9 @@ async def compute_status(app: web.Application) -> dict:
     if not cfg.mt5_bridge_keys:
         link = {**link, "connected": False, "detail": "No MT5 bridge token hash configured (TLUXE_MT5_BRIDGE_TOKEN_SHA256)."}
     out["mt5Bridge"], out["mt5Feed"] = mt5_states(link, relay.terminal(), now)
-    out["websocket"] = comp("LIVE", f"{len(hub.clients)} browser stream(s) connected.", clients=len(hub.clients))
+    # LIVE only when a browser stream is actually connected - an open endpoint alone is not "live".
+    n = len(hub.clients)
+    out["websocket"] = comp("LIVE", f"{n} browser stream(s) connected.", clients=n) if n else comp("NOT CONNECTED", "No browser stream connected (endpoint ready).", clients=0)
     return {"timeMs": now, "components": out}
 
 
@@ -384,7 +386,10 @@ async def bridge_ws(request: web.Request) -> web.StreamResponse:
 async def _status_worker(app: web.Application) -> None:
     last_states: dict[str, str] = {}
     last_push = 0.0
+    wake = asyncio.Event()
+    app[K_HUB].on_clients_changed = wake.set  # a new / closed browser stream refreshes the status immediately
     while True:
+        wake.clear()
         try:
             st = await compute_status(app)
             app[K_STATE]["previousStatus"] = app[K_STATE].get("status")
@@ -402,7 +407,10 @@ async def _status_worker(app: web.Application) -> None:
             raise
         except Exception:
             log.exception("status worker")
-        await asyncio.sleep(10)
+        try:
+            await asyncio.wait_for(wake.wait(), 10)
+        except asyncio.TimeoutError:
+            pass
 
 
 async def _databento_worker(app: web.Application) -> None:

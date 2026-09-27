@@ -1,0 +1,19 @@
+.cloud-signin { min-height: 100vh; display: grid; place-items: center; padding: 16px; background: var(--bg); }
+.cloud-signin__card { width: 100%; max-width: 360px; display: grid; gap: 14px; padding: 24px; background: var(--panel); border: 1px solid var(--border-gold); border-radius: 10px; }
+.cloud-signin__brand { display: flex; align-items: center; gap: 8px; color: var(--gold-bright); font-size: 1.1rem; font-weight: 600; }
+.cloud-signin__note { margin: 0; color: var(--text-3); font-size: 0.8rem; }
+.cloud-signin__field { display: grid; gap: 6px; color: var(--text-2); font-size: 0.8rem; }
+.cloud-signin__field input { padding: 9px 10px; background: var(--bg-raised); border: 1px solid var(--border-strong); border-radius: 6px; color: var(--text); font-size: 16px; }
+.cloud-signin__error { margin: 0; color: var(--red); font-size: 0.8rem; }
+.cloud-signin__btn { padding: 9px 12px; border-radius: 6px; border: 1px solid var(--border-gold); background: var(--gold-soft); color: var(--gold-bright); font-weight: 600; cursor: pointer; }
+.cloud-signin__btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.cloud-status { display: grid; gap: 8px; }
+.cloud-status__row { display: grid; grid-template-columns: minmax(90px, 130px) auto 1fr; align-items: center; gap: 8px; font-size: 0.8rem; color: var(--text-2); }
+.cloud-status__detail { color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.cloud-status__note { margin: 4px 0 0; color: var(--text-3); font-size: 0.75rem; }
+.cloud-status__signout { justify-self: start; display: inline-flex; align-items: center; gap: 6px; }
+@media (max-width: 520px) {
+  .cloud-status__row { grid-template-columns: 1fr auto; }
+  .cloud-status__detail { grid-column: 1 / -1; white-space: normal; }
+}

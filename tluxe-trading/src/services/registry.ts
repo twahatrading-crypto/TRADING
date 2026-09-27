@@ -37,6 +37,7 @@ import { loadDatabentoConfig } from '../providers/databento/config';
 import { DatabentoFeed } from '../providers/databento/DatabentoFeed';
 import { DatabentoFootprintProvider, DatabentoMarketProvider, DatabentoMboOrderFlowProvider, DatabentoOrderFlowProvider } from '../providers/databento/adapters';
 import { Mt5Provider } from './mt5/Mt5Provider';
+import { resolveBackendConfig } from '../config/deployment';
 
 export interface Services {
   instruments: InstrumentSelection;
@@ -102,11 +103,12 @@ export interface ServiceOptions {
  * Connecting MT5 or Bookmap later = implement the interface and add it here.
  */
 export function defaultProviders(storage: Pick<Storage, 'getItem' | 'setItem'> | null = null): ProviderSet {
-  // Real MT5 data only when the user has configured and enabled the private bridge.
-  const mt5 = loadMt5Config(storage);
+  // Real MT5 data only when the user has configured and enabled the private bridge (local), or through the gateway's
+  // read-only MT5 relay (cloud: the Windows VPS link; NOT CONNECTED when no link is attached).
+  const mt5 = resolveBackendConfig(loadMt5Config(storage), 'mt5', 'bridgeUrl');
   // Real CME Globex / COMEX data (GC, SI) only when the user enabled the private Databento bridge. No fallback:
   // without it GC / SI order flow stays DATA UNAVAILABLE (never MT5, never test data).
-  const db = loadDatabentoConfig(storage);
+  const db = resolveBackendConfig(loadDatabentoConfig(storage), 'databento', 'bridgeUrl');
   const feed = db.enabled && db.token ? new DatabentoFeed(db) : null;
   // Databento Standard (default): trades only - depth is never taken from it. With a MBO plan it is also the depth source.
   const dbMbo = feed && db.mboDepth ? new DatabentoMboOrderFlowProvider(feed) : null;
@@ -114,7 +116,7 @@ export function defaultProviders(storage: Pick<Storage, 'getItem' | 'setItem'> |
   // Level-2 depth adapter slot (IBKR / T4 / …): none is connected yet -> the heatmap reports LEVEL-2 PROVIDER NOT CONNECTED.
   const level2Depth: OrderFlowDepthProvider | null = dbMbo;
   // Real news only through the local news backend (bridge/news) when the user enabled it. Provider keys stay server-side.
-  const nb = loadNewsBridgeConfig(storage);
+  const nb = resolveBackendConfig(loadNewsBridgeConfig(storage), 'news', 'url');
   const newsFeed = nb.enabled && nb.token ? new NewsBridgeFeed(nb) : null;
   return {
     databento: feed,
@@ -165,7 +167,7 @@ export function createServices(providers: ProviderSet = defaultProviders(), opts
 }
 
 function aiProvider(storage: Pick<Storage, 'getItem' | 'setItem'> | null): AiProvider {
-  const cfg = loadTluxeAiConfig(storage);
+  const cfg = resolveBackendConfig(loadTluxeAiConfig(storage), 'ai', 'url');
   return cfg.enabled && cfg.token ? new TluxeAiProvider(cfg) : new NullAiProvider();
 }
 

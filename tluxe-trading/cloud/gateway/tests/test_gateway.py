@@ -327,10 +327,13 @@ class TestGatewayDev(GatewayCase):
         sid = await self.login()
         with self.assertRaises(Exception):
             await self.client.ws_connect("/api/stream", headers={"Cookie": f"{COOKIE}={sid}", "Origin": "https://evil.example"})
+        from tluxe_gateway.app import K_HUB, compute_status
+        # An open endpoint is not "live": LIVE only while a browser stream is actually connected.
+        self.assertEqual((await compute_status(self.app))["components"]["websocket"]["state"], "NOT CONNECTED")
         ws = await self.client.ws_connect("/api/stream", headers=self.ck(sid))
         hello = await ws.receive_json(timeout=5)
         self.assertEqual((hello["type"], hello["seq"]), ("hello", 1))
-        from tluxe_gateway.app import K_HUB
+        self.assertEqual((await compute_status(self.app))["components"]["websocket"]["state"], "LIVE")
         self.app[K_HUB].publish("status", {"components": {}})
         m = await ws.receive_json(timeout=5)
         self.assertEqual((m["type"], m["seq"]), ("status", 2))
@@ -412,6 +415,21 @@ class TestGatewayWorkers(GatewayCase):
         self.assertTrue({"health", "frames"} <= kinds)
         self.assertEqual(seqs, sorted(seqs))  # strictly increasing per-connection sequence
         self.assertEqual(len(seqs), len(set(seqs)))
+        await ws.close()
+
+    async def test_a_connecting_browser_sees_its_own_stream_reported_promptly(self):
+        sid = await self.login()
+        await asyncio.sleep(0.3)  # first status computed with no browser stream
+        ws = await self.client.ws_connect("/api/stream", headers=self.ck(sid))
+        t0, state = time.monotonic(), None
+        while time.monotonic() - t0 < 5:
+            m = await ws.receive_json(timeout=5)
+            if m["type"] == "status":
+                state = m["data"]["components"]["websocket"]["state"]
+                if state == "LIVE":
+                    break
+        self.assertEqual(state, "LIVE")
+        self.assertLess(time.monotonic() - t0, 5)  # not the 10 s status cycle
         await ws.close()
 
 

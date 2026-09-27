@@ -6,6 +6,7 @@ Exit codes: 0 stopped · 2 bad configuration.
 """
 import logging
 import os
+import socket
 import sys
 from pathlib import Path
 
@@ -14,6 +15,19 @@ from aiohttp import web
 from .app import make_app, redactor_for
 from .config import ConfigError, from_env, load_dotenv
 from .logs import Redactor, setup_logging
+
+
+def bind_host(host: str) -> str:
+    """'::' = dual-stack (Railway private networking is IPv6; IPv4 still accepted). Hosts without IPv6 fall back to
+    0.0.0.0 instead of failing to start."""
+    if host != "::":
+        return host
+    try:
+        socket.socket(socket.AF_INET6, socket.SOCK_STREAM).close()
+        return host
+    except OSError:
+        logging.getLogger("tluxe.gateway").warning("IPv6 is not available on this host - listening on 0.0.0.0 (IPv4) instead of ::")
+        return "0.0.0.0"
 
 
 def main() -> int:
@@ -28,7 +42,7 @@ def main() -> int:
     logging.getLogger("tluxe.gateway").info("TLUXE gateway starting (%s) on [%s]:%s · origins %s · services ai=%s databento=%s news=%s · mt5 keys %d",
                                             cfg.env, cfg.host, cfg.port, ", ".join(cfg.allowed_origins), cfg.ai.configured, cfg.databento.configured,
                                             cfg.news.configured, len(cfg.mt5_bridge_keys))
-    web.run_app(make_app(cfg), host=cfg.host, port=cfg.port, access_log=None, shutdown_timeout=15, print=None, handle_signals=True)
+    web.run_app(make_app(cfg), host=bind_host(cfg.host), port=cfg.port, access_log=None, shutdown_timeout=15, print=None, handle_signals=True)
     return 0
 
 

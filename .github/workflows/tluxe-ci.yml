@@ -1,0 +1,88 @@
+# Trading by TLUXE - continuous integration. Tests only: this workflow never deploys, never merges and uses no
+# secrets (every test runs on test data or a throw-away PostgreSQL). Railway deploys only from `main`, after a
+# reviewed pull request is merged by a human.
+name: tluxe-ci
+
+on:
+  pull_request:
+    paths: ["tluxe-trading/**", ".github/workflows/tluxe-ci.yml"]
+  push:
+    branches: [main, "claude/**"]
+    paths: ["tluxe-trading/**", ".github/workflows/tluxe-ci.yml"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tluxe-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: tluxe-trading
+
+jobs:
+  web:
+    name: Web app (typecheck, lint, tests, local + cloud builds, bundle scan)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tluxe-trading/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npx vitest run --maxWorkers=2
+      - run: npm run test:scripts
+      - run: npm run build
+      # Fails if the public bundle contains a localhost endpoint, an API key or any credential.
+      - run: npm run build:cloud
+
+  gateway:
+    name: Gateway + MT5 remote link (real PostgreSQL)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: tluxe
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U tluxe" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      TLUXE_TEST_DATABASE_URL: postgresql://tluxe@127.0.0.1:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r cloud/gateway/requirements.txt -r bridge/mt5/remote_link/requirements.txt
+      - run: python -m unittest discover -s tests -v
+        working-directory: tluxe-trading/cloud/gateway
+      - run: python -m unittest discover -s tests -v
+        working-directory: tluxe-trading/bridge/mt5/remote_link
+
+  bridges:
+    name: Bridges (${{ matrix.bridge }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        bridge: [ai, news, databento, mt5]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      # MT5: the MetaTrader5 package is Windows-only; its tests use a test double and need no install.
+      - if: matrix.bridge != 'mt5'
+        run: pip install -r bridge/${{ matrix.bridge }}/requirements.txt
+      - run: python -m unittest discover -s tests -v
+        working-directory: tluxe-trading/bridge/${{ matrix.bridge }}

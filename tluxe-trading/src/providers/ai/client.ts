@@ -1,5 +1,6 @@
 import type { AiTurn } from '../../services/ai/AiProvider';
 import type { AiContext } from '../../services/ai/context/types';
+import { backendCredentials, IS_CLOUD } from '../../config/deployment';
 
 /* Wire types of the local TLUXE AI backend (bridge/ai). No credentials ever travel in a body or URL. */
 
@@ -80,7 +81,7 @@ export class TluxeAiClient {
         signal: ctl.signal,
         headers: { ...(init.headers as Record<string, string> | undefined), Authorization: `Bearer ${this.token}` },
         cache: 'no-store',
-        credentials: 'omit',
+        credentials: backendCredentials(),
       });
       let body: unknown = null;
       try {
@@ -100,7 +101,7 @@ export class TluxeAiClient {
       if (e instanceof TluxeAiError) throw e;
       if (external?.aborted) throw new TluxeAiCancelledError();
       if (timedOut) throw new TluxeAiError('TIMEOUT', `TLUXE AI did not answer within ${Math.round(timeoutMs / 1000)} s.`, true);
-      throw new TluxeAiError('BACKEND_UNREACHABLE', 'The TLUXE AI backend is not reachable (start bridge\\ai\\start_ai.cmd).', true);
+      throw new TluxeAiError('BACKEND_UNREACHABLE', IS_CLOUD ? 'The TLUXE AI service is not reachable through the TLUXE gateway.' : 'The TLUXE AI backend is not reachable (start bridge\\ai\\start_ai.cmd).', true);
     } finally {
       clearTimeout(timer);
       external?.removeEventListener('abort', onAbort);

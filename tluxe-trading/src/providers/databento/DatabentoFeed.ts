@@ -2,6 +2,7 @@ import { createStore, type Store } from '../../store/createStore';
 import { DatabentoBridgeClient, DatabentoBridgeError } from './client';
 import type { DatabentoConfig } from './config';
 import type { DbFrameInstrument, DbHealth, DbRoot } from './protocol';
+import { IS_CLOUD } from '../../config/deployment';
 
 export type DbFeedEvent =
   | { kind: 'frame'; root: DbRoot; cursor: number; timeMs: number; data: DbFrameInstrument }
@@ -124,13 +125,13 @@ export class DatabentoFeed {
     const now = this.timers.now();
     const s = this.state.getState();
     if (e instanceof DatabentoBridgeError && e.status === 401) {
-      this.state.setState({ bridge: 'UNAUTHORIZED', error: 'The bridge rejected the TLUXE bridge token (Settings → Databento).' });
+      this.state.setState({ bridge: 'UNAUTHORIZED', error: IS_CLOUD ? 'The TLUXE gateway session expired - sign in again.' : 'The bridge rejected the TLUXE bridge token (Settings → Databento).' });
       this.emit(null, { kind: 'offline', reason: 'UNAUTHORIZED' });
       return;
     }
     if (s.lastOkAt === null || now - s.lastOkAt > this.cfg.offlineMs) {
       if (s.bridge !== 'OFFLINE') this.emit(null, { kind: 'offline', reason: 'Databento bridge not reachable' });
-      this.state.setState({ bridge: 'OFFLINE', error: 'Databento bridge not reachable (bridge/databento, port 8766).' });
+      this.state.setState({ bridge: 'OFFLINE', error: IS_CLOUD ? 'Databento service not reachable through the TLUXE gateway (see Settings → Cloud connections).' : 'Databento bridge not reachable (bridge/databento, port 8766).' });
     }
   }
 

@@ -3,6 +3,8 @@
  * Provider credentials (Trading Economics key, any newswire key) are NEVER configured, stored or sent here: they live
  * only in bridge/news/.env on the backend. The browser knows the backend URL and the backend token.
  */
+import { defaultBackendUrl } from '../../config/deployment';
+
 export interface NewsBridgeConfig {
   enabled: boolean;
   url: string;
@@ -14,7 +16,7 @@ export interface NewsBridgeConfig {
 }
 
 export const NEWS_BRIDGE_CONFIG_KEY = 'tluxe.newsbridge.config.v1';
-export const NEWS_BRIDGE_DEFAULT_URL = 'http://127.0.0.1:8768';
+export const NEWS_BRIDGE_DEFAULT_URL = defaultBackendUrl('news');
 
 export const DEFAULT_NEWS_BRIDGE_CONFIG: Readonly<NewsBridgeConfig> = Object.freeze({
   enabled: false,

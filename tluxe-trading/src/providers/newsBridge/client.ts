@@ -1,4 +1,5 @@
 import type { BridgeFeedKind, BridgeHealth, CalendarPage, HeadlinePage } from './protocol';
+import { backendCredentials, IS_CLOUD } from '../../config/deployment';
 
 export class NewsBridgeError extends Error {
   constructor(
@@ -25,14 +26,14 @@ export class NewsBridgeClient {
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), this.timeoutMs);
     try {
-      const res = await this.fetchImpl(`${this.baseUrl}${path}`, { method: 'GET', headers: { Authorization: `Bearer ${this.token}` }, signal: ctl.signal, cache: 'no-store', credentials: 'omit' });
+      const res = await this.fetchImpl(`${this.baseUrl}${path}`, { method: 'GET', headers: { Authorization: `Bearer ${this.token}` }, signal: ctl.signal, cache: 'no-store', credentials: backendCredentials() });
       if (res.status === 401) throw new NewsBridgeError('UNAUTHORIZED', 'The news backend rejected the backend token (Settings → News Providers).');
       if (!res.ok) throw new NewsBridgeError('HTTP', `News backend error (HTTP ${res.status}).`);
       return (await res.json()) as T;
     } catch (e) {
       if (e instanceof NewsBridgeError) throw e;
       if (ctl.signal.aborted) throw new NewsBridgeError('TIMEOUT', 'The news backend did not answer in time.');
-      throw new NewsBridgeError('OFFLINE', 'The news backend is not reachable (start bridge\\news\\start_news.cmd).');
+      throw new NewsBridgeError('OFFLINE', IS_CLOUD ? 'The news service is not reachable through the TLUXE gateway.' : 'The news backend is not reachable (start bridge\\news\\start_news.cmd).');
     } finally {
       clearTimeout(timer);
     }

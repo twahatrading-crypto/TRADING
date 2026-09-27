@@ -7,10 +7,13 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:cloud": "tsc -b && vite build --mode cloud --outDir dist-cloud && node scripts/scan-bundle.cjs dist-cloud",
+    "dev:cloud": "vite --mode cloud",
     "preview": "vite preview",
     "typecheck": "tsc -b --noEmit",
     "lint": "eslint . --max-warnings=0",
     "test": "vitest run",
+    "test:scripts": "node --test scripts/scan-bundle.nodetest.cjs",
     "test:watch": "vitest",
     "check": "npm run typecheck && npm run lint && npm run test && npm run build",
     "preview:check": "node scripts/preview-check.cjs --hmr"

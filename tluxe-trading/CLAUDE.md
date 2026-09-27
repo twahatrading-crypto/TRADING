@@ -36,6 +36,10 @@ Open ONLY the newest preview. Leave exactly one TLUXE preview running.
 - Databento bridge: **http://127.0.0.1:8766** (`tluxe-trading\bridge\databento`), same origin / token rules; never touch other ports.
 - TLUXE AI backend: **http://127.0.0.1:8767** (`tluxe-trading\bridge\ai`), same origin / token rules.
 - News backend: **http://127.0.0.1:8768** (`tluxe-trading\bridge\news`), same origin / token rules.
+- Cloud gateway (development only): **http://127.0.0.1:8780** (`tluxe-trading\cloud\gateway`). The cloud deployment is
+  prepared in `docs/CLOUD_DEPLOYMENT.md`. NEVER deploy, create Railway services, change DNS or purchase anything
+  without the owner's explicit approval. The cloud bundle (`npm run build:cloud`) must pass `scripts/scan-bundle.cjs`
+  (no localhost, no key, no credential).
 - The bridge must allow the current preview origin: `http://localhost:5182`, `http://127.0.0.1:5182`
   (plus 5181 kept from the previous preview and 4181 for the production preview). A refused origin looks exactly like an offline bridge.
   The bridge logs `Rejected browser origin ...`, and Settings shows which origin is required.

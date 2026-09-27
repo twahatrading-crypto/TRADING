@@ -15,6 +15,8 @@ import { NewsProvidersSettingsPanel } from '../newsProviders/NewsProvidersSettin
 import '../databento/databento.css';
 import { DatabentoSettingsPanel } from '../databento/DatabentoSettings';
 import { Panel } from '../ui/Panel';
+import { CloudStatusPanel } from '../cloud/CloudStatusPanel';
+import { IS_CLOUD } from '../../config/deployment';
 import { StatusPill } from '../ui/StatusPill';
 import './settings.css';
 
@@ -72,13 +74,14 @@ export function SettingsPage() {
           </div>
         </div>
         <div className="settings__grid">
-          <Mt5ConfigPanel />
+          {/* Cloud: connections are configured server-side only; the browser just reports the gateway's health. */}
+          {IS_CLOUD ? <CloudStatusPanel /> : <Mt5ConfigPanel />}
           {mt5 ? <BridgePanel provider={mt5} /> : <DisabledPanel />}
           <FeedPanel />
           {mt5 && <DiscoveryPanel provider={mt5} />}
-          <DatabentoSettingsPanel />
-          <TluxeAiSettingsPanel />
-          <NewsProvidersSettingsPanel />
+          {!IS_CLOUD && <DatabentoSettingsPanel />}
+          {!IS_CLOUD && <TluxeAiSettingsPanel />}
+          {!IS_CLOUD && <NewsProvidersSettingsPanel />}
         </div>
       </main>
     </>
@@ -181,7 +184,7 @@ function BridgePanel({ provider }: { provider: Mt5Provider }) {
         <Row k="Reconnects" v={String(st.reconnects)} />
         {st.error && <Row k="Last error" v={`${st.error.code}: ${st.error.message}`} />}
       </dl>
-      {bridgeLabel === 'OFFLINE' && (
+      {bridgeLabel === 'OFFLINE' && !IS_CLOUD && (
         <p className="sform__note settings__hint" data-testid="origin-hint">
           If the bridge window is running, its <code>TLUXE_BRIDGE_ALLOWED_ORIGINS</code> must include <strong>{window.location.origin}</strong>. A
           browser page that is not allowed looks exactly like an offline bridge.
