@@ -8,6 +8,8 @@ import {
   MAX_DOTS_PER_BUCKET,
   TradeTape,
   aggregateDots,
+  catchUpFrom,
+  CATCH_UP_LAG_MS,
   autoBucketMs,
   bandTicksFor,
   dominance,
@@ -184,5 +186,13 @@ describe('display aggregation of executed trades (display only)', () => {
     const before = JSON.stringify(stepTrace(priceBars(tr, ms), ms, 200_000));
     for (const agg of [100, 250, 500, 1000]) aggregateDots(tr, agg, 2);
     expect(JSON.stringify(stepTrace(priceBars(tr, ms), ms, 200_000))).toBe(before);
+  });
+
+  it('catch-up note: only when the newest trade trails the feed clock (a quiet market is not flagged)', () => {
+    expect(catchUpFrom(1_000, 1_000 + CATCH_UP_LAG_MS + 1)).toBe(1_000); // history still arriving
+    expect(catchUpFrom(1_000, 1_000 + 5_000)).toBeNull(); // caught up
+    expect(catchUpFrom(1_000, 1_000)).toBeNull(); // quiet market: clock and newest trade move together
+    expect(catchUpFrom(null, 5)).toBeNull();
+    expect(catchUpFrom(5, null)).toBeNull();
   });
 });

@@ -64,6 +64,8 @@
 .ofheat__stagewrap > .srchart__stage, .ofheat__stagewrap > * { flex: 1; }
 .ofheat__depthna { position: absolute; z-index: 3; top: 8px; left: 10px; margin: 0; padding: 3px 9px; font-size: 10px; color: var(--text-3); background: rgba(8, 12, 20, 0.82); border: 1px solid var(--border); border-radius: 999px; pointer-events: none; flex: none !important; }
 .ofheat__depthna b { color: var(--amber); letter-spacing: 0.04em; }
+.ofheat__loading { top: 34px; }
+.ofheat__loading b { color: var(--text); }
 .ofheat__tip { position: absolute; z-index: 4; display: flex; flex-direction: column; gap: 2px; padding: 7px 10px; font-size: var(--fs-xs); color: var(--text-2); background: rgba(8, 12, 20, 0.95); border: 1px solid var(--border-gold); border-radius: var(--radius-sm); pointer-events: none; white-space: nowrap; flex: none !important; }
 .ofheat__tip b { color: var(--text); }
 .ofheat__legend { display: inline-flex; align-items: center; gap: 5px; font-size: 10px; color: var(--text-3); }

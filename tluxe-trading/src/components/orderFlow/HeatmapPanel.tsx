@@ -39,8 +39,10 @@ interface Props {
   tradeSource: string | null;
   /** Raw accepted messages (read only) - trades are drawn at their own exchange time. */
   tape?: () => TradeSource | null;
-  /** Display bucket for dots / price trace (display only). */
+  /** Display bucket for the volume dots (display only). */
   dotAggregation?: DotAggregation;
+  /** Exchange time of the newest trade received while older history is still being delivered (null = caught up). */
+  tapeBehind?: number | null;
 }
 
 /** The central heatmap, rendered by HeatmapView on a canvas inside the shared ChartStage. */
@@ -114,6 +116,11 @@ export function HeatmapPanel(p: Props) {
       {p.hasData && !depthOk && (
         <p className="ofheat__depthna" role="status" data-testid="of-depth-na" title={p.depthDetail ?? 'No valid Level-2 book'}>
           <b>DEPTH DATA UNAVAILABLE</b> · LEVEL-2 PROVIDER NOT CONNECTED — executed trades only; no liquidity is drawn or inferred
+        </p>
+      )}
+      {p.hasData && p.tapeBehind != null && (
+        <p className="ofheat__depthna ofheat__loading" role="status" data-testid="of-tape-loading">
+          <b>LOADING TRADE HISTORY</b> · newest trade received so far {fmtT(p.tapeBehind)} — newer real trades are still being delivered; nothing is drawn until they arrive
         </p>
       )}
       {hover && (

@@ -319,3 +319,16 @@ export function stepTrace(bars: readonly PriceBar[], ms: number, until: number |
   if (run.length) runs.push(run);
   return runs;
 }
+
+/** The browser's newest trade may trail the feed's exchange clock by this much before the chart says it is catching up. */
+export const CATCH_UP_LAG_MS = 60_000;
+
+/**
+ * Trade history still arriving (e.g. right after a bridge restart the oldest trades come first): returns the exchange
+ * time of the newest trade received so far when it trails the feed clock by more than CATCH_UP_LAG_MS, else null.
+ * A quiet market is NOT flagged - there the feed clock (last event) and the newest trade move together.
+ */
+export function catchUpFrom(latestTradeTime: number | null, feedTime: number | null, lag = CATCH_UP_LAG_MS): number | null {
+  if (latestTradeTime === null || feedTime === null) return null;
+  return feedTime - latestTradeTime > lag ? latestTradeTime : null;
+}

@@ -388,7 +388,7 @@ jobs:
   hm:
     if: ${{ contains(github.event.head_commit.message, '[hm-only]') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - name: Liquidity Heatmap GC -> SI -> GC on production (real Databento trades, honest depth)
         shell: bash
@@ -425,6 +425,18 @@ jobs:
               await p.goto(base + '/#/engines/liquidity-heatmap');
               await p.waitForSelector('.ofmain', { timeout: 30000 });
               await p.waitForTimeout(25000);
+              // After a Railway restart the bridge delivers the oldest history first; the page says so (LOADING TRADE HISTORY)
+              // until the newer real trades arrive. Wait (bounded) for that catch-up before sampling the chart.
+              let caught = false, loadingSeen = false;
+              for (let k = 0; k < 36 && !caught; k++) {
+                const c = await p.evaluate(() => ({ loading: !!document.querySelector('[data-testid="of-tape-loading"]'), last: Number((document.querySelector('.ofbar__last')?.textContent || '').replace(/,/g, '')) }));
+                const bridgeLast = (await (await fetch(base + `/api/databento/status?root=${inst}`)).json()).lastTrade;
+                loadingSeen = loadingSeen || c.loading;
+                caught = !c.loading && bridgeLast && Math.abs(c.last - bridgeLast.price) <= bridgeLast.price * 0.0015;
+                if (!caught) await p.waitForTimeout(5000);
+                if (k % 6 === 0 || caught) console.log(`  catch-up ${k * 5 + 25}s: loadingNote=${c.loading} page=${c.last} bridge=${bridgeLast && bridgeLast.price}`);
+              }
+              check(caught, `${inst}: trade history caught up with the bridge (loading note seen: ${loadingSeen})`);
               const u = await p.evaluate(() => {
                 const t = (sel) => (document.querySelector(sel)?.textContent || '').replace(/\s+/g, ' ').trim();
                 const box = (sel) => { const e = document.querySelector(sel); if (!e) return null; const r = e.getBoundingClientRect(); return { top: Math.round(r.top), bottom: Math.round(r.bottom), w: Math.round(r.width) }; };
@@ -478,7 +490,8 @@ jobs:
               check(px && px.bands < 50, `${inst}: zero liquidity heatmap bands (${px && px.bands} band-coloured px)`);
               check(px && px.agg === 'auto', `${inst}: Trade aggregation control present (AUTO)`);
               check(/DISPLAY AGGREGATION/.test(tip) && /Databento/i.test(tip) && /Unknown/.test(tip) && /Trades \d/.test(tip), `${inst}: bubble hover shows bucket sums, source, display-aggregation note`);
-              check(st.lastTrade && Math.abs(lastTrade - st.lastTrade.price) <= st.lastTrade.price * 0.0015, `${inst}: last trade = latest exchange-time trade (${lastTrade} vs bridge ${st.lastTrade && st.lastTrade.price})`);
+              const stNow = (await (await fetch(base + `/api/databento/status?root=${inst}`)).json()).lastTrade;
+              check(stNow && Math.abs(lastTrade - stNow.price) <= stNow.price * 0.0015, `${inst}: last trade = latest exchange-time trade (${lastTrade} vs bridge ${stNow && stNow.price})`);
               console.log(`  contract=${u.contract} feeds="${u.feeds}"`);
               console.log(`  depthBadge="${u.depthNa}" heatmapToggle disabled=${u.heatDisabled} checked=${u.heatChecked} canvas=${u.canvas}`);
               console.log(`  COB="${u.book.slice(0, 160)}" bookTotals=${u.bookTotals}`);

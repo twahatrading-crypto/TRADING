@@ -18,7 +18,7 @@ import { getSessionState } from '../utils/sessions';
 import { HeatmapPanel } from '../components/orderFlow/HeatmapPanel';
 import type { HeatmapView } from '../components/orderFlow/HeatmapView';
 import type { Viewport } from '../components/orderFlow/heatmapMath';
-import { DOT_AGGREGATIONS, latestTrade, type DotAggregation, type TradeSource } from '../components/orderFlow/tradeDots';
+import { DOT_AGGREGATIONS, catchUpFrom, latestTrade, type DotAggregation, type TradeSource } from '../components/orderFlow/tradeDots';
 import { BookPanel, CvdPanel, EventsPanel, Pill, ProfilePanel, SettingsPanel } from '../components/orderFlow/OrderFlowPanels';
 import { capLabel } from '../components/databento/capabilities';
 import '../components/sr/sr.css';
@@ -146,6 +146,7 @@ function Workspace() {
   const book = data.book;
   // eslint-disable-next-line react-hooks/exhaustive-deps -- recomputed on every engine version
   const latest = useMemo(() => latestTrade(tape()), [tape, version]);
+  const tapeBehind = replay ? null : catchUpFrom(latest?.time ?? null, st.exchTime);
   const lastTradeLive = tradeStatus === 'LIVE' && (latest ?? data.lastTrade);
   const last = lastTradeLive ? (latest ?? data.lastTrade)!.price : quote.last;
   const bid = book?.bestBid ?? quote.bid;
@@ -283,6 +284,7 @@ function Workspace() {
           tradeSource={st.trade.provider}
           tape={tape}
           dotAggregation={dotAgg}
+          tapeBehind={tapeBehind}
         />
         {ui.cob && <BookPanel className={cls('dom')} data={data} d={d} depthStatus={depthStatus} depthDetail={st.depth.detail} />}
         {ui.svp && <ProfilePanel className={cls('profile')} session={data.profile} visible={visibleProfile} mode={profileMode} onMode={setProfileMode} d={d} tradeStatus={tradeStatus} tradeDetail={st.trade.detail} aggressor={st.capabilities.aggressorSide} />}

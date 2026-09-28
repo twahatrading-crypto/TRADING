@@ -187,4 +187,28 @@ describe('Liquidity Heatmap page', () => {
     expect(screen.getByTestId('of-diagnostics').textContent).toMatch(/depth NONE/);
     expect(services.orderFlow.engine()!.digest()).toBe(digest);
   });
+
+  it('trade history still arriving: honest LOADING TRADE HISTORY note, which clears once the newer trades arrive', async () => {
+    window.location.hash = '#/engines/liquidity-heatmap';
+    const tr = (t: number, price: number) => ({ type: 'trade' as const, instrumentId: 'GC' as const, seq: null, exchTime: t, recvTime: t + 5, price, size: 2, aggressor: 'BUY' as const });
+    const hb = (t: number) => ({ type: 'heartbeat' as const, instrumentId: 'GC' as const, seq: null, exchTime: t, recvTime: t + 5, stream: 'trade' as const });
+    const T = Date.UTC(2026, 8, 28, 19, 0, 0);
+    // Oldest history first (as after a bridge restart), then the feed clock is 3 minutes later, then the newer trades.
+    const script = [tr(T, 2400), tr(T + 1000, 2400.1), hb(T + 180_000), tr(T + 179_000, 2401), hb(T + 180_500)];
+    const p = new ScriptedOrderFlowProvider(script, { ...FULL_CAPS, depth: 'NONE' }, { tickSize: TEST_TICK, contract: 'TEST-GC' });
+    renderWithServices(<App />, { orderFlow: { depth: p, trade: p } }, { storage: memoryStorage({ 'tluxe.instrument.v1': 'GC' }), allowTestProviders: true });
+    await flush();
+    await act(async () => {
+      p.emit(3);
+      await new Promise((r) => setTimeout(r, 200));
+    });
+    await flush();
+    expect(screen.getByTestId('of-tape-loading').textContent).toMatch(/LOADING TRADE HISTORY/);
+    await act(async () => {
+      p.emitAll();
+      await new Promise((r) => setTimeout(r, 200));
+    });
+    await flush();
+    expect(screen.queryByTestId('of-tape-loading')).toBeNull();
+  });
 });
