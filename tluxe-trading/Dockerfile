@@ -1,4 +1,5 @@
-# Trading by TLUXE - web app + API gateway (Railway service "tluxe-web"; build context = the tluxe-trading/ folder).
+# Trading by TLUXE - web app + API gateway (Railway service TRADING / "tluxe-web"; build context = this tluxe-trading/ folder).
+# It lives at the service root so Railway builds it automatically (no builder / config-path setting needed).
 # With DATABENTO_API_KEY set it also runs the Databento bridge (COMEX GC / SI, GLBX.MDP3) inside this container.
 # Stage 1 builds the CLOUD web bundle (same-origin gateway URLs only) and fails the build if the bundle contains a
 # localhost endpoint, an API key or any credential (scripts/scan-bundle.cjs). Stage 2 serves it with the gateway.

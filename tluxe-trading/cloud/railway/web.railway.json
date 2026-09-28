@@ -2,7 +2,7 @@
   "$schema": "https://railway.com/railway.schema.json",
   "build": {
     "builder": "DOCKERFILE",
-    "dockerfilePath": "cloud/gateway/Dockerfile",
+    "dockerfilePath": "Dockerfile",
     "watchPatterns": [
       "/tluxe-trading/src/**",
       "/tluxe-trading/public/**",
@@ -12,7 +12,9 @@
       "/tluxe-trading/tsconfig.json",
       "/tluxe-trading/scripts/**",
       "/tluxe-trading/cloud/gateway/**",
-      "/tluxe-trading/bridge/databento/**"
+      "/tluxe-trading/bridge/databento/**",
+      "/tluxe-trading/Dockerfile",
+      "/tluxe-trading/.dockerignore"
     ]
   },
   "deploy": {

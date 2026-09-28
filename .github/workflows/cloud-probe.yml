@@ -14,7 +14,7 @@ jobs:
     # set MAX_PROBES via the trigger file content if needed
     env:
       BASE: https://trading-production-e1d5.up.railway.app
-      MAX_PROBES: 1
+      MAX_PROBES: 20
     steps:
       - name: Probe splendid-exploration (once)
         shell: bash

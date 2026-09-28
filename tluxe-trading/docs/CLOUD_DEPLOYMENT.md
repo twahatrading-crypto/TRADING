@@ -12,7 +12,7 @@ Goal: the app keeps working while the home PC is off. The home PC is not part of
         │  HTTPS + WSS  (one origin: PUBLIC_APP_URL)
         ▼
  ┌─────────────────────────── Railway project ───────────────────────────┐
- │  tluxe-web  (PUBLIC domain)      cloud/gateway/Dockerfile             │
+ │  tluxe-web  (PUBLIC domain)      Dockerfile (tluxe-trading/)          │
  │   • serves the cloud web bundle (built with --mode cloud)             │
  │   • owner sign-in → HttpOnly session cookie · strict CORS · CSP/HSTS  │
  │   • /api/*  read-only API gateway  ·  /api/stream  WSS (seq, heartbeat)│
@@ -43,7 +43,7 @@ Goal: the app keeps working while the home PC is off. The home PC is not part of
 
 | Railway service | Dockerfile | Config as code | Port | Public |
 |---|---|---|---|---|
-| tluxe-web (gateway + web app) | `cloud/gateway/Dockerfile` (multi-stage: Node builds `build:cloud`, Python serves) | `cloud/railway/web.railway.json` | `$PORT` | **yes** |
+| tluxe-web (gateway + web app) | `Dockerfile` at `tluxe-trading/`, picked up automatically (multi-stage: Node builds `build:cloud`, Python serves) | `cloud/railway/web.railway.json` | `$PORT` | **yes** |
 | tluxe-ai | `bridge/ai/Dockerfile` | `cloud/railway/ai.railway.json` | 8767 | no |
 | tluxe-databento | `bridge/databento/Dockerfile` | `cloud/railway/databento.railway.json` | 8766 | no |
 | tluxe-news | `bridge/news/Dockerfile` | `cloud/railway/news.railway.json` | 8768 | no |
