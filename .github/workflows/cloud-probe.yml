@@ -1,0 +1,44 @@
+# Read-only probe of the deployed TRADING service from GitHub's runners (no secrets used or printed).
+# Reports which web bundle is served (cloud vs local build) and what the public Databento endpoints return.
+name: cloud-probe
+on:
+  push:
+    branches: ["claude/**"]
+    paths: [".github/workflows/cloud-probe.yml", ".github/cloud-probe.trigger"]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      BASE: https://trading-production-e1d5.up.railway.app
+    steps:
+      - name: Probe TRADING (up to 20 min, every 60 s)
+        shell: bash
+        run: |
+          for i in $(seq 1 20); do
+            echo "=== probe $i $(date -u +%FT%TZ)"
+            code=$(curl -s -o index.html -w '%{http_code}' "$BASE/")
+            js=$(grep -o 'assets/index-[^"]*\.js' index.html | head -1)
+            echo "GET / -> $code  bundle=$js"
+            if [ -n "$js" ]; then
+              curl -s "$BASE/$js" -o app.js
+              echo "bundle kind: cloud=$(grep -c 'through the TLUXE gateway' app.js) local=$(grep -c 'port 8766' app.js)"
+            fi
+            echo "GET /healthz -> $(curl -s -m 10 "$BASE/healthz" | head -c 200)"
+            echo "GET /api/config -> $(curl -s -m 10 "$BASE/api/config" | head -c 300)"
+            curl -s -m 15 "$BASE/api/databento/status?root=GC" -o st.json -w "status http %{http_code}\n"
+            python3 - <<'PY' || head -c 400 st.json
+          import json
+          d = json.load(open("st.json"))
+          keys = ["state","connection","dataset","plan","subscribed","activeContract","instrumentId","instrumentStatus","lastEventUtc",
+                  "lastEventAgeMs","freshness","marketOpen","received","verifiedByRealData","lastTrade","lastBar","source","detail","depth"]
+          print(json.dumps({k: d.get(k) for k in keys}, indent=1))
+          PY
+            if grep -q '"verifiedByRealData": *true' st.json; then
+              echo "GET feed -> $(curl -s -m 15 "$BASE/api/databento/v1/feed?cursor=0&roots=GC" | head -c 600)"
+              echo "VERIFIED"; break
+            fi
+            sleep 60
+          done
