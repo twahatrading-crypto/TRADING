@@ -11,13 +11,22 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    # set MAX_PROBES via the trigger file content if needed
     env:
       BASE: https://trading-production-e1d5.up.railway.app
+      MAX_PROBES: 1
     steps:
+      - name: Probe splendid-exploration (once)
+        shell: bash
+        run: |
+          S=https://splendid-exploration-production-535b.up.railway.app
+          for p in / /healthz /api/ai/health /api/config; do
+            echo "splendid GET $p -> $(curl -s -m 10 -o body -w '%{http_code} %{content_type}' "$S$p") :: $(head -c 160 body | tr '\n' ' ')"
+          done
       - name: Probe TRADING (up to 20 min, every 60 s)
         shell: bash
         run: |
-          for i in $(seq 1 20); do
+          for i in $(seq 1 "${MAX_PROBES:-20}"); do
             echo "=== probe $i $(date -u +%FT%TZ)"
             code=$(curl -s -o index.html -w '%{http_code}' "$BASE/")
             js=$(grep -o 'assets/index-[^"]*\.js' index.html | head -1)
