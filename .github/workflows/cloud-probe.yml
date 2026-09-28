@@ -100,6 +100,7 @@ jobs:
           python3 check.py
   frontend:
     needs: gcsi  # after the GC/SI job has seen the new deployment's history settle
+    if: ${{ !contains(github.event.head_commit.message, '[vp-only]') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -157,3 +158,96 @@ jobs:
           })();
           JS
           node probe.cjs
+  vp:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Volume Profile selector (Current Session -> Daily -> Previous Day -> back) for GC and SI, cross-checked against real M5 candles
+        shell: bash
+        run: |
+          npm init -y >/dev/null && npm i -s playwright@1 >/dev/null && npx playwright install --with-deps chromium >/dev/null 2>&1
+          cat > vp.cjs <<'JS'
+          const { chromium } = require('playwright');
+          const base = 'https://trading-production-e1d5.up.railway.app';
+          const fmtVol = (v) => v >= 1e9 ? `${(v / 1e9).toFixed(2)}B` : v >= 1e6 ? `${(v / 1e6).toFixed(2)}M` : v >= 1e4 ? `${(v / 1e3).toFixed(1)}K` : Math.round(v).toLocaleString('en-US');
+          const nyHour17 = (t) => { // start (UTC s) of the 17:00 America/New_York trading day containing t
+            for (let s = Math.floor(t / 3600) * 3600; s > t - 2 * 86400; s -= 3600) {
+              const hh = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: '2-digit', hour12: false }).format(new Date(s * 1000));
+              if (Number(hh) === 17 && s <= t) return s;
+            }
+            return null;
+          };
+          const iso = (t) => new Date(t * 1000).toISOString().slice(0, 16).replace('T', ' ');
+          let fails = 0;
+          const check = (ok, msg) => { console.log(`    ${ok ? 'OK  ' : 'FAIL'} ${msg}`); if (!ok) fails++; };
+          (async () => {
+            const b = await chromium.launch();
+            for (const inst of ['GC', 'SI']) {
+              const ctx = await b.newContext({ viewport: { width: 1400, height: 1000 } });
+              await ctx.addInitScript((i) => { try { localStorage.setItem('tluxe.instrument.v1', i); localStorage.removeItem('tluxe.vp.profile'); } catch {} }, inst);
+              const p = await ctx.newPage();
+              const errs = [];
+              p.on('pageerror', (e) => errs.push(String(e).slice(0, 200)));
+              await p.goto(base + '/#/engines/volume-profile');
+              await p.waitForTimeout(20000);
+              const read = async () => p.evaluate(() => {
+                const kv = {};
+                for (const d of document.querySelectorAll('[data-testid="vp-stats"] dl.vpkv > div')) kv[d.querySelector('dt').innerText.trim()] = d.querySelector('dd').innerText.trim();
+                const sel = document.querySelector('[data-testid="vp-profile-select"]');
+                return { select: sel ? sel.value : null, title: (document.getElementById('vpchart-title') || {}).innerText, stats: kv,
+                         empty: (document.querySelector('[data-testid="vp-stats"]') || {}).innerText?.includes('NO PROFILE') || false };
+              });
+              const m5 = (await (await p.request.get(base + `/api/databento/v1/candles/${inst}?timeframe=M5&limit=5000`)).json());
+              const now = Math.floor(Date.now() / 1000);
+              const parseWin = (w) => { const m = /(\d\d)-(\d\d) (\d\d):(\d\d) → (\d\d)-(\d\d) (\d\d):(\d\d)/.exec(w || ''); if (!m) return null;
+                const y = new Date().getUTCFullYear(); return { from: Date.UTC(y, m[1] - 1, m[2], m[3], m[4]) / 1000, to: Date.UTC(y, m[5] - 1, m[6], m[7], m[8]) / 1000 }; };
+              const crossCheck = (st, label) => {
+                const w = parseWin(st.stats['Window']);
+                if (!w) return check(false, `${label}: window not readable (${st.stats['Window']})`);
+                const bars = (m5.bars || []).filter((x) => x.isClosed && x.time >= w.from && x.time + 300 <= Math.min(w.to, now));
+                const vol = bars.reduce((a, x) => a + x.volume, 0);
+                console.log(`    ${label}: real Databento M5 ${m5.contract} in window ${iso(w.from)}→${iso(w.to)} UTC: closed bars=${bars.length} volume=${vol} (${fmtVol(vol)})`);
+                const used = Number((st.stats['Bars used'] || '').split(' ')[0]);
+                check(Math.abs(used - bars.length) <= 1, `${label}: Bars used ${used} vs independent count ${bars.length} (±1 for a bar closing between reads)`);
+                check(st.stats['Total volume'] === fmtVol(vol) || Math.abs(used - bars.length) === 1, `${label}: Total volume ${st.stats['Total volume']} vs independent ${fmtVol(vol)}`);
+                return w;
+              };
+              console.log(`\n######## ${inst}  contract=${m5.contract}`);
+              const sel = p.locator('[data-testid="vp-profile-select"]');
+              const s0 = await read();
+              console.log(`  [start] select=${s0.select} title="${s0.title}" stats=${JSON.stringify(s0.stats)}`);
+              check(s0.select === 'CURRENT_SESSION', `${inst} starts on CURRENT_SESSION`);
+              const dayStart = nyHour17(now);
+              for (const [val, name] of [['DAILY', 'Daily'], ['PREVIOUS_DAY', 'Previous Day']]) {
+                await sel.selectOption(val);
+                await p.waitForTimeout(2500);
+                const s = await read();
+                console.log(`  [${name}] select=${s.select} title="${s.title}" stats=${JSON.stringify(s.stats)}`);
+                check(s.select === val, `${inst} ${name}: selector value is ${val}`);
+                check((s.title || '').includes(name) && (s.stats['Profile'] || '').startsWith(name), `${inst} ${name}: chart title + statistics show "${name}"`);
+                check(s.stats['Window'] !== s0.stats['Window'] || name === 'Daily', `${inst} ${name}: window differs from the session window`);
+                const w = crossCheck(s, `${inst} ${name}`);
+                if (!w) continue;
+                check(w.to - w.from >= 23 * 3600 && w.to - w.from <= 25 * 3600, `${inst} ${name}: window is one trading day (${(w.to - w.from) / 3600} h)`);
+                if (val === 'DAILY') check(w.from === dayStart, `${inst} Daily: starts at the current 17:00 New York trading-day start ${iso(dayStart)} UTC`);
+                if (val === 'PREVIOUS_DAY') {
+                  check(w.to <= dayStart, `${inst} Previous Day: completed before the current trading day (${iso(w.to)} <= ${iso(dayStart)})`);
+                  check(!(s.stats['Profile'] || '').includes('developing'), `${inst} Previous Day: complete (not developing)`);
+                  const between = (m5.bars || []).filter((x) => x.time >= w.to && x.time < dayStart).length;
+                  check(between === 0, `${inst} Previous Day: no traded day skipped between it and today (bars in gap = ${between})`);
+                }
+              }
+              await sel.selectOption('CURRENT_SESSION');
+              await p.waitForTimeout(2500);
+              const s3 = await read();
+              console.log(`  [back] select=${s3.select} title="${s3.title}" stats=${JSON.stringify(s3.stats)}`);
+              check(s3.select === 'CURRENT_SESSION' && s3.stats['Window'] === s0.stats['Window'] && s3.stats['Profile'] === s0.stats['Profile'], `${inst}: back on the original profile + window`);
+              check(errs.length === 0, `${inst}: no page errors ${JSON.stringify(errs)}`);
+              await ctx.close();
+            }
+            await b.close();
+            console.log(`\nVP RESULT: ${fails === 0 ? 'PASS' : `FAIL (${fails})`}`);
+            process.exit(fails ? 1 : 0);
+          })();
+          JS
+          node vp.cjs
