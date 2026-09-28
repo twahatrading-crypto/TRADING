@@ -22,7 +22,7 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from tluxe_gateway import health as H
 from tluxe_gateway.app import make_app, redactor_for
-from tluxe_gateway.auth import COOKIE, hash_password, verify_password
+from tluxe_gateway.auth import COOKIE, GlobalFailLimiter, hash_password, hash_password_pbkdf2, verify_password
 from tluxe_gateway.config import ConfigError, from_env
 from tluxe_gateway.logs import Redactor, setup_logging
 from tluxe_gateway.mt5_relay import read_only_path, token_ok
@@ -121,6 +121,49 @@ class TestAuthPrimitives(unittest.TestCase):
         self.assertFalse(verify_password("nope", PW_HASH))
         self.assertFalse(verify_password(PASSWORD, "garbage"))
         self.assertNotIn(PASSWORD, PW_HASH)
+
+
+class TestPbkdf2AndOfflineTool(unittest.TestCase):
+    def test_pbkdf2_verify_and_weak_parameters_rejected(self):
+        h = hash_password_pbkdf2(PASSWORD)
+        self.assertTrue(h.startswith("pbkdf2_sha256$600000$"))
+        self.assertTrue(verify_password(PASSWORD, h))
+        self.assertFalse(verify_password(PASSWORD + "x", h))
+        weak = hash_password_pbkdf2(PASSWORD, iterations=1000)
+        self.assertFalse(verify_password(PASSWORD, weak))  # below the 600,000-iteration floor -> never accepted
+        self.assertFalse(verify_password(PASSWORD, "pbkdf2_sha256$600000$$"))
+        self.assertIsNotNone(from_env(prod_env(TLUXE_OWNER_PASSWORD_HASH=h)))  # format accepted by the config
+
+    def test_offline_html_tool_output_is_accepted_by_the_gateway(self):
+        """The browser tool (tools/owner-password-hash.html, WebCrypto) and the gateway must agree byte for byte."""
+        import re
+        import shutil
+        import subprocess
+
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node not installed")
+        html = (Path(__file__).resolve().parents[3] / "tools" / "owner-password-hash.html").read_text()
+        fn = re.search(r"/\*HASH-BEGIN\*/(.*)/\*HASH-END\*/", html, re.S).group(1)
+        self.assertNotIn("fetch(", html)
+        self.assertIn("default-src 'none'", html)  # the page cannot send anything anywhere
+        script = fn + "\ntluxeOwnerHash(process.argv[1], new Uint8Array(16).map((_, i) => i * 7 + 1), 600000).then((h) => console.log(h));"
+        out = subprocess.run([node, "-e", script, PASSWORD], capture_output=True, text=True, timeout=60, check=True).stdout.strip()
+        self.assertTrue(out.startswith("pbkdf2_sha256$600000$"), out)
+        self.assertTrue(verify_password(PASSWORD, out))
+        self.assertFalse(verify_password("wrong password here", out))
+
+
+class TestGlobalFailLimiter(unittest.TestCase):
+    def test_pauses_all_logins_for_the_rest_of_the_minute_then_heals(self):
+        now = [1000.0]
+        g = GlobalFailLimiter(cap=3, clock=lambda: now[0])
+        for _ in range(3):
+            self.assertEqual(g.blocked(), 0.0)
+            g.fail()
+        self.assertGreater(g.blocked(), 0.0)
+        now[0] += 61
+        self.assertEqual(g.blocked(), 0.0)
 
 
 class TestHealthModel(unittest.TestCase):
@@ -506,6 +549,72 @@ class TestGatewayProduction(PgGatewayCase):
         sid = (await self.client.post("/api/auth/login", json={"password": PASSWORD}, headers={"Origin": APP})).cookies[COOKIE].value
         r = await self.client.post("/api/alerts", json={}, headers={"Cookie": f"{COOKIE}={sid}"})
         self.assertEqual(r.status, 403)
+
+
+@unittest.skipUnless(PG_ADMIN, "TLUXE_TEST_DATABASE_URL not set - production-mode tests need PostgreSQL (never faked)")
+class TestOwnerModeProduction(PgGatewayCase):
+    """Production WITH the owner hash configured: public market-data mode is OFF and every private route needs a session."""
+
+    extra_env = {"TLUXE_OWNER_PASSWORD_HASH": hash_password_pbkdf2(PASSWORD)}
+
+    async def test_everything_private_is_denied_without_a_session(self):
+        self.assertFalse(self.cfg.public_market_data)
+        c = await (await self.client.get("/api/config")).json()
+        self.assertEqual((c["authRequired"], c["publicMarketData"]), (True, False))
+        self.assertEqual(await (await self.client.get("/healthz")).json(), {"ok": True})  # minimal public health only
+        for path in ("/api/databento/status?root=GC", "/api/databento/status?root=SI", "/api/databento/v1/health",
+                     "/api/databento/v1/feed?cursor=0&roots=GC", "/api/databento/v1/candles/GC?timeframe=M1",
+                     "/api/databento/v1/candles/SI?timeframe=H1", "/api/databento/v1/trades/SI?after=0&limit=10",
+                     "/api/mt5/v1/health", "/api/mt5/v1/quote/XAUUSD", "/api/status", "/api/auth/me", "/api/ai/health", "/api/news/v1/health"):
+            r = await self.client.get(path, headers={"Origin": APP})
+            self.assertEqual(r.status, 401, path)
+            body = await r.text()
+            for secret in (DB_TOKEN, AI_TOKEN, NEWS_TOKEN, PASSWORD, self.cfg.owner_password_hash.reveal()):
+                self.assertNotIn(secret, body)
+        for path in ("/api/alerts", "/api/snapshots", "/api/ai/chat"):
+            self.assertEqual((await self.client.post(path, json={}, headers={"Origin": APP})).status, 401, path)
+        with self.assertRaises(Exception):
+            await self.client.ws_connect("/api/stream", headers={"Origin": APP})
+
+    async def test_owner_session_reads_market_data_then_logout_ends_it(self):
+        r = await self.client.post("/api/auth/login", json={"password": PASSWORD}, headers={"Origin": APP})
+        self.assertEqual(r.status, 200)
+        sid = r.cookies[COOKIE].value
+        hdr = {"Cookie": f"{COOKIE}={sid}", "Origin": APP}
+        self.assertEqual((await self.client.get("/api/databento/status?root=GC", headers=hdr)).status, 200)
+        self.assertEqual((await self.client.get("/api/databento/v1/health", headers=hdr)).status, 200)
+        ws = await self.client.ws_connect("/api/stream", headers=hdr)  # the owner session opens the private stream
+        await ws.close()
+        self.assertEqual((await self.client.post("/api/auth/logout", headers=hdr)).status, 200)
+        self.assertEqual((await self.client.get("/api/databento/status?root=GC", headers=hdr)).status, 401)
+        with self.assertRaises(Exception):
+            await self.client.ws_connect("/api/stream", headers=hdr)
+
+    async def test_login_and_logout_require_the_app_origin(self):
+        self.assertEqual((await self.client.post("/api/auth/login", json={"password": PASSWORD})).status, 403)
+        self.assertEqual((await self.client.post("/api/auth/login", json={"password": PASSWORD}, headers={"Origin": "https://evil.example"})).status, 403)
+        self.assertEqual((await self.client.post("/api/auth/logout")).status, 403)
+
+    async def test_failed_login_is_generic_and_lockout_is_per_real_client(self):
+        r = await self.client.post("/api/auth/login", json={"password": "not the password"}, headers={"Origin": APP, "X-Forwarded-For": "203.0.113.9"})
+        body = await r.json()
+        self.assertEqual((r.status, body["error"]["code"], body["error"]["message"]), (401, "INVALID_CREDENTIALS", "Sign-in failed."))
+        for _ in range(4):
+            await self.client.post("/api/auth/login", json={"password": "not the password"}, headers={"Origin": APP, "X-Forwarded-For": "203.0.113.9"})
+        r = await self.client.post("/api/auth/login", json={"password": PASSWORD}, headers={"Origin": APP, "X-Forwarded-For": "203.0.113.9"})
+        self.assertEqual(r.status, 429)  # that client is locked out, even with the right password
+        r = await self.client.post("/api/auth/login", json={"password": PASSWORD}, headers={"Origin": APP, "X-Forwarded-For": "198.51.100.7"})
+        self.assertEqual(r.status, 200)  # the owner on another address is not locked out by someone else's guesses
+        self.assertNotIn("TLUXE_", json.dumps(body))
+
+    async def test_session_survives_a_gateway_restart(self):
+        sid = (await self.client.post("/api/auth/login", json={"password": PASSWORD}, headers={"Origin": APP})).cookies[COOKIE].value
+        await self.client.close()
+        app2 = make_app(self.cfg, store=self.store_factory(self.cfg), workers=False)
+        self.client = TestClient(TestServer(app2))
+        await self.client.start_server()
+        r = await self.client.get("/api/auth/me", headers={"Cookie": f"{COOKIE}={sid}", "Origin": APP})
+        self.assertEqual(r.status, 200)
 
 
 @unittest.skipUnless(PG_ADMIN, "TLUXE_TEST_DATABASE_URL not set - production-mode tests need PostgreSQL (never faked)")

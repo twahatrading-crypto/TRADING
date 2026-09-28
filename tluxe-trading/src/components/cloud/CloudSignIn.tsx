@@ -1,14 +1,16 @@
-import { LockKeyhole } from 'lucide-react';
+import { Eye, EyeOff, LockKeyhole } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 import { login, type FetchLike } from '../../services/cloud/cloudApi';
 import './cloud.css';
 
 /**
- * Owner sign-in for the cloud deployment. The password goes once to the gateway over HTTPS; the gateway answers with
- * an HttpOnly session cookie. Nothing is stored in the browser by this form.
+ * Private owner sign-in for the cloud deployment (single owner - no registration, no recovery e-mail, no social login).
+ * The password goes once to the gateway over HTTPS; the gateway answers with an HttpOnly session cookie. Nothing is
+ * stored in the browser by this form.
  */
 export function CloudSignIn({ onSignedIn, gatewayDown = false, fetchImpl }: { onSignedIn: () => void; gatewayDown?: boolean; fetchImpl?: FetchLike }) {
   const [password, setPassword] = useState('');
+  const [show, setShow] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(gatewayDown ? 'The TLUXE gateway is not reachable right now.' : null);
   const submit = async (e: FormEvent) => {
@@ -28,24 +30,44 @@ export function CloudSignIn({ onSignedIn, gatewayDown = false, fetchImpl }: { on
   };
   return (
     <main className="cloud-signin">
-      <form className="cloud-signin__card" onSubmit={submit} aria-label="Sign in to Trading by TLUXE">
-        <div className="cloud-signin__brand">
-          <LockKeyhole size={18} />
-          <span>Trading by TLUXE</span>
+      <form className="cloud-signin__card" onSubmit={submit} aria-label="Sign in to TLUXE Trading">
+        <div className="cloud-signin__brand" aria-label="TLUXE | TRADING">
+          <span className="cloud-signin__mark">TLUXE</span>
+          <span className="cloud-signin__sep" aria-hidden="true">|</span>
+          <span className="cloud-signin__app">TRADING</span>
         </div>
-        <p className="cloud-signin__note">Owner access. Read-only market analysis — no trading, no orders.</p>
-        <label className="cloud-signin__field">
+        <p className="cloud-signin__note">
+          <LockKeyhole size={13} aria-hidden="true" /> Private owner access
+        </p>
+        <label className="cloud-signin__field" htmlFor="tluxe-owner-password">
           <span>Password</span>
-          <input type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} autoFocus required maxLength={256} />
         </label>
+        <div className="cloud-signin__pw">
+          <input
+            id="tluxe-owner-password"
+            type={show ? 'text' : 'password'}
+            autoComplete="current-password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            autoFocus
+            required
+            maxLength={256}
+            spellCheck={false}
+            autoCapitalize="off"
+          />
+          <button type="button" className="cloud-signin__eye" onClick={() => setShow((v) => !v)} aria-label={show ? 'Hide password' : 'Show password'} aria-pressed={show}>
+            {show ? <EyeOff size={16} /> : <Eye size={16} />}
+          </button>
+        </div>
         {error && (
           <p className="cloud-signin__error" role="alert">
             {error}
           </p>
         )}
         <button type="submit" className="cloud-signin__btn" disabled={busy || !password}>
-          {busy ? 'Signing in…' : 'Sign in'}
+          {busy ? 'SIGNING IN…' : 'SIGN IN'}
         </button>
+        <p className="cloud-signin__foot">Read-only market analysis · no trading, no orders</p>
       </form>
     </main>
   );

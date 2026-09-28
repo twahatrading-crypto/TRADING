@@ -90,15 +90,36 @@ describe('cloud session API - the browser never holds a credential', () => {
 
   it('sign-in form shows the gateway error and signs in on success', async () => {
     let ok = false;
-    const gw = gateway({ 'POST /api/auth/login': () => (ok ? { status: 200, body: { ok: true } } : { status: 401, body: { error: { code: 'INVALID_CREDENTIALS', message: 'Wrong password.' } } }) });
+    const gw = gateway({ 'POST /api/auth/login': () => (ok ? { status: 200, body: { ok: true } } : { status: 401, body: { error: { code: 'INVALID_CREDENTIALS', message: 'Sign-in failed.' } } }) });
     const onSignedIn = vi.fn();
     render(<CloudSignIn onSignedIn={onSignedIn} fetchImpl={gw.fetchImpl} />);
     fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'nope' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent('Wrong password.');
+    fireEvent.click(screen.getByRole('button', { name: 'SIGN IN' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Sign-in failed.');
     ok = true;
-    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    fireEvent.click(screen.getByRole('button', { name: 'SIGN IN' }));
     await waitFor(() => expect(onSignedIn).toHaveBeenCalledTimes(1));
+  });
+
+  it('owner sign-in page: TLUXE | TRADING, password only, show/hide, no signup / social / recovery, nothing stored', async () => {
+    const gw = gateway({ 'POST /api/auth/login': () => ({ status: 200, body: { ok: true } }) });
+    const before = JSON.stringify({ ...localStorage });
+    const { container } = render(<CloudSignIn onSignedIn={() => {}} fetchImpl={gw.fetchImpl} />);
+    expect(screen.getByLabelText('TLUXE | TRADING')).toBeInTheDocument();
+    const pw = screen.getByLabelText('Password') as HTMLInputElement;
+    expect(pw.type).toBe('password');
+    fireEvent.click(screen.getByRole('button', { name: 'Show password' }));
+    expect(pw.type).toBe('text');
+    fireEvent.click(screen.getByRole('button', { name: 'Hide password' }));
+    expect(pw.type).toBe('password');
+    expect(container.querySelectorAll('input')).toHaveLength(1);
+    expect(container.textContent).not.toMatch(/sign up|create account|register|forgot|google|facebook|apple/i);
+    fireEvent.change(pw, { target: { value: 'the owner password 123' } });
+    fireEvent.click(screen.getByRole('button', { name: 'SIGN IN' }));
+    await waitFor(() => expect(gw.calls.some((c) => c.url === '/api/auth/login' && c.init?.method === 'POST')).toBe(true));
+    expect(JSON.stringify({ ...localStorage })).toBe(before);
+    expect(JSON.stringify({ ...sessionStorage })).not.toContain('the owner password');
+    expect(pw.value).toBe('');
   });
 });
 

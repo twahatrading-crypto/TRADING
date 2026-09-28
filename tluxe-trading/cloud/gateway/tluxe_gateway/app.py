@@ -21,7 +21,7 @@ from urllib.parse import urlparse
 from aiohttp import ClientSession, ClientTimeout, WSMsgType, web
 
 from . import __version__
-from .auth import COOKIE, ROTATE_AFTER_S, LoginLimiter, new_session_id, sid_hash, verify_password
+from .auth import COOKIE, ROTATE_AFTER_S, GlobalFailLimiter, LoginLimiter, new_session_id, sid_hash, verify_password
 from .config import GatewayConfig, Upstream
 from .health import ai_states, comp, databento_state, databento_summary, mt5_states, news_state
 from .logs import Redactor
@@ -93,9 +93,13 @@ async def security(request: web.Request, handler):
     cfg = request.app[K_CFG]
     origin = request.headers.get("Origin")
     is_api = request.path.startswith("/api/") or request.path.startswith("/bridge/")
+    unsafe = request.method not in ("GET", "HEAD", "OPTIONS")
     if is_api and origin is not None and origin not in cfg.allowed_origins:
         log.warning("rejected origin %s on %s", origin[:100], request.path)
         resp = _err(403, "ORIGIN_NOT_ALLOWED", "This origin is not allowed.")
+    elif cfg.production and unsafe and request.path.startswith("/api/") and origin is None:
+        # CSRF: every state-changing API call (login / logout included) must come from the TLUXE web app's own origin.
+        resp = _err(403, "ORIGIN_REQUIRED", "State-changing requests must come from the TLUXE web app.")
     elif request.method == "OPTIONS" and is_api:
         resp = web.Response(status=204)
     else:
@@ -213,12 +217,13 @@ async def runtime_config(request: web.Request) -> web.Response:
 async def login(request: web.Request) -> web.Response:
     cfg, store = request.app[K_CFG], request.app[K_STORE]
     limiter: LoginLimiter = request.app[K_STATE]["limiter"]
-    client = request.remote or "?"
-    wait = limiter.locked(client)
+    global_limiter: GlobalFailLimiter = request.app[K_STATE]["globalLimiter"]
+    client = _client(request)  # the address Railway's proxy saw (request.remote is the proxy itself)
+    wait = max(limiter.locked(client), global_limiter.blocked())
     if wait:
-        return _err(429, "LOCKED", f"Too many attempts - try again in {int(wait)} s.")
+        return _err(429, "LOCKED", f"Too many attempts - try again in {int(wait) + 1} s.")
     if not cfg.owner_password_hash:
-        return _err(503, "AUTH_NOT_CONFIGURED", "Owner login is not configured (TLUXE_OWNER_PASSWORD_HASH).")
+        return _err(503, "AUTH_NOT_CONFIGURED", "Owner sign-in is not configured yet.")
     try:
         body = await request.json()
     except (ValueError, UnicodeDecodeError):
@@ -229,8 +234,9 @@ async def login(request: web.Request) -> web.Response:
     ok = await asyncio.get_running_loop().run_in_executor(None, verify_password, pw, cfg.owner_password_hash.reveal())
     if not ok:
         limiter.fail(client)
+        global_limiter.fail()
         await store.auth_event("LOGIN_FAIL", client)
-        return _err(401, "INVALID_CREDENTIALS", "Wrong password.")
+        return _err(401, "INVALID_CREDENTIALS", "Sign-in failed.")
     limiter.ok(client)
     sid = new_session_id()
     await store.session_create(sid_hash(sid), cfg.session_ttl_s)
@@ -594,7 +600,7 @@ def make_app(cfg: GatewayConfig, store=None, workers: bool = True, http_session_
     app[K_CFG] = cfg
     app[K_STORE] = store or (PgStore(cfg.database_url.reveal()) if cfg.database_url else MemoryStore())
     app[K_HUB] = StreamHub()
-    app[K_STATE] = {"limiter": LoginLimiter(), "publicLimiter": PublicRateLimiter(), "tasks": []}
+    app[K_STATE] = {"limiter": LoginLimiter(), "globalLimiter": GlobalFailLimiter(), "publicLimiter": PublicRateLimiter(), "tasks": []}
 
     async def on_integrity(kind: str, detail: dict) -> None:
         await app[K_STORE].add_integrity("mt5", None, kind, detail)

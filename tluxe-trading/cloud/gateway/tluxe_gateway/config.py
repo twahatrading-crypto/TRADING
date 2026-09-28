@@ -19,7 +19,7 @@ DEV_PORT = 8780  # MT5 8765 · Databento 8766 · TLUXE AI 8767 · News 8768 · V
 DEV_ORIGINS = ("http://localhost:5182", "http://127.0.0.1:5182", "http://localhost:5181", "http://127.0.0.1:5181",
                "http://localhost:4181", "http://127.0.0.1:4181")
 _LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1", "0.0.0.0")
-_HASH_RE = re.compile(r"^scrypt\$\d+\$\d+\$\d+\$[A-Za-z0-9+/=]+\$[A-Za-z0-9+/=]+$")
+_HASH_RE = re.compile(r"^(scrypt\$\d+\$\d+\$\d+|pbkdf2_sha256\$\d+)\$[A-Za-z0-9+/=]+\$[A-Za-z0-9+/=]+$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -214,7 +214,7 @@ def from_env(env: dict | None = None) -> GatewayConfig:
             errors.append("DATABASE_URL is required in production (reference the Railway PostgreSQL service: ${{Postgres.DATABASE_URL}})")
         raw_hash = (e.get("TLUXE_OWNER_PASSWORD_HASH") or "").strip()
         if raw_hash and not _HASH_RE.match(raw_hash):
-            errors.append("TLUXE_OWNER_PASSWORD_HASH must be a scrypt hash (python -m tluxe_gateway.hashpw)")
+            errors.append("TLUXE_OWNER_PASSWORD_HASH must be a scrypt or pbkdf2_sha256 hash (tools/owner-password-hash.html or python -m tluxe_gateway.hashpw)")
     else:
         origins = origins or DEV_ORIGINS
         for o in origins:
@@ -223,7 +223,7 @@ def from_env(env: dict | None = None) -> GatewayConfig:
                 break
     pw_hash = (e.get("TLUXE_OWNER_PASSWORD_HASH") or "").strip()
     if pw_hash and not _HASH_RE.match(pw_hash) and not prod:
-        errors.append("TLUXE_OWNER_PASSWORD_HASH has an invalid format (python -m tluxe_gateway.hashpw)")
+        errors.append("TLUXE_OWNER_PASSWORD_HASH has an invalid format (tools/owner-password-hash.html or python -m tluxe_gateway.hashpw)")
     # Railway assigns PORT: it always wins in production, so a stale TLUXE_GATEWAY_PORT can never mis-bind the service.
     railway_port = (e.get("PORT") or "").strip()
     if prod and railway_port:

@@ -1,13 +1,20 @@
-.cloud-signin { min-height: 100vh; display: grid; place-items: center; padding: 16px; background: var(--bg); }
-.cloud-signin__card { width: 100%; max-width: 360px; display: grid; gap: 14px; padding: 24px; background: var(--panel); border: 1px solid var(--border-gold); border-radius: 10px; }
-.cloud-signin__brand { display: flex; align-items: center; gap: 8px; color: var(--gold-bright); font-size: 1.1rem; font-weight: 600; }
-.cloud-signin__note { margin: 0; color: var(--text-3); font-size: 0.8rem; }
-.cloud-signin__field { display: grid; gap: 6px; color: var(--text-2); font-size: 0.8rem; }
-.cloud-signin__field input { padding: 9px 10px; background: var(--bg-raised); border: 1px solid var(--border-strong); border-radius: 6px; color: var(--text); font-size: 16px; }
+.cloud-signin { min-height: 100vh; display: grid; place-items: center; padding: 16px; background: radial-gradient(ellipse at 50% 0%, rgba(201, 164, 92, 0.07), transparent 60%), var(--bg); }
+.cloud-signin__card { width: 100%; max-width: 380px; display: grid; gap: 12px; padding: 32px 28px 24px; background: var(--panel); border: 1px solid var(--border-gold); border-radius: 12px; box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45); }
+.cloud-signin__brand { display: flex; align-items: baseline; justify-content: center; gap: 10px; margin-bottom: 2px; letter-spacing: 0.22em; font-weight: 600; }
+.cloud-signin__mark { color: var(--gold-bright); font-size: 1.35rem; }
+.cloud-signin__sep { color: var(--border-gold); font-size: 1.2rem; }
+.cloud-signin__app { color: var(--text); font-size: 1.05rem; }
+.cloud-signin__note { margin: 0 0 8px; display: flex; align-items: center; justify-content: center; gap: 6px; color: var(--text-3); font-size: 0.75rem; letter-spacing: 0.12em; text-transform: uppercase; }
+.cloud-signin__field { display: grid; gap: 6px; color: var(--text-2); font-size: 0.72rem; letter-spacing: 0.1em; text-transform: uppercase; }
+.cloud-signin__pw { position: relative; display: flex; }
+.cloud-signin__pw input { flex: 1; min-width: 0; padding: 10px 40px 10px 12px; background: var(--bg-raised); border: 1px solid var(--border-strong); border-radius: 6px; color: var(--text); font-size: 16px; }
+.cloud-signin__pw input:focus { outline: none; border-color: var(--border-gold); }
+.cloud-signin__eye { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); display: grid; place-items: center; width: 32px; height: 32px; border: 0; background: transparent; color: var(--text-3); cursor: pointer; border-radius: 4px; }
+.cloud-signin__eye:hover { color: var(--gold-bright); }
 .cloud-signin__error { margin: 0; color: var(--red); font-size: 0.8rem; }
-.cloud-signin__btn { padding: 9px 12px; border-radius: 6px; border: 1px solid var(--border-gold); background: var(--gold-soft); color: var(--gold-bright); font-weight: 600; cursor: pointer; }
+.cloud-signin__btn { margin-top: 4px; padding: 11px 12px; border-radius: 6px; border: 1px solid var(--border-gold); background: var(--gold-soft); color: var(--gold-bright); font-weight: 700; letter-spacing: 0.16em; cursor: pointer; }
 .cloud-signin__btn:disabled { opacity: 0.45; cursor: not-allowed; }
-
+.cloud-signin__foot { margin: 6px 0 0; text-align: center; color: var(--text-3); font-size: 0.7rem; }
 .cloud-status { display: grid; gap: 8px; }
 .cloud-status__row { display: grid; grid-template-columns: minmax(90px, 130px) auto 1fr; align-items: center; gap: 8px; font-size: 0.8rem; color: var(--text-2); }
 .cloud-status__detail { color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }

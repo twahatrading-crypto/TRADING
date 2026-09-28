@@ -68,7 +68,14 @@ per-process.
   * `PUBLIC_APP_URL` and `API_PUBLIC_URL` — the same https origin
   * `ALLOWED_ORIGINS` — exact https origins only; no `*` and no localhost
   * `DATABASE_URL` — `${{Postgres.DATABASE_URL}}`
-  * `TLUXE_OWNER_PASSWORD_HASH` — generate it with `python -m tluxe_gateway.hashpw`
+  * `TLUXE_OWNER_PASSWORD_HASH` — a salted hash, never the password. Generate it offline, either:
+    * open `tools/owner-password-hash.html` from a local copy of the repository in any current browser (WebCrypto,
+      PBKDF2-HMAC-SHA256, 600,000 iterations; the page has a `default-src 'none'` CSP, so it cannot send anything), or
+    * `python -m tluxe_gateway.hashpw` (scrypt; falls back to PBKDF2 when Python lacks `hashlib.scrypt`).
+  * While this variable is **absent**, the gateway runs in public read-only market-data mode (Databento / MT5 GETs
+    only). As soon as it is set, that mode is OFF: every `/api/*` route except `/api/config` and `/api/auth/login`
+    needs the owner session, and the web app shows the TLUXE sign-in page. Removing the variable returns to public
+    read-only mode (the recovery path if the owner password is ever lost - then generate a new hash).
 * Internal services:
   * `TLUXE_AI_URL`, `TLUXE_AI_TOKEN`
   * `TLUXE_DATABENTO_URL`, `TLUXE_DB_BRIDGE_TOKEN`
