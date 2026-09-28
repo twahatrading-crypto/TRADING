@@ -90,6 +90,30 @@ def _int(e: dict, key: str, default: int, lo: int, hi: int) -> int:
     return v
 
 
+def _port(e: dict, lo: int, hi: int) -> int:
+    """Resolve the listen port.
+
+    Railway injects the actual port to bind to as `PORT` at runtime (its own service
+    variables are not substituted into `TLUXE_AI_PORT`, so that var may literally contain
+    the unexpanded string "$PORT"). Prefer `PORT` when present, fall back to
+    `TLUXE_AI_PORT` for local development, and finally to DEFAULT_PORT.
+    """
+    raw = (e.get("PORT") or "").strip()
+    key = "PORT"
+    if not raw:
+        raw = (e.get("TLUXE_AI_PORT") or "").strip()
+        key = "TLUXE_AI_PORT"
+    if not raw:
+        return DEFAULT_PORT
+    try:
+        v = int(raw)
+    except ValueError:
+        raise ConfigError(f"{key} must be an integer") from None
+    if not lo <= v <= hi:
+        raise ConfigError(f"{key} must be between {lo} and {hi}")
+    return v
+
+
 def from_env(env: dict | None = None) -> AiConfig:
     e = dict(os.environ if env is None else env)
     key = (e.get("OPENAI_API_KEY") or "").strip()
@@ -116,7 +140,7 @@ def from_env(env: dict | None = None) -> AiConfig:
         token=Secret(token),
         model=model,
         host=host,
-        port=_int(e, "TLUXE_AI_PORT", DEFAULT_PORT, 1, 65535),
+        port=_port(e, 1, 65535),
         allowed_origins=origins,
         timeout_s=_int(e, "TLUXE_AI_TIMEOUT_S", 60, 5, 300),
         max_output_tokens=_int(e, "TLUXE_AI_MAX_OUTPUT_TOKENS", 2000, 64, 32000),
