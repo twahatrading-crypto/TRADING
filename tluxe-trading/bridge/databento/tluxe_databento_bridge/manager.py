@@ -319,9 +319,14 @@ class SessionRunner(threading.Thread):
 
 
 class Manager:
-    def __init__(self, cfg: BridgeConfig, factory: Callable | None = None, hub: Hub | None = None) -> None:
+    def __init__(self, cfg: BridgeConfig, factory: Callable | None = None, hub: Hub | None = None, history_client_factory: Callable | None = None) -> None:
         self.cfg = cfg
         self.hub = hub or Hub(cfg)
+        # Real historical OHLCV of each newly resolved contract (Databento Historical API, cost-guarded), in the background.
+        from .history import HistoryLoader
+
+        self.history = HistoryLoader(cfg, self.hub.history_loaded, client_factory=history_client_factory)
+        self.hub.on_contract = self.history.start
         self.ingest = Ingest(self.hub)
         factory = factory or default_client_factory
         # Standard plan: ONE Databento session (trades + ohlcv-1m). The MBO book session exists only on a MBO plan.

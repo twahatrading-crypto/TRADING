@@ -90,6 +90,13 @@ class BridgeConfig:
     heartbeat_s: int = 10
     stale_ms: int = 25_000
     lag_ms: int = 5_000
+    # Historical OHLCV (Databento Historical API) for the CURRENT contract; 0 days disables that schema. The estimated
+    # cost is checked before any download and must not exceed hist_max_cost_usd.
+    history: bool = True
+    hist_m1_days: int = 105
+    hist_h1_days: int = 400
+    hist_d1_days: int = 1100
+    hist_max_cost_usd: float = 2.0
 
     @property
     def depth_plan(self) -> bool:
@@ -114,6 +121,19 @@ def _int(e: dict, key: str, default: int, lo: int, hi: int) -> int:
         v = int(raw)
     except ValueError:
         raise ConfigError(f"{key} must be an integer") from None
+    if not lo <= v <= hi:
+        raise ConfigError(f"{key} must be between {lo} and {hi}")
+    return v
+
+
+def _float(e: dict, key: str, default: float, lo: float, hi: float) -> float:
+    raw = (e.get(key) or "").strip()
+    if not raw:
+        return default
+    try:
+        v = float(raw)
+    except ValueError:
+        raise ConfigError(f"{key} must be a number") from None
     if not lo <= v <= hi:
         raise ConfigError(f"{key} must be between {lo} and {hi}")
     return v
@@ -164,5 +184,10 @@ def from_env(env: dict | None = None) -> BridgeConfig:
         max_frames=_int(e, "TLUXE_DB_MAX_FRAMES", 1200, 60, 20_000),
         publish_ms=_int(e, "TLUXE_DB_PUBLISH_MS", 250, 50, 5000),
         replay_hours=_int(e, "TLUXE_DB_REPLAY_HOURS", 24, 0, 24),
+        history=(e.get("TLUXE_DB_HISTORY") or "1").strip() != "0",
+        hist_m1_days=_int(e, "TLUXE_DB_HIST_M1_DAYS", 105, 0, 400),
+        hist_h1_days=_int(e, "TLUXE_DB_HIST_H1_DAYS", 400, 0, 2000),
+        hist_d1_days=_int(e, "TLUXE_DB_HIST_D1_DAYS", 1100, 0, 5000),
+        hist_max_cost_usd=_float(e, "TLUXE_DB_HIST_MAX_COST_USD", 2.0, 0.0, 100.0),
         replay_margin_min=_int(e, "TLUXE_DB_REPLAY_MARGIN_MIN", 30, 0, 240),
     )

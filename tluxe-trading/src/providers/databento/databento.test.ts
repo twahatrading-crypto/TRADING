@@ -8,7 +8,7 @@ import { DatabentoBridgeClient } from './client';
 import { DATABENTO_CONFIG_KEY, DEFAULT_DATABENTO_CONFIG, sanitizeDatabentoConfig } from './config';
 import { DatabentoFeed } from './DatabentoFeed';
 import type { DbRoot } from './protocol';
-import { FakeBridge, status } from './testing/FakeBridge';
+import { FakeBridge, NS, status } from './testing/FakeBridge';
 
 /* TEST DATA ONLY — a scripted in-memory bridge (FakeBridge) through the REAL adapters and TLUXE services. */
 
@@ -204,6 +204,52 @@ describe('Databento — footprint (exchange trades)', () => {
     await r.pump();
     expect(fpSnap(r.services)!.integrity.state).toBe('DEGRADED');
     expect(fpSnap(r.services)!.integrity.disconnects).toBe(1);
+  });
+
+  it('replay -> live: genuine replayed trades are not excluded as LATE while the replay is still loading', async () => {
+    // Root cause of DATA INTEGRITY DEGRADED after start-up: a live frame's exchange-clock heartbeat (latest event time)
+    // used to close footprint candles before the in-flight 24 h replay had delivered its (older) trades.
+    let release!: () => void;
+    const gate = new Promise<void>((res) => (release = res));
+    const r = rig({
+      before: (b) => {
+        for (let k = 0; k < 5; k++) b.trade('GC', 2400 + k, 1, k % 2 ? 'SELL' : 'BUY', T + k * 60_000);
+        b.statuses.GC = status('GC', { lastEventNs: (T + 10 * 60_000) * NS });
+        const real = b.trades;
+        b.trades = async (...a) => {
+          await gate;
+          return real(...a);
+        };
+      },
+    });
+    r.bridge.frame({ GC: {} }); // live frame (heartbeat at T+10 min) while the replay fetch is still in flight
+    await r.pump();
+    release();
+    await tick();
+    await r.pump();
+    await r.pump();
+    const snap = fpSnap(r.services)!;
+    expect(snap.integrity.late).toBe(0);
+    const candles = r.services.volumeFootprint.engine()!.candles('M1');
+    expect(candles.reduce((a, c) => a + c.volume, 0)).toBe(5); // every real trade counted once - none invented
+    expect(candles.every((c) => c.contract === 'GCZ6')).toBe(true);
+  });
+
+  it('a gap refill in flight also holds the heartbeat; a genuinely late trade is still excluded (never repaints)', async () => {
+    const r = rig();
+    const t1 = r.bridge.trade('GC', 2400, 1, 'BUY', T + 1000);
+    r.bridge.frame({ GC: { trades: [t1] } });
+    await r.pump();
+    // The bridge delivers a trade whose exchange time lies inside an already-closed M1 candle: excluded, counted.
+    r.bridge.statuses.GC = status('GC', { lastEventNs: (T + 5 * 60_000) * NS });
+    r.bridge.frame({ GC: {} });
+    await r.pump();
+    const late = r.bridge.trade('GC', 2401, 2, 'SELL', T + 2000);
+    r.bridge.frame({ GC: { trades: [late] } });
+    await r.pump();
+    const snap = fpSnap(r.services)!;
+    expect(snap.integrity.late).toBe(1);
+    expect(r.services.volumeFootprint.engine()!.candles('M1')[0]!.volume).toBe(1); // the closed candle did not change
   });
 
   it('contract roll: new contract history, never merged (footprint + heatmap)', async () => {

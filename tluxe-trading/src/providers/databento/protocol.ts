@@ -47,6 +47,16 @@ export interface DbInstrumentStatus {
   lastEventAgeMs: number | null;
   counts: Record<string, number>;
   roll: { from: string; to: string; fromId: number; toId: number; atMs: number } | null;
+  /** Real historical OHLCV of the current contract (Databento Historical API). Absent from older bridge builds. */
+  history?: {
+    state: 'LOADING' | 'READY' | 'UNAVAILABLE' | 'NOT_ENTITLED' | 'COST_BLOCKED' | 'AUTH_ERROR' | 'DISABLED' | 'WAITING_FOR_CONTRACT';
+    contract?: string;
+    instrumentId?: number;
+    message?: string | null;
+    bars?: Record<string, number>;
+    estimatedCostUsd?: number | null;
+    range?: { start: string; end: string } | null;
+  };
 }
 
 export interface DbSession {

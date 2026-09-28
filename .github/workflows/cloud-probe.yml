@@ -51,6 +51,47 @@ jobs:
             fi
             sleep 60
           done
+  gcsi:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      BASE: https://trading-production-e1d5.up.railway.app
+    steps:
+      - name: GC + SI real data and history per timeframe (waits up to 20 min for history to settle)
+        shell: bash
+        run: |
+          cat > check.py <<'PY'
+          import json, sys, time, urllib.request
+          B = "https://trading-production-e1d5.up.railway.app"
+          def get(p):
+              with urllib.request.urlopen(B + p, timeout=20) as r:
+                  return json.load(r)
+          final = ("READY", "NOT_ENTITLED", "COST_BLOCKED", "AUTH_ERROR", "UNAVAILABLE", "DISABLED")
+          for attempt in range(40):
+              out, done = {}, True
+              for root in ("GC", "SI"):
+                  s = get(f"/api/databento/status?root={root}")
+                  h = s.get("history") or {}
+                  done &= s.get("verifiedByRealData") is True and h.get("state") in final
+                  out[root] = {k: s.get(k) for k in ("state", "connection", "dataset", "subscribed", "activeContract", "instrumentId", "lastEventUtc",
+                                                   "lastEventAgeMs", "freshness", "received", "verifiedByRealData", "lastTrade", "lastBar", "depth")}
+                  out[root]["history"] = {k: h.get(k) for k in ("state", "contract", "bars", "estimatedCostUsd", "range", "message")}
+              if done or attempt == 39:
+                  break
+              print(time.strftime("%H:%M:%S"), {r: (o["verifiedByRealData"], o["history"]["state"]) for r, o in out.items()}, flush=True)
+              time.sleep(30)
+          print(json.dumps(out, indent=1))
+          for root in ("GC", "SI"):
+              for tf in ("M1", "M5", "M15", "M30", "H1", "H4", "D1"):
+                  c = get(f"/api/databento/v1/candles/{root}?timeframe={tf}&limit=5000")
+                  bars = c.get("bars") or []
+                  closed = [b for b in bars if b.get("isClosed")]
+                  iso = lambda t: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t)) if t else None
+                  print(f"{root} {tf:>3}: bars={len(bars):5d} closed={len(closed):5d} contract={c.get('contract')} history={c.get('history')} "
+                        f"first={iso(bars[0]['time']) if bars else None} lastClosed={iso(closed[-1]['time']) if closed else None} "
+                        f"last={json.dumps({k: bars[-1][k] for k in ('open','high','low','close','volume','isClosed')}) if bars else None}")
+          PY
+          python3 check.py
   frontend:
     runs-on: ubuntu-latest
     timeout-minutes: 15

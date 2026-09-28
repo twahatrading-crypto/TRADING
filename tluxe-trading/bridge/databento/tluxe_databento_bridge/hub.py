@@ -22,6 +22,8 @@ from .config import DATASET, DEPTH_SCHEMA, NEVER_REQUESTED, ROOTS, TAPE_SCHEMAS,
 from .entitlement import AUTH, ENTITLEMENT, START, classify, parse_start_boundary_ns
 from .redact import Redactor
 from .symbology import SymbolMap
+from .history import DISABLED as HISTORY_DISABLED
+from .history import HistoryStore, assemble
 from .tape import TradeTape
 
 
@@ -87,6 +89,8 @@ class RootState:
         self.last_recv_ns: int | None = None
         self.tape_gap_at: int | None = None
         self.roll_note: dict | None = None
+        # Real historical OHLCV of the CURRENT contract (Databento Historical API); replaced on every roll.
+        self.history: HistoryStore | None = None
 
 
 class Hub:
@@ -127,6 +131,8 @@ class Hub:
                         "ingestLagMs": None, "maxIngestLagMs": 0, "tapeLagMs": None, "published": 0, "processingMs": 0.0, "systemMessages": 0, "errors": 0}
         self._rate = deque(maxlen=64)  # (ms, records) samples for the ingest rate
         self.last_roll: list = []
+        # Called with a new HistoryStore whenever a root resolves to a (new) contract; the manager starts the loader.
+        self.on_contract = lambda store: None
 
     # ------------------------------------------------------------------ plan / entitlement
     def not_entitled(self, schema: str) -> bool:
@@ -199,6 +205,12 @@ class Hub:
         st.pending_trades, st.pending_bars, st.framed_epoch = [], {}, -1
         st.mbo_keys.clear()
         st.mbo_keyset.clear()
+        # History belongs to exactly this contract: a roll discards the old contract's bars and loads the new one's.
+        st.history = HistoryStore(root, new.contract, new.instrument_id)
+        if not self.cfg.history:
+            st.history.state, st.history.message = HISTORY_DISABLED, "Historical OHLCV disabled (TLUXE_DB_HISTORY=0)."
+        else:
+            self.on_contract(st.history)
         if prev is not None:
             # ROLL: never merge contracts - new book (needs a fresh snapshot), new tape, new candle history.
             st.counts["rolls"] += 1
@@ -453,6 +465,7 @@ class Hub:
             "lastEventAgeMs": None if st.last_event_ns is None else max(0, now - st.last_event_ns // 1_000_000),
             "counts": dict(st.counts),
             "roll": st.roll_note,
+            "history": st.history.view() if st.history is not None else {"state": "WAITING_FOR_CONTRACT" if self.cfg.history else HISTORY_DISABLED},
         }
 
     def capabilities(self, st: RootState, status: str) -> dict:
@@ -612,9 +625,30 @@ class Hub:
             trades, complete = st.tape.since(index, limit)
             return {"root": root, "contract": st.tape.contract, "instrumentId": st.tape.instrument_id, "trades": trades, "complete": complete, "lastIndex": st.tape.index, "cursor": self.cursor}
 
+    def history_loaded(self, store: HistoryStore) -> None:
+        """A history download finished. Ignored if the root has rolled to another contract in the meantime."""
+        with self.lock:
+            st = self.roots[store.root]
+            if st.history is not store or st.instrument_id != store.instrument_id:
+                return
+            st.framed_epoch = -1  # next frame republishes the status (history state / bar counts)
+
     def candles(self, root: str, tf: str, limit: int) -> dict:
+        """Bars of the CURRENT contract: real historical ohlcv (when loaded) + live ohlcv-1m + forming bar from trades."""
         with self.lock:
             st = self.roots[root]
-            bars = st.candles.get(tf, limit) if st.candles else []
+            live = st.candles
+            hist = st.history.bars if st.history is not None and st.history.instrument_id == st.instrument_id else {}
+            m1_map = {t: b for t, b in hist.get("ohlcv-1m", {}).items()}
+            if live is not None:
+                m1_map.update(live.bars)  # same official Databento bars; live wins on the same minute
+            m1 = [dict(m1_map[t]) for t in sorted(m1_map)]
+            last_closed = m1[-1]["time"] if m1 else None
+            if live is not None and live.forming is not None:
+                m1.append(dict(live.forming))
+            closed_until = last_closed + 60 if last_closed is not None else None
+            bars = assemble(tf, m1, hist, closed_until, limit)
+            h = st.history.state if st.history is not None else None
             return {"root": root, "contract": st.contract, "instrumentId": st.instrument_id, "timeframe": tf, "bars": bars,
-                    "source": "databento", "schema": "ohlcv-1m", "cursor": self.cursor}
+                    "source": "databento", "schema": "ohlcv-1m" + (" + historical ohlcv-1m/1h/1d" if h == "READY" else ""),
+                    "history": h, "cursor": self.cursor}

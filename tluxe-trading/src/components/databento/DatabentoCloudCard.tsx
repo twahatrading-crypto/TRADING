@@ -39,14 +39,24 @@ export function DatabentoCloudCard() {
           const i = h?.instruments[root];
           const last = i?.lastEventNs != null ? Math.floor(i.lastEventNs / 1_000_000) : null;
           const vol = i ? Object.values(i.tape.volume ?? {}).reduce((a, b) => a + (Number(b) || 0), 0) : null;
+          const tc = i?.tape.counts ?? {};
+          const hs = i?.history;
+          const hb = hs?.bars ?? {};
           return (
             <div className="kv__row" key={root} data-testid={`databento-${root}`}>
               <dt>{root}</dt>
               <dd>
                 {i ? (
                   <>
-                    <strong>{i.contract ?? 'resolving contract…'}</strong> ({i.subscribed}) · {i.status} · Trades {i.capabilities?.trades ?? UNKNOWN} · OHLCV{' '}
-                    {i.capabilities?.ohlcv ?? UNKNOWN} · latest event {utc(last)} ({age(last, now)}) · volume {vol ?? UNKNOWN} · bars {i.candles.bars}
+                    <strong>{i.contract ?? 'resolving contract…'}</strong> ({i.subscribed}) · instrument {i.instrumentId ?? UNKNOWN} · {i.status} · Trades{' '}
+                    {i.capabilities?.trades ?? UNKNOWN} · OHLCV {i.capabilities?.ohlcv ?? UNKNOWN} · latest event {utc(last)} ({age(last, now)}) · exchange volume{' '}
+                    {vol ?? UNKNOWN} · live M1 bars {i.candles.bars}
+                    <br />
+                    Aggressor side (Databento <code>side</code>): {tc.accepted ?? 0} trades, {tc.unknownSide ?? 0} UNKNOWN (N — never assigned to a side)
+                    <br />
+                    History: {hs ? hs.state : UNKNOWN}
+                    {hs?.state === 'READY' ? ` · 1m ${hb['ohlcv-1m'] ?? 0} · 1h ${hb['ohlcv-1h'] ?? 0} · 1d ${hb['ohlcv-1d'] ?? 0} (${hs.contract ?? ''})` : ''}
+                    {hs?.message ? ` — ${hs.message}` : ''}
                   </>
                 ) : (
                   UNKNOWN

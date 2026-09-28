@@ -19,7 +19,8 @@ P = 1_000_000_000  # price scale
 
 
 def cfg(**over):
-    env = {"DATABENTO_API_KEY": KEY, "TLUXE_DB_BRIDGE_TOKEN": TOKEN, **over}
+    # Historical downloads are OFF unless a test enables them with a scripted client (never a network call in tests).
+    env = {"DATABENTO_API_KEY": KEY, "TLUXE_DB_BRIDGE_TOKEN": TOKEN, "TLUXE_DB_HISTORY": "0", **over}
     return from_env(env)
 
 

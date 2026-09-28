@@ -159,6 +159,8 @@ def databento_summary(h: dict | None, configured: bool, err: str | None, now_ms:
         "freshness": state["state"] if last_ms else "NO DATA YET",
         "marketOpen": globex_open(now_ms),
         "received": {"trades": trades_seen, "ohlcvBars": bars_seen, "tapeCounts": counts},
+        # Real historical OHLCV of the current contract (Databento Historical API) - state, bar counts, estimated cost.
+        "history": inst.get("history"),
         "lastTrade": trade,
         "lastBar": bar,
         # Only real records received from Databento make this true - never configuration alone.

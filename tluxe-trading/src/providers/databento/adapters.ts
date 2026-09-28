@@ -452,6 +452,13 @@ interface FpSub {
   status: FPFeedStatus | null;
   fetching: boolean;
   lastExch: number;
+  /**
+   * True while trades the bridge already holds have not all reached the engine yet (initial 24 h replay, a gap
+   * refill in flight). While behind, NO exchange-clock heartbeat is emitted: it would close footprint candles ahead of
+   * trades still on their way, and those genuine trades would then be excluded as "late" (they never are invented or
+   * reordered - they simply arrive before the clock moves past them).
+   */
+  behind: boolean;
 }
 
 export class DatabentoFootprintProvider implements FootprintTradeProvider {
@@ -470,7 +477,7 @@ export class DatabentoFootprintProvider implements FootprintTradeProvider {
   }
   subscribe(def: InstrumentDefinition): void {
     if (!this.sink || this.subs.has(def.id) || !isRoot(def.id)) return;
-    const s: FpSub = { root: def.id, off: () => {}, lastI: 0, gaps: -1, clock: 0, status: null, fetching: false, lastExch: 0 };
+    const s: FpSub = { root: def.id, off: () => {}, lastI: 0, gaps: -1, clock: 0, status: null, fetching: false, lastExch: 0, behind: true };
     this.subs.set(def.id, s);
     this.msg(def.id, s, { type: 'caps', instrumentId: def.id, recvTime: 0, caps: DATABENTO_FOOTPRINT_CAPS });
     s.off = this.feed.subscribe(def.id, (e) => this.onEvent(def.id, s, e));
@@ -509,10 +516,13 @@ export class DatabentoFootprintProvider implements FootprintTradeProvider {
           this.setStatus(id, s, 'LIVE', null);
         }
         this.emitTrades(id, s, r.trades);
-        if (r.trades.length < 20000) break;
+        if (r.trades.length < 20000) {
+          s.behind = false; // caught up with everything the bridge held at this request
+          break;
+        }
       }
     } catch {
-      /* status arrives through the feed */
+      /* status arrives through the feed; still behind -> the next frame retries the catch-up */
     } finally {
       s.fetching = false;
     }
@@ -550,11 +560,15 @@ export class DatabentoFootprintProvider implements FootprintTradeProvider {
     }
     s.gaps = gaps;
     if (d.trades?.length) {
-      if (d.trades[0]!.i > s.lastI + 1 && s.lastI > 0) void this.loadTrades(id, s, false);
-      else this.emitTrades(id, s, d.trades);
+      if ((d.trades[0]!.i > s.lastI + 1 && s.lastI > 0) || s.behind) {
+        // Not contiguous with what the engine has (or the replay is still loading): fetch the missing range first.
+        s.behind = true;
+        void this.loadTrades(id, s, false);
+      } else this.emitTrades(id, s, d.trades);
     }
-    // Exchange-clock heartbeat (latest source event time) lets footprint candles close in quiet markets.
-    if (st.lastEventNs && (st.freshness === 'LIVE' || st.freshness === 'DELAYED')) {
+    // Exchange-clock heartbeat (latest source event time) lets footprint candles close in quiet markets - only once
+    // every trade up to that time has been delivered (never while catching up, see FpSub.behind).
+    if (!s.behind && !s.fetching && st.lastEventNs && (st.freshness === 'LIVE' || st.freshness === 'DELAYED')) {
       const exch = nsToMs(st.lastEventNs);
       if (exch > s.lastExch) {
         s.lastExch = exch;

@@ -38,7 +38,8 @@ export const FP_TOGGLE_LABELS: [FPToggleKey, string][] = [
   ['buyImb', 'Buy Imbalance'],
   ['sellImb', 'Sell Imbalance'],
   ['stacked', 'Stacked Imbalance'],
-  ['absorption', 'Absorption Candidate'],
+  // From executed trade prints only - NOT depth-based absorption (resting liquidity is not in the data).
+  ['absorption', 'Trade-print Absorption Candidate'],
   ['exhaustion', 'Exhaustion Candidate'],
   ['divergence', 'Delta Divergence'],
   ['cvd', 'Cumulative Delta'],
