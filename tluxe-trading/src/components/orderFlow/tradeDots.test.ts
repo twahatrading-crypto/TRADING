@@ -13,8 +13,11 @@ import {
   dominance,
   dotRadius,
   latestTrade,
+  PRICE_MAX_HOLD_MS,
   priceBars,
+  priceBucketMs,
   quantileTotal,
+  stepTrace,
   type DisplayTrade,
 } from './tradeDots';
 
@@ -152,5 +155,34 @@ describe('display aggregation of executed trades (display only)', () => {
       return JSON.stringify({ digest: e.digest(), totals: p.totals, cvd: p.cvd, profile: p.profile, events: p.events });
     };
     expect(run(true)).toBe(run(false));
+  });
+
+  it('price layer: resolution from the viewport only; step trace is continuous, never diagonal, never invents a price', () => {
+    expect(priceBucketMs(180_000, 1030)).toBe(1000);
+    expect(priceBucketMs(30_000, 1030)).toBe(250);
+    expect(priceBucketMs(180_000, 3000)).toBe(250);
+    const msgs = denseTape();
+    const tr = new TradeTape(TEST_TICK).sync({ msgs, count: msgs.length });
+    const ms = priceBucketMs(60_000, 1000);
+    const bars = priceBars(tr, ms);
+    const traded = new Set(tr.map((x) => x.tick));
+    const runs = stepTrace(bars, ms, 200_000);
+    const pts = runs.flat();
+    expect(pts.length).toBeGreaterThan(bars.length); // dense and continuous
+    for (const run of runs)
+      for (let i = 1; i < run.length; i++) {
+        const [t0, k0] = run[i - 1]!;
+        const [t1, k1] = run[i]!;
+        expect(t0 === t1 || k0 === k1).toBe(true); // only horizontal holds and vertical steps
+        expect(t1).toBeGreaterThanOrEqual(t0); // chronological
+      }
+    for (const [, k] of pts) expect(traded.has(k)).toBe(true); // every price level is a real traded price
+    // A silence longer than PRICE_MAX_HOLD_MS breaks the trace (no flat line across a closed market).
+    const gap = stepTrace([{ t: 0, o: 1, h: 1, l: 1, c: 1 }, { t: PRICE_MAX_HOLD_MS + 5000, o: 2, h: 2, l: 2, c: 2 }], 1000);
+    expect(gap).toHaveLength(2);
+    // The price layer does not depend on the dot aggregation at all.
+    const before = JSON.stringify(stepTrace(priceBars(tr, ms), ms, 200_000));
+    for (const agg of [100, 250, 500, 1000]) aggregateDots(tr, agg, 2);
+    expect(JSON.stringify(stepTrace(priceBars(tr, ms), ms, 200_000))).toBe(before);
   });
 });

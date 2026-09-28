@@ -272,3 +272,50 @@ export function latestTrade(s: TradeSource | null): { price: number; time: numbe
   }
   return best;
 }
+
+/* ----------------------------------------------------------------------------
+ * PRICE LAYER - independent of the volume-dot aggregation (Trade Agg, Volume Dots and the dot rules never touch it).
+ * Micro-candles at a resolution set ONLY by the viewport (time span / plot width), plus a step trace: the last traded
+ * price is held until the next real trade, then moves vertically to that trade's open. Nothing is interpolated, no
+ * diagonal segment implies movement that did not trade, and a silence longer than PRICE_MAX_HOLD_MS breaks the trace.
+ * -------------------------------------------------------------------------- */
+
+export const PRICE_BUCKETS_MS = [10, 25, 50, 100, 250, 500, 1000, 2000, 5000, 10_000, 15_000, 30_000, 60_000, 120_000, 300_000, 600_000, 900_000, 1_800_000, 3_600_000] as const;
+/** Minimum on-screen width of one price micro-candle (px). */
+export const PRICE_MIN_BUCKET_PX = 4;
+/** A silence longer than this (no trade at all) breaks the step trace instead of drawing a flat hold across it. */
+export const PRICE_MAX_HOLD_MS = 15 * 60_000;
+
+/** Price micro-candle width: the finest bucket at least PRICE_MIN_BUCKET_PX wide. Depends on the viewport only. */
+export function priceBucketMs(spanMs: number, plotPx: number): number {
+  const minMs = (spanMs * PRICE_MIN_BUCKET_PX) / Math.max(1, plotPx);
+  return PRICE_BUCKETS_MS.find((ms) => ms >= minMs) ?? PRICE_BUCKETS_MS[PRICE_BUCKETS_MS.length - 1]!;
+}
+
+/** One horizontal / vertical step-trace segment in (time, tick) space. */
+export type StepPoint = [t: number, tick: number];
+
+/**
+ * Step trace through the micro-candles: inside a bucket open -> close at the bucket centre, then the close is held
+ * (flat) until the next bucket's centre and steps vertically to its open. `until` extends the last hold to a real,
+ * later exchange time (no trade since = price unchanged). Returns runs of points (a gap > maxHold starts a new run).
+ */
+export function stepTrace(bars: readonly PriceBar[], ms: number, until: number | null = null, maxHold = PRICE_MAX_HOLD_MS): StepPoint[][] {
+  const runs: StepPoint[][] = [];
+  let run: StepPoint[] = [];
+  let prev: PriceBar | null = null;
+  for (const b of bars) {
+    const mid = b.t + ms / 2;
+    if (prev && b.t - (prev.t + ms) > maxHold) {
+      runs.push(run);
+      run = [];
+      prev = null;
+    }
+    if (prev) run.push([mid, prev.c]); // hold the previous close until this trade, never a diagonal
+    run.push([mid, b.o], [mid, b.c]);
+    prev = b;
+  }
+  if (prev && until !== null && until > prev.t + ms / 2 && until - (prev.t + ms) <= maxHold) run.push([until, prev.c]);
+  if (run.length) runs.push(run);
+  return runs;
+}

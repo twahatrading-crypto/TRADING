@@ -183,4 +183,30 @@ describe('HeatmapView rendering (liquidity layer honesty, hover)', () => {
     expect(calls.filter((c) => c === 'putImageData')).toHaveLength(0);
     v.destroy();
   });
+
+  it('PRICE layer is identical for Volume Dots ON / OFF and every Trade Agg (AUTO / 100 / 250 / 500 / 1000 ms)', () => {
+    const tape = wallTape();
+    const variants: { dots: boolean; agg: DotAggregation }[] = [
+      { dots: true, agg: 'auto' },
+      { dots: false, agg: 'auto' },
+      { dots: true, agg: 100 },
+      { dots: true, agg: 250 },
+      { dots: true, agg: 500 },
+      { dots: true, agg: 1000 },
+      { dots: false, agg: 1000 },
+    ];
+    const geoms = variants.map((o) => {
+      const r = render(false, { msgs: tape, ...o });
+      const g = r.v.priceGeometry();
+      const bubbles = (r.v as unknown as { bubbles: unknown[] }).bubbles.length;
+      const dotMs = r.v.lastBucketMs;
+      r.v.destroy();
+      return { g, bubbles, dotMs, dots: o.dots };
+    });
+    expect(geoms[0]!.g.length).toBeGreaterThan(100); // a real, dense price layer was drawn
+    for (const x of geoms) expect(x.g).toBe(geoms[0]!.g); // byte-identical price geometry in every case
+    expect(geoms.filter((x) => !x.dots).every((x) => x.bubbles === 0)).toBe(true); // OFF removes bubbles only
+    expect(new Set(geoms.filter((x) => x.dots).map((x) => x.bubbles)).size).toBeGreaterThan(1); // Trade Agg changes bubbles
+    expect(geoms.map((x) => x.dotMs)).toEqual([expect.any(Number), expect.any(Number), 100, 250, 500, 1000, 1000]);
+  });
 });

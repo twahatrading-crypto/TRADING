@@ -9,8 +9,11 @@ import {
   dominance,
   dotRadius,
   lowerBound,
+  PRICE_MIN_BUCKET_PX,
   priceBars,
+  priceBucketMs,
   quantileTotal,
+  stepTrace,
   TradeTape,
   type DisplayTrade,
   type Dominance,
@@ -117,8 +120,12 @@ export class HeatmapView implements ChartNavigable {
   private autoSpan = true;
   private bubbles: { x: number; y: number; r: number; h: Omit<TradeHover, 'x' | 'y'> }[] = [];
   private tapeIndex: TradeTape;
-  /** Display bucket used by the last frame (ms) - diagnostics / tests. */
+  /** Volume-dot display bucket used by the last frame (ms) - diagnostics / tests. */
   lastBucketMs: number | null = null;
+  /** Price micro-candle bucket of the last frame (ms) - depends on the viewport only. */
+  lastPriceMs: number | null = null;
+  /** Pixel geometry of the last drawn PRICE layer (trace + candles) - identical whatever the dot settings. */
+  private priceGeom: number[] = [];
   private hovered: TradeHover | null = null;
 
   constructor(
@@ -478,6 +485,11 @@ export class HeatmapView implements ChartNavigable {
     return { p0: mid - span / 2, p1: mid + span / 2 };
   }
 
+  /** Price-layer geometry of the last frame (for regression tests: must not depend on dot settings). */
+  priceGeometry(): string {
+    return JSON.stringify(this.priceGeom);
+  }
+
   private visibleColumns(cols: readonly HeatmapColumn[], v: Viewport, agg: number): HeatmapColumn[] {
     let lo = 0;
     let hi = cols.length;
@@ -574,45 +586,61 @@ export class HeatmapView implements ChartNavigable {
     step('bestBid', 'rgba(52,211,153,0.55)', 0.5);
     step('bestAsk', 'rgba(248,113,113,0.55)', -0.5);
 
-    // 3) PRICE FIRST: the real trade prices per display bucket (OHLC) - candles when a bucket is wide enough, always
-    //    a continuous close-to-close trace. DISPLAY aggregation only: the trades themselves are never changed.
+    // 3) PRICE LAYER (independent of the volume dots): micro-candles from the real trades at a resolution set only by
+    //    the viewport, plus a step trace that holds the last traded price until the next real trade. Trade Agg,
+    //    Volume Dots and the dot rules never change this layer (regression-tested via priceGeometry()).
     const span = v.t1 - v.t0;
     const tr = this.trades();
-    const pad = 5 * 60_000;
-    const i0 = lowerBound(tr, v.t0 - pad);
-    const i1 = lowerBound(tr, v.t1 + pad);
-    const choice = this.opts.dotAggregation?.() ?? 'auto';
-    const ms = choice === 'auto' ? autoBucketMs(span, pw, tr, lowerBound(tr, v.t0), lowerBound(tr, v.t1 + 1)) : choice;
-    this.lastBucketMs = ms;
-    const bucketPx = (ms / span) * pw;
-    const rowPx = ph / Math.max(1e-9, v.p1 - v.p0);
-    const bars = priceBars(tr, ms, i0, i1);
-    const cx = (t: number) => X(t) + bucketPx / 2;
-    if (s.showPriceLine && bars.length) {
-      ctx.strokeStyle = bucketPx >= 5 ? 'rgba(226,232,240,0.55)' : 'rgba(241,245,249,0.9)';
-      ctx.lineWidth = 1.2;
-      ctx.beginPath();
-      bars.forEach((b, i) => (i ? ctx.lineTo(cx(b.t), Y(b.c)) : ctx.moveTo(cx(b.t), Y(b.c))));
-      ctx.stroke();
-    }
-    if (bucketPx >= 5) {
-      const bw = Math.max(1, Math.min(12, bucketPx * 0.56));
-      for (const b of bars) {
-        const x = cx(b.t);
+    const pMs = priceBucketMs(span, pw);
+    const pBars = priceBars(tr, pMs, lowerBound(tr, v.t0 - pMs), lowerBound(tr, v.t1 + pMs));
+    const lNow = this.latest();
+    const runs = stepTrace(pBars, pMs, lNow ? Math.min(lNow.t, v.t1) : null);
+    const pBucketPx = (pMs / span) * pw;
+    const geom: number[] = [pMs];
+    const r2 = (x: number) => Math.round(x * 100) / 100;
+    if (s.showPriceLine)
+      for (const run of runs) {
+        ctx.strokeStyle = 'rgba(226,232,240,0.8)';
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        run.forEach(([t, k], i) => {
+          const x = X(t);
+          const y = Y(k);
+          geom.push(r2(x), r2(y));
+          if (i) ctx.lineTo(x, y);
+          else ctx.moveTo(x, y);
+        });
+        ctx.stroke();
+        geom.push(-1);
+      }
+    if (pBucketPx >= PRICE_MIN_BUCKET_PX) {
+      const bw = Math.max(1, Math.min(9, pBucketPx * 0.6));
+      for (const b of pBars) {
+        const x = X(b.t + pMs / 2);
         if (x < -bw || x > pw + bw) continue;
         const col = b.c > b.o ? 'rgba(34,197,94,0.95)' : b.c < b.o ? 'rgba(239,68,68,0.95)' : 'rgba(203,213,225,0.9)';
         ctx.strokeStyle = col;
         ctx.fillStyle = col;
         ctx.lineWidth = 1;
         ctx.beginPath();
-        ctx.moveTo(x, Y(b.h + 0.5));
-        ctx.lineTo(x, Y(b.l - 0.5));
+        ctx.moveTo(x, Y(b.h + 0.3));
+        ctx.lineTo(x, Y(b.l - 0.3));
         ctx.stroke();
-        const yt = Y(Math.max(b.o, b.c) + 0.35);
-        const yb = Y(Math.min(b.o, b.c) - 0.35);
+        const yt = Y(Math.max(b.o, b.c) + 0.3);
+        const yb = Y(Math.min(b.o, b.c) - 0.3);
         ctx.fillRect(x - bw / 2, yt, bw, Math.max(1, yb - yt));
+        geom.push(r2(x), r2(Y(b.h)), r2(Y(b.l)), r2(Y(b.o)), r2(Y(b.c)));
       }
     }
+    this.priceGeom = geom;
+    this.lastPriceMs = pMs;
+
+    // 4-pre) Volume-dot display bucket (Trade Agg): affects the bubbles ONLY.
+    const choice = this.opts.dotAggregation?.() ?? 'auto';
+    const ms = choice === 'auto' ? autoBucketMs(span, pw, tr, lowerBound(tr, v.t0), lowerBound(tr, v.t1 + 1)) : choice;
+    this.lastBucketMs = ms;
+    const bucketPx = (ms / span) * pw;
+    const rowPx = ph / Math.max(1e-9, v.p1 - v.p0);
 
     // 4) Executed-volume dots: prints collapsed into display buckets (time bucket × price band sized so a band is
     //    about as tall as a bucket is wide) - one bubble per bucket at its VWAP, never a wall of circles. Radius:
@@ -630,7 +658,7 @@ export class HeatmapView implements ChartNavigable {
         const d = dots[i]!;
         if (!d.total) continue;
         const r = dotRadius(d.total, norm, cell);
-        const x = cx(d.t);
+        const x = X((d.first + d.last) / 2);
         const y = Y(d.vwapTick);
         if (x < -r || x > pw + r) continue;
         const dom = dominance(d);
