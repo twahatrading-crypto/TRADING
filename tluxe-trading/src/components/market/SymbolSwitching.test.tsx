@@ -1,5 +1,5 @@
 import { act, fireEvent, screen, within } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { INSTRUMENTS } from '../../config/instruments';
 import { SELECTED_INSTRUMENT_KEY } from '../../services/instruments/InstrumentSelection';
 import { ManualPriceProvider, memoryStorage } from '../../test/providers';
@@ -21,6 +21,12 @@ vi.mock('../chart/ChartController', () => ({
     destroy() {}
   },
 }));
+
+// ChartPanel loads the chart modules with a dynamic import() in an effect. Resolve them once up front so that load can
+// never still be in flight when this file's environment is torn down (EnvironmentTeardownError).
+beforeAll(async () => {
+  await Promise.all([import('lightweight-charts'), import('../chart/ChartController')]);
+});
 
 function Dash() {
   return (
