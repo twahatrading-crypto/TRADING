@@ -296,8 +296,8 @@ jobs:
               check(r.status === 401, `unauthenticated POST ${p} -> ${r.status}`);
             }
             // WebSocket: an allowed Origin but no session must be refused before any upgrade.
-            const ws = await get('/api/stream', { headers: { Connection: 'Upgrade', Upgrade: 'websocket', 'Sec-WebSocket-Version': '13', 'Sec-WebSocket-Key': 'dGhlIHNhbXBsZSBub25jZQ==', Origin: base } });
-            check(ws.status === 401, `unauthenticated WebSocket /api/stream -> ${ws.status} (never 101)`);
+            const wsStatus = Number(require('child_process').execSync(`curl -s -o /dev/null -m 15 -w '%{http_code}' -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' -H 'Origin: ${base}' '${base}/api/stream'`).toString().trim());
+            check(wsStatus === 401, `unauthenticated WebSocket /api/stream -> ${wsStatus} (never 101)`);
             // CSRF: login / logout need the app's own Origin.
             const l1 = await get('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"password":"x"}' });
             check(l1.status === 403, `login without Origin -> ${l1.status}`);
