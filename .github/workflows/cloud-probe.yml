@@ -162,7 +162,7 @@ jobs:
   vp:
     if: ${{ !contains(github.event.head_commit.message, '[auth-only]') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     steps:
       - name: Volume Profile selector (Current Session -> Daily -> Previous Day -> back) for GC and SI, cross-checked against real M5 candles
         shell: bash
@@ -183,9 +183,23 @@ jobs:
           let fails = 0;
           const check = (ok, msg) => { console.log(`    ${ok ? 'OK  ' : 'FAIL'} ${msg}`); if (!ok) fails++; };
           (async () => {
+            const cfg = await (await fetch(base + '/api/config')).json();
+            if (cfg.authRequired) { console.log('OWNER AUTH ACTIVE - credential-free real-data UI check not possible; owner must verify signed in.'); process.exit(0); }
+            // This push redeploys Railway too: let that deployment finish, then wait for GC + SI history READY.
+            if (process.env.SETTLE === '1') {
+              await new Promise((r) => setTimeout(r, 240000));
+              for (let i = 0; i < 40; i++) {
+                const st = await Promise.all(['GC', 'SI'].map(async (x) => (await fetch(base + `/api/databento/status?root=${x}`)).json()));
+                const ok = st.every((x) => x.verifiedByRealData === true && x.history && x.history.state === 'READY');
+                console.log(`settle ${i}: ${st.map((x) => `${x.activeContract} ${x.freshness} history=${x.history && x.history.state}`).join(' | ')}`);
+                if (ok) break;
+                await new Promise((r) => setTimeout(r, 20000));
+              }
+              await new Promise((r) => setTimeout(r, 70000)); // one more closed M1 bar -> browser candle reload
+            }
             const b = await chromium.launch();
             for (const inst of ['GC', 'SI', 'GC']) {
-              const ctx = await b.newContext({ viewport: { width: 1400, height: 1000 } });
+              const ctx = await b.newContext({ viewport: { width: 1920, height: 1080 } });
               await ctx.addInitScript((i) => { try { localStorage.setItem('tluxe.instrument.v1', i); localStorage.removeItem('tluxe.vp.profile'); } catch {} }, inst);
               const p = await ctx.newPage();
               const errs = [];
@@ -227,6 +241,34 @@ jobs:
               const s0 = await read();
               console.log(`  [start] select=${s0.select} title="${s0.title}" stats=${JSON.stringify(s0.stats)}`);
               check(s0.select === 'CURRENT_SESSION', `${inst} starts on CURRENT_SESSION`);
+              // UI pass: summary row, provenance, contract, cards - all from the real engine output.
+              const ui = await p.evaluate(() => {
+                const t = (sel) => (document.querySelector(sel)?.textContent || '').trim();
+                const n = (sel) => document.querySelectorAll(sel).length;
+                return { src: t('[data-testid="vp-source"]'), poc: t('[data-testid="vp-poc"]'), vah: t('[data-testid="vp-vah"]'), val: t('[data-testid="vp-val"]'),
+                         status: t('[data-testid="vp-data-status"]'), header: (document.querySelector('header')?.innerText || '').replace(/\s+/g, ' ').slice(0, 300),
+                         mtf: [...document.querySelectorAll('[data-testid="vp-mtf-row"]')].map((r) => r.innerText.replace(/\s+/g, ' ')),
+                         sessions: n('[data-testid="vp-session-row"]'), nodes: n('[data-testid="vp-node-row"]'), levels: n('[data-testid="vp-level-row"]'),
+                         logRows: n('[data-testid="vp-log-row"]'), logTitle: t('[data-testid="vp-log"] h2'), groups: [...document.querySelectorAll('[data-testid="vp-toggles"] [role="group"]')].map((g) => g.getAttribute('aria-label')),
+                         overflowX: document.documentElement.scrollWidth - window.innerWidth,
+                         clipped: [...document.querySelectorAll('[data-testid="vp-page"] .smctable-wrap')].filter((e) => e.scrollWidth > e.clientWidth + 1).length,
+                         pageText: document.querySelector('[data-testid="vp-page"]').innerText };
+              });
+              console.log(`  [ui] status=${ui.status} source="${ui.src}" POC=${ui.poc} VAH=${ui.vah} VAL=${ui.val} sessions=${ui.sessions} nodes=${ui.nodes} levels=${ui.levels} log="${ui.logTitle}" rows=${ui.logRows} groups=${JSON.stringify(ui.groups)}`);
+              for (const r of ui.mtf) console.log(`    MTF ${r}`);
+              check(ui.status === 'LIVE', `${inst}: data status LIVE`);
+              check(ui.src === 'DATABENTO / GLBX.MDP3 / CME/COMEX / REAL VOLUME', `${inst}: volume source = Databento CME/COMEX real volume`);
+              check(/DATABENTO/.test(ui.header) && ui.header.includes(m5.contract) && /GLBX\.MDP3/.test(ui.header), `${inst}: header DATABENTO · GLBX.MDP3 · ${m5.contract}`);
+              check(ui.poc === s0.stats['POC'] && ui.vah === s0.stats['VAH'] && ui.val === s0.stats['VAL'], `${inst}: summary POC/VAH/VAL = engine statistics (${s0.stats['POC']} / ${s0.stats['VAH']} / ${s0.stats['VAL']})`);
+              check(ui.mtf.length === 6 && ui.mtf.every((r) => /\d/.test(r)), `${inst}: 6 MTF profiles with real values`);
+              check(ui.sessions === 5 && ui.levels > 0 && ui.nodes > 0, `${inst}: sessions / key levels / HVN-LVN present`);
+              check(ui.logRows > 0 && ui.logRows <= 8, `${inst}: event log collapsed to recent important events (${ui.logRows})`);
+              check(JSON.stringify(ui.groups) === '["PROFILE","CONFLUENCE"]', `${inst}: overlay panel grouped PROFILE / CONFLUENCE`);
+              check(ui.overflowX === 0 && ui.clipped === 0, `${inst}: no horizontal page overflow (${ui.overflowX}) / clipped tables (${ui.clipped})`);
+              const other = inst === 'GC' ? 'SI' : 'GC';
+              const otherContract = (await (await p.request.get(base + `/api/databento/status?root=${other}`)).json()).activeContract;
+              check(!ui.pageText.includes(otherContract) && !ui.header.includes(otherContract), `${inst}: no ${other} contract ${otherContract} anywhere on the page`);
+              check(!/MT5 Tick|XAUUSD|XAGUSD/.test(ui.src + ui.header), `${inst}: never MT5 / spot on a futures page`);
               const dayStart = nyHour17(now);
               for (const [val, name] of [['DAILY', 'Daily'], ['PREVIOUS_DAY', 'Previous Day']]) {
                 await sel.selectOption(val);
@@ -260,7 +302,7 @@ jobs:
             process.exit(fails ? 1 : 0);
           })();
           JS
-          node vp.cjs
+          SETTLE=1 node vp.cjs
   auth:
     runs-on: ubuntu-latest
     timeout-minutes: 15
