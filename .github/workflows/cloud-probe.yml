@@ -52,7 +52,7 @@ jobs:
             sleep 60
           done
   gcsi:
-    if: ${{ !contains(github.event.head_commit.message, '[auth-only]') }}
+    if: ${{ !contains(github.event.head_commit.message, '[auth-only]') && !contains(github.event.head_commit.message, '[hm-only]') }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
@@ -101,7 +101,7 @@ jobs:
           python3 check.py
   frontend:
     needs: gcsi  # after the GC/SI job has seen the new deployment's history settle
-    if: ${{ !contains(github.event.head_commit.message, '[vp-only]') && !contains(github.event.head_commit.message, '[auth-only]') }}
+    if: ${{ !contains(github.event.head_commit.message, '[vp-only]') && !contains(github.event.head_commit.message, '[auth-only]') && !contains(github.event.head_commit.message, '[hm-only]') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -160,7 +160,7 @@ jobs:
           JS
           node probe.cjs
   vp:
-    if: ${{ !contains(github.event.head_commit.message, '[auth-only]') }}
+    if: ${{ !contains(github.event.head_commit.message, '[auth-only]') && !contains(github.event.head_commit.message, '[hm-only]') }}
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
@@ -385,3 +385,85 @@ jobs:
           })();
           JS
           node auth.cjs
+  hm:
+    if: ${{ contains(github.event.head_commit.message, '[hm-only]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Liquidity Heatmap GC -> SI -> GC on production (real Databento trades, honest depth)
+        shell: bash
+        run: |
+          npm init -y >/dev/null && npm i -s playwright@1 >/dev/null && npx playwright install --with-deps chromium >/dev/null 2>&1
+          cat > hm.cjs <<'JS'
+          const { chromium } = require('playwright');
+          const base = 'https://trading-production-e1d5.up.railway.app';
+          let fails = 0;
+          const check = (ok, m) => { console.log(`    ${ok ? 'OK  ' : 'FAIL'} ${m}`); if (!ok) fails++; };
+          (async () => {
+            const cfg = await (await fetch(base + '/api/config')).json();
+            if (cfg.authRequired) { console.log('OWNER AUTH ACTIVE - credential-free check not possible; the owner must verify while signed in.'); process.exit(0); }
+            // This push redeploys Railway: let it finish, then wait for GC + SI verified by real data.
+            await new Promise((r) => setTimeout(r, 240000));
+            for (let i = 0; i < 40; i++) {
+              const st = await Promise.all(['GC', 'SI'].map(async (x) => (await fetch(base + `/api/databento/status?root=${x}`)).json()));
+              console.log(`settle ${i}: ${st.map((x) => `${x.activeContract} ${x.freshness} trades=${x.received && x.received.trades}`).join(' | ')}`);
+              if (st.every((x) => x.verifiedByRealData === true)) break;
+              await new Promise((r) => setTimeout(r, 20000));
+            }
+            const b = await chromium.launch();
+            for (const inst of ['GC', 'SI', 'GC']) {
+              const st = await (await fetch(base + `/api/databento/status?root=${inst}`)).json();
+              const other = inst === 'GC' ? 'SI' : 'GC';
+              const otherContract = (await (await fetch(base + `/api/databento/status?root=${other}`)).json()).activeContract;
+              console.log(`\n######## ${inst}  contract=${st.activeContract}  depth=${st.depth}  lastTrade=${JSON.stringify(st.lastTrade)}  tape=${JSON.stringify(st.received)}`);
+              const ctx = await b.newContext({ viewport: { width: 1920, height: 1080 } });
+              await ctx.addInitScript((i) => { try { localStorage.setItem('tluxe.instrument.v1', i); } catch {} }, inst);
+              const p = await ctx.newPage();
+              const errs = [];
+              p.on('pageerror', (e) => errs.push(String(e).slice(0, 200)));
+              p.on('request', (r) => { if (/localhost|127\.0\.0\.1|:876\d/.test(r.url())) errs.push('LOCALHOST ' + r.url()); });
+              await p.goto(base + '/#/engines/liquidity-heatmap');
+              await p.waitForSelector('.ofmain', { timeout: 30000 });
+              await p.waitForTimeout(25000);
+              const u = await p.evaluate(() => {
+                const t = (sel) => (document.querySelector(sel)?.textContent || '').replace(/\s+/g, ' ').trim();
+                const box = (sel) => { const e = document.querySelector(sel); if (!e) return null; const r = e.getBoundingClientRect(); return { top: Math.round(r.top), bottom: Math.round(r.bottom), w: Math.round(r.width) }; };
+                const heat = document.querySelector('[data-testid="of-controls"] input[aria-label="Heatmap"]');
+                return { contract: t('[data-testid="of-contract"]'), feeds: t('[data-testid="of-feeds"]'), depthNa: t('[data-testid="of-depth-na"]'), heatDisabled: heat ? heat.disabled : null, heatChecked: heat ? heat.checked : null,
+                         book: t('[data-testid="of-book"]'), bookTotals: !!document.querySelector('[data-testid="of-book-totals"]'), canvas: !!document.querySelector('canvas.ofheat__canvas'),
+                         events: [...document.querySelectorAll('[data-testid="of-event-row"]')].map((r) => r.textContent.replace(/\s+/g, ' ')), cvdState: t('[data-testid="of-cvd-state"]'), cvdTotals: t('[data-testid="of-cvd-totals"]'), cvdPartial: t('[data-testid="of-cvd-partial"]'),
+                         prof: t('[data-testid="of-profile-totals"]'), header: (document.querySelector('header')?.innerText || '').replace(/\s+/g, ' ').slice(0, 300), page: document.querySelector('.ofmain').innerText,
+                         overflowX: document.documentElement.scrollWidth - innerWidth, grid: box('.ofgrid'), chart: box('.ofheat'), bottom: box('.ofbottom') };
+              });
+              console.log(`  contract=${u.contract} feeds="${u.feeds}"`);
+              console.log(`  depthBadge="${u.depthNa}" heatmapToggle disabled=${u.heatDisabled} checked=${u.heatChecked} canvas=${u.canvas}`);
+              console.log(`  COB="${u.book.slice(0, 160)}" bookTotals=${u.bookTotals}`);
+              console.log(`  CVD state="${u.cvdState}" partial="${u.cvdPartial}" totals="${u.cvdTotals}"`);
+              console.log(`  SVP totals="${u.prof}"`);
+              console.log(`  events=${u.events.length}: ${JSON.stringify(u.events.slice(0, 4))}`);
+              console.log(`  layout: grid=${JSON.stringify(u.grid)} chart=${JSON.stringify(u.chart)} bottom=${JSON.stringify(u.bottom)} overflowX=${u.overflowX}`);
+              check(u.contract === st.activeContract, `${inst}: resolved contract ${u.contract} = Databento ${st.activeContract}`);
+              check(/DATABENTO/.test(u.header) && /GLBX\.MDP3/.test(u.header) && u.header.includes(st.activeContract), `${inst}: header DATABENTO · GLBX.MDP3 · ${st.activeContract}`);
+              check(/TRADES: LIVE/.test(u.feeds), `${inst}: TRADES LIVE (real CME/COMEX executed trades)`);
+              check(/VOLUME: LIVE/.test(u.feeds) && /OHLCV: LIVE/.test(u.feeds), `${inst}: OHLCV + VOLUME LIVE`);
+              check(!/DEPTH: LIVE/.test(u.feeds) && /DEPTH DATA UNAVAILABLE/.test(u.depthNa), `${inst}: depth honestly unavailable`);
+              check(/MBO: NOT ENTITLED/.test(u.feeds), `${inst}: MBO NOT ENTITLED`);
+              check(u.heatDisabled === true && u.heatChecked === false, `${inst}: Heatmap (liquidity) layer cannot be enabled without depth`);
+              check(/LEVEL-2 DATA UNAVAILABLE/.test(u.book) && /PROVIDER NOT CONNECTED/.test(u.book) && !u.bookTotals, `${inst}: COB unavailable, no book derived from trades`);
+              check(u.canvas, `${inst}: executed-trade chart rendered`);
+              check(u.events.every((e) => /PRINTS/.test(e)), `${inst}: all events print-based and labelled PRINTS (${u.events.length})`);
+              check(/Unknown volume/.test(u.cvdTotals) && /Buy volume/.test(u.cvdTotals) && /Total executed/.test(u.cvdTotals), `${inst}: CVD buy / sell / unknown / total shown`);
+              check(!/PARTIAL/.test(u.cvdState) || /unknown volume excluded/.test(u.cvdPartial), `${inst}: CVD PARTIAL spelled out when unknown volume is excluded`);
+              check(/Unknown/.test(u.prof), `${inst}: SVP keeps unknown volume separate`);
+              check(!u.page.includes(otherContract) && !u.header.includes(otherContract), `${inst}: no ${other} contract (${otherContract}) on the page`);
+              check(!/XAUUSD|XAGUSD|MT5 Tick/.test(u.page + u.header), `${inst}: no MT5 / spot contamination`);
+              check(u.overflowX === 0 && u.bottom && u.bottom.bottom <= 1080, `${inst}: first view holds chart + COB + SVP + settings/events/CVD, no overflow`);
+              check(errs.length === 0, `${inst}: no page errors / localhost requests ${JSON.stringify(errs).slice(0, 200)}`);
+              await ctx.close();
+            }
+            await b.close();
+            console.log(`\nHEATMAP RESULT: ${fails ? `FAIL (${fails})` : 'PASS'}`);
+            process.exit(fails ? 1 : 0);
+          })();
+          JS
+          node hm.cjs
