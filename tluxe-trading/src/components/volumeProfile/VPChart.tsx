@@ -142,7 +142,7 @@ export function VPChart(p: Props) {
         </div>
       </ChartStage>
       <p className="smcnote smcchart__foot">
-        Histogram = {p.profile ? `${p.profile.label} (${p.profile.source.label})` : 'no profile'} · red = POC row, blue = value area. Navigation only changes the view — it never recalculates the engine.
+        Right-edge histogram = {p.profile ? p.profile.label : 'no profile'} · red = POC · blue = value area · amber = outside value. Crowded event labels are merged (“+N”); every event stays in the Event Log. Navigation never recalculates the engine.
       </p>
     </section>
   );

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { analyzeVolumeProfile } from '../../engines/volumeProfile/engine';
 import { dataset } from '../../engines/volumeProfile/fixtures/builders';
-import { DEFAULT_VP_TOGGLES, histogramOf, snapToBar, utcInputToSec, secToUtcInput, volumeSourceText, vpOverlays, vpViewState } from './vpView';
+import { DEFAULT_VP_TOGGLES, VP_TOGGLE_GROUPS, VP_TOGGLE_LABELS, declutterMarkers, engineBadge, histogramOf, markerGapBars, snapToBar, sourceBadge, utcInputToSec, secToUtcInput, volumeSourceText, vpOverlays, vpViewState, type VPMarker } from './vpView';
 
 /* TEST DATA ONLY. */
 const MT5 = { kind: 'spot-otc' as const, exchange: null };
@@ -67,5 +67,42 @@ describe('vpView', () => {
     expect(utcInputToSec('2026-01-05T00:00')).toBe(Date.UTC(2026, 0, 5) / 1000);
     expect(secToUtcInput(Date.UTC(2026, 0, 5, 13, 30) / 1000)).toBe('2026-01-05T13:30');
     expect(utcInputToSec('')).toBeNull();
+  });
+
+  it('marker declutter: same-side markers never closer than the gap; hidden ones are counted, never lost', () => {
+    const times = Array.from({ length: 40 }, (_, i) => 1000 + i * 900);
+    const mk = (i: number, text: string, position: VPMarker['position'] = 'aboveBar'): VPMarker => ({ time: times[i]!, position, shape: 'circle', color: '#fff', text });
+    const input = [mk(10, 'POC SHIFT'), mk(11, 'NEW POC'), mk(12, 'VAH TEST'), mk(11, 'RE-ENTRY', 'belowBar'), mk(12, 'VAL TEST', 'belowBar'), mk(30, 'POC SHIFT')];
+    const out = declutterMarkers(input, times, 4);
+    const idx = (m: VPMarker) => times.indexOf(m.time);
+    for (const pos of ['aboveBar', 'belowBar'] as const) {
+      const side = out.filter((m) => m.position === pos).map(idx).sort((a, b) => a - b);
+      for (let i = 1; i < side.length; i++) expect(side[i]! - side[i - 1]!).toBeGreaterThanOrEqual(4);
+    }
+    // Higher-importance labels win; the merged count keeps every event accounted for.
+    expect(out.find((m) => idx(m) === 11 && m.position === 'aboveBar')?.text).toBe('NEW POC +2');
+    expect(out.find((m) => m.position === 'belowBar')?.text).toBe('RE-ENTRY +1');
+    const total = out.reduce((n, m) => n + 1 + Number(/\+(\d+)$/.exec(m.text)?.[1] ?? 0), 0);
+    expect(total).toBe(input.length);
+    expect(declutterMarkers(input, times, 4)).toEqual(out); // deterministic
+    expect(declutterMarkers(input, times, 1)).toHaveLength(input.length); // gap 1: nothing merged
+    expect(markerGapBars(64)).toBe(1);
+    expect(markerGapBars(8)).toBe(8);
+  });
+
+  it('badges: concise provenance, MT5 tick volume is never called exchange volume', () => {
+    expect(sourceBadge('DATABENTO / GLBX.MDP3 / CME/COMEX / REAL VOLUME')).toBe('DATABENTO · CME REAL VOLUME');
+    expect(sourceBadge('MT5 Tick Volume')).toBe('MT5 TICK VOL');
+    expect(sourceBadge('MT5 Real Volume (broker-reported)')).toBe('MT5 REAL VOL');
+    expect(sourceBadge('GC VOLUME DATA UNAVAILABLE')).toBe('NO VOLUME');
+    expect(sourceBadge('MT5 Tick Volume')).not.toMatch(/EXCHANGE|CME|COMEX/);
+    expect(['S&R engine', 'Liquidity engine (via SMC)', 'Order Block engine (via SMC)', 'SMC engine'].map(engineBadge)).toEqual(['S&R', 'LIQUIDITY', 'ORDER BLOCKS', 'SMC']);
+  });
+
+  it('overlay groups cover every toggle exactly once (same keys and defaults as before)', () => {
+    const keys = VP_TOGGLE_GROUPS.flatMap((g) => g.keys);
+    expect(new Set(keys).size).toBe(keys.length);
+    expect([...keys].sort()).toEqual(VP_TOGGLE_LABELS.map(([k]) => k).sort());
+    expect(VP_TOGGLE_GROUPS.map((g) => g.title)).toEqual(['PROFILE', 'CONFLUENCE']);
   });
 });

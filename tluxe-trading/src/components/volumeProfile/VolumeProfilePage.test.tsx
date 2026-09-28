@@ -118,6 +118,31 @@ describe('Volume Profile page', () => {
     expect(calls.items).toBeGreaterThan(0);
   });
 
+  it('layout: 7-card summary, grouped overlays, collapsible event log (recent important by default, full log + filters on demand)', async () => {
+    setup(true);
+    await flush();
+    const top = screen.getByTestId('vp-top');
+    for (const k of ['Volume source', 'Session', 'POC', 'VAH', 'VAL', 'Price location', 'Profile state']) expect(within(top).getByText(k)).toBeTruthy();
+    expect(screen.getByTestId('vp-vah').textContent).toMatch(/^\d/);
+    expect(screen.getByTestId('vp-val').textContent).toMatch(/^\d/);
+    const groups = within(screen.getByTestId('vp-toggles')).getAllByRole('group');
+    expect(groups.map((g) => g.getAttribute('aria-label'))).toEqual(['PROFILE', 'CONFLUENCE']);
+    expect(within(groups[1]!).getByRole('switch', { name: /Order Blocks/ })).toBeTruthy();
+    const log = screen.getByTestId('vp-log');
+    const important = /NEW POC|POC SHIFTED|VAH REJECTED|VAL RECLAIMED|VALUE BREAK|VALUE RE-ENTRY|DATA REVISED/;
+    const collapsed = within(log).queryAllByTestId('vp-log-row');
+    expect(collapsed.length).toBeLessThanOrEqual(8);
+    for (const r of collapsed) expect(r.textContent).toMatch(important);
+    fireEvent.click(screen.getByTestId('vp-log-toggle'));
+    const all = within(log).getAllByTestId('vp-log-row');
+    expect(all.length).toBeGreaterThanOrEqual(collapsed.length);
+    const chips = within(within(log).getByRole('group', { name: 'Event type filter' })).getAllByRole('button');
+    expect(chips[0]!.textContent).toBe('All');
+    const pick = chips[1]!;
+    fireEvent.click(pick);
+    for (const r of within(log).getAllByTestId('vp-log-row')) expect(r.textContent).toContain(pick.textContent!);
+  });
+
   it('never shows trade signals; the score is labelled as not a probability', async () => {
     setup(true);
     await flush();

@@ -18,6 +18,37 @@ const TONE: Record<VPDrawable['tone'], { rgb: string; text: string }> = {
 const LABEL_H = 17;
 const PAD = 6;
 
+/** Width of the right-edge volume-at-price histogram (the controller reserves the same space right of the last bar). */
+export const vpHistogramWidth = (paneWidth: number) => Math.round(Math.min(360, Math.max(150, paneWidth * 0.24)));
+/** Lane for level labels between the last candle and the histogram, so labels never sit on candles. */
+export const VP_LABEL_LANE = 150;
+const LABEL_RANK: Record<VPDrawable['tone'], number> = { poc: 0, va: 1, prev: 2, session: 2, sr: 3, liq: 3, bull: 3, bear: 3, hvn: 4, lvn: 4 };
+/** A lower-priority label pushed further than this from its own line is hidden (its line stays drawn). */
+export const MAX_LABEL_SHIFT = 2 * LABEL_H;
+export const VP_LABEL_H = LABEL_H;
+
+/**
+ * Level-label placement (pure, deterministic): POC first, then VAH / VAL, then the rest. Labels never overlap; POC
+ * and VAH / VAL are always shown; any lower-priority label that would end up more than MAX_LABEL_SHIFT from its own
+ * line is hidden instead (and no longer takes a slot), so crowded HVN / LVN labels disappear rather than collide.
+ */
+export function placeVpLabels(rows: readonly { id: string; y: number; tone: VPDrawable['tone']; emphasis: boolean }[], paneHeight: number) {
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const keep = (r: { tone: VPDrawable['tone']; emphasis: boolean }) => r.emphasis || LABEL_RANK[r.tone] <= 1;
+  let live = [...rows];
+  for (let pass = 0; pass < 6; pass++) {
+    const placed = layoutLabels(live.map((r) => ({ id: r.id, y: r.y, height: LABEL_H, priority: r.emphasis ? 0 : LABEL_RANK[r.tone] })), paneHeight);
+    const far = placed.filter((p) => {
+      const r = byId.get(p.id)!;
+      return !keep(r) && Math.abs(p.top + LABEL_H / 2 - r.y) > MAX_LABEL_SHIFT;
+    });
+    if (!far.length) return placed;
+    const drop = new Set(far.map((p) => p.id));
+    live = live.filter((r) => !drop.has(r.id));
+  }
+  return layoutLabels(live.filter(keep).map((r) => ({ id: r.id, y: r.y, height: LABEL_H, priority: r.emphasis ? 0 : LABEL_RANK[r.tone] })), paneHeight);
+}
+
 class Renderer implements IPrimitivePaneRenderer {
   constructor(
     private readonly src: VolumeProfilePrimitive,
@@ -35,21 +66,40 @@ class Renderer implements IPrimitivePaneRenderer {
         return x ?? fb;
       };
       if (this.layer === 'shapes') {
-        // Horizontal histogram at the right edge (engine rows only).
+        // Horizontal histogram attached to the right edge (engine rows only): value area blue, POC strongest.
         if (hist && hist.rows.length && hist.max > 0) {
-          const maxW = Math.min(220, mediaSize.width * 0.28);
-          for (const r of hist.rows) {
-            const y1 = series.priceToCoordinate(r.price);
-            const y2 = series.priceToCoordinate(r.price + hist.binSize);
-            if (y1 === null || y2 === null) continue;
-            const top = Math.min(y1, y2);
-            const h = Math.max(1, Math.abs(y2 - y1) - 0.5);
+          const maxW = vpHistogramWidth(mediaSize.width);
+          const ys = hist.rows.map((r) => [series.priceToCoordinate(r.price), series.priceToCoordinate(r.price + hist.binSize)] as const);
+          const tops = ys.flatMap(([a, b]) => (a === null || b === null ? [] : [Math.min(a, b)]));
+          const bots = ys.flatMap(([a, b]) => (a === null || b === null ? [] : [Math.max(a, b)]));
+          if (tops.length) {
+            const y0 = Math.max(0, Math.min(...tops));
+            const y1 = Math.min(mediaSize.height, Math.max(...bots));
+            ctx.fillStyle = 'rgba(8,12,20,0.55)';
+            ctx.fillRect(mediaSize.width - maxW - 4, y0, maxW + 4, Math.max(0, y1 - y0));
+            ctx.fillStyle = 'rgba(212,169,79,0.35)';
+            ctx.fillRect(mediaSize.width - maxW - 4, y0, 1, Math.max(0, y1 - y0));
+          }
+          let pocRect: [number, number, number, number] | null = null;
+          for (let i = 0; i < hist.rows.length; i++) {
+            const r = hist.rows[i]!;
+            const [a, b] = ys[i]!;
+            if (a === null || b === null) continue;
+            const top = Math.min(a, b);
+            const h = Math.max(1, Math.abs(b - a) - 0.5);
             if (top > mediaSize.height || top + h < 0 || r.volume <= 0) continue;
-            const w = (r.volume / hist.max) * maxW;
+            const w = Math.max(1, (r.volume / hist.max) * maxW);
             const isPoc = hist.poc !== null && r.price <= hist.poc && hist.poc < r.price + hist.binSize;
             const inVa = hist.val !== null && hist.vah !== null && r.price >= hist.val - 1e-9 && r.price + hist.binSize <= hist.vah + 1e-9;
-            ctx.fillStyle = isPoc ? 'rgba(239,93,93,0.85)' : inVa ? 'rgba(91,140,255,0.55)' : 'rgba(229,163,59,0.35)';
+            ctx.fillStyle = isPoc ? 'rgba(239,93,93,0.95)' : inVa ? 'rgba(91,140,255,0.62)' : 'rgba(229,163,59,0.34)';
             ctx.fillRect(mediaSize.width - w, top, w, h);
+            if (isPoc) pocRect = [mediaSize.width - w, top, w, h];
+          }
+          if (pocRect) {
+            const [x, y, w, h] = pocRect;
+            ctx.strokeStyle = 'rgba(255,214,214,0.95)';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(x + 0.5, y + 0.5, Math.max(1, w - 1), Math.max(1, h - 1));
           }
         }
         for (const it of items) {
@@ -81,8 +131,8 @@ class Renderer implements IPrimitivePaneRenderer {
         .filter((i) => i.label)
         .map((i) => ({ i, y: (series.priceToCoordinate(i.high) ?? -999) }))
         .filter((r) => r.y > -100 && r.y < mediaSize.height + 100);
-      const placed = layoutLabels(rows.map((r) => ({ id: r.i.id, y: r.y, height: LABEL_H, priority: r.i.emphasis ? 0 : 2 })), mediaSize.height);
-      const maxW = hist && hist.rows.length ? Math.min(220, mediaSize.width * 0.28) : 0;
+      const placed = placeVpLabels(rows.map((r) => ({ id: r.i.id, y: r.y, tone: r.i.tone, emphasis: !!r.i.emphasis })), mediaSize.height);
+      const maxW = hist && hist.rows.length ? vpHistogramWidth(mediaSize.width) : 0;
       for (const p of placed) {
         const r = rows.find((x) => x.i.id === p.id)!;
         const c = TONE[r.i.tone];

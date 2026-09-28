@@ -10,8 +10,8 @@ import type { HLEDrawable, HLEMarker } from '../highLowEngine/hleView';
 import { HighLowPrimitive } from './HighLowPrimitive';
 import type { SmcDrawable, SmcMarker } from '../smc/smcView';
 import { SmcPrimitive } from './SmcPrimitive';
-import type { VPDrawable, VPHistogram, VPMarker } from '../volumeProfile/vpView';
-import { VolumeProfilePrimitive } from './VolumeProfilePrimitive';
+import { declutterMarkers, markerGapBars, type VPDrawable, type VPHistogram, type VPMarker } from '../volumeProfile/vpView';
+import { VP_LABEL_LANE, VolumeProfilePrimitive, vpHistogramWidth } from './VolumeProfilePrimitive';
 import type { FPMarker, FPRenderData } from '../volumeFootprint/fpView';
 import { FootprintPrimitive } from './FootprintPrimitive';
 import type { Candle } from '../../types/market';
@@ -67,6 +67,8 @@ export class ChartController {
   private smcPrimitive: SmcPrimitive | null = null;
   private newsLines: IPriceLine[] = [];
   private vpPrimitive: VolumeProfilePrimitive | null = null;
+  private vpMarkers: readonly VPMarker[] | null = null;
+  private vpGap = 0;
   private fpPrimitive: FootprintPrimitive | null = null;
   /** Zoom limits / reset zoom (defaults for every chart; the footprint chart needs wider candles). */
   private maxBarSpacing = MAX_BAR_SPACING;
@@ -271,13 +273,24 @@ export class ChartController {
     if (!this.vpPrimitive) {
       this.vpPrimitive = new VolumeProfilePrimitive();
       this.candles.attachPrimitive(this.vpPrimitive);
+      // Marker labels are decluttered for the CURRENT zoom: re-apply when the bar spacing changes.
+      this.chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
+        if (this.vpMarkers && markerGapBars(this.chart.timeScale().options().barSpacing) !== this.vpGap) this.applyVpMarkers();
+      });
     }
     this.vpPrimitive.set(hist, items);
     const ts = this.chart.timeScale();
-    const width = ts.width();
-    const margin = hist && hist.rows.length ? Math.min(240, width * 0.3) : 0;
+    const margin = hist && hist.rows.length ? vpHistogramWidth(ts.width()) + VP_LABEL_LANE : 0;
     ts.applyOptions({ rightOffset: margin ? Math.ceil(margin / ts.options().barSpacing) : 0 });
-    const m = [...markers].sort((a, b) => a.time - b.time).map((x) => ({ ...x, time: x.time as UTCTimestamp, size: 0.8 }));
+    this.vpMarkers = markers;
+    this.applyVpMarkers();
+  }
+
+  private applyVpMarkers(): void {
+    if (this.disposed || !this.vpMarkers) return;
+    this.vpGap = markerGapBars(this.chart.timeScale().options().barSpacing);
+    const times = this.candles.data().map((c) => c.time as number);
+    const m = declutterMarkers(this.vpMarkers, times, this.vpGap).map((x) => ({ ...x, time: x.time as UTCTimestamp, size: 0.8 }));
     if (!this.markers) this.markers = this.lib.createSeriesMarkers(this.candles, m);
     else this.markers.setMarkers(m);
   }

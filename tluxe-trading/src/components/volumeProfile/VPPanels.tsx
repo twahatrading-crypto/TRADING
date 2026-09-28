@@ -4,7 +4,7 @@ import { VP_SCORE_LABEL, VP_SCORE_WEIGHTS, type VPScoreKey } from '../../engines
 import type { ConfluenceItem, KeyLevel, MtfRow, VPEvent, VPScore, VPSnapshot, VolumeNode, VolumeProfile } from '../../engines/volumeProfile/types';
 import type { Timeframe } from '../../types/market';
 import { formatPrice } from '../../utils/format';
-import { acceptanceTone, eventTone, fmtAtr, fmtHm, fmtVol, locationTone, windowLabel } from './vpView';
+import { IMPORTANT_EVENT_TYPES, acceptanceTone, engineBadge, eventTone, fmtAtr, fmtHm, fmtVol, locationTone, sourceBadge, windowLabel } from './vpView';
 
 export function Panel({ title, icon, right, children, testId, className }: { title: string; icon: ReactNode; right?: ReactNode; children: ReactNode; testId?: string; className?: string }) {
   return (
@@ -21,6 +21,12 @@ export function Panel({ title, icon, right, children, testId, className }: { tit
 }
 export const Tag = ({ v, tone }: { v: string; tone?: string }) => <span className={`smctag smctag--${tone ?? 'muted'}`}>{v}</span>;
 const Empty = ({ children }: { children: ReactNode }) => <p className="smcempty">{children}</p>;
+/** Concise provenance badge; the full provenance is the tooltip. */
+export const SrcBadge = ({ text, title }: { text: string; title: string }) => (
+  <span className="vpbadge" title={title}>
+    {text}
+  </span>
+);
 
 function Table({ head, children }: { head: string[]; children: ReactNode }) {
   return (
@@ -84,7 +90,9 @@ export function StatsPanel({ profile, snapshot, d }: { profile: VolumeProfile | 
               ['Dist. to VAL', dist(profile.val)],
             ]}
           />
-          <p className="smcnote">Volume source: {profile.source.label}. {profile.source.detail}</p>
+          <p className="smcnote">
+            <SrcBadge text={sourceBadge(profile.source.label)} title={`${profile.source.label} — ${profile.source.detail}`} />
+          </p>
         </>
       )}
     </Panel>
@@ -141,33 +149,32 @@ export function NodesPanel({ nodes, d }: { nodes: VolumeNode[]; d: number }) {
 
 export function MtfPanel({ rows, chartTf, onTf, d }: { rows: MtfRow[]; chartTf: Timeframe; onTf: (tf: Timeframe) => void; d: number }) {
   const f = (p: number | null) => (p === null ? '—' : formatPrice(p, d));
+  const src = rows.find((r) => r.available)?.source ?? null;
   return (
-    <Panel title="Multi-Timeframe Volume Profile" icon={<Grid3x3 size={15} />} testId="vp-mtf">
+    <Panel title="Multi-Timeframe Volume Profile" icon={<Grid3x3 size={15} />} testId="vp-mtf" right={src ? <SrcBadge text={sourceBadge(src.label)} title={`${src.label} — ${src.detail}`} /> : undefined}>
       {!rows.length ? (
         <Empty>DATA UNAVAILABLE</Empty>
       ) : (
-        <Table head={['TF', 'Bars', 'POC', 'VAH', 'VAL', 'Location', 'Nearest HVN', 'Nearest LVN', 'Context', 'Source']}>
+        <Table head={['TF', 'POC', 'VAH', 'VAL', 'Location', 'HVN', 'LVN', 'Context']}>
           {rows.map((r) => (
-            <tr key={r.timeframe} className={r.timeframe === chartTf ? 'is-active' : ''} data-testid="vp-mtf-row" onClick={() => onTf(r.timeframe)}>
+            <tr key={r.timeframe} className={r.timeframe === chartTf ? 'is-active' : ''} data-testid="vp-mtf-row" onClick={() => onTf(r.timeframe)} title={`${r.timeframe}: ${r.bars} closed bars · ${r.source.label}`}>
               <td>
                 <button type="button" className="vptf" aria-pressed={r.timeframe === chartTf}>
                   {r.timeframe}
                 </button>
               </td>
-              <td className="num">{r.bars}</td>
               <td className="num vppoc">{f(r.poc)}</td>
               <td className="num">{f(r.vah)}</td>
               <td className="num">{f(r.val)}</td>
               <td>{r.available && r.location ? <Tag v={r.location} tone={locationTone(r.location)} /> : <Tag v={r.available ? '—' : 'NO DATA'} />}</td>
-              <td className="num">{f(r.nearestHvn)}</td>
-              <td className="num">{f(r.nearestLvn)}</td>
-              <td>{r.context}</td>
-              <td className="vpsrc">{r.source.label}</td>
+              <td className="num vphvn">{f(r.nearestHvn)}</td>
+              <td className="num vplvn">{f(r.nearestLvn)}</td>
+              <td className="vpctx">{r.context}</td>
             </tr>
           ))}
         </Table>
       )}
-      <p className="smcnote">Each timeframe is its own profile over its own last N closed candles — independent, never merged.</p>
+      <p className="smcnote">Each timeframe is its own profile over its own last N closed candles — independent, never merged. Hover a row for bars and source.</p>
     </Panel>
   );
 }
@@ -179,11 +186,13 @@ export function SessionsPanel({ snapshot, d }: { snapshot: VPSnapshot | null; d:
   const list = (['ASIA', 'LONDON', 'NEW_YORK', 'CURRENT_SESSION', 'PREVIOUS_SESSION'] as const).map((k) => [k, snapshot?.profiles[k]] as const);
   return (
     <Panel title="Session Profiles" icon={<Clock3 size={15} />} testId="vp-sessions">
-      <Table head={['Session', 'Window (UTC)', 'POC', 'VAH', 'VAL', 'Volume', 'State']}>
+      <Table head={['Session', 'POC', 'VAH', 'VAL', 'Volume', 'State']}>
         {list.map(([k, p]) => (
           <tr key={k} data-testid="vp-session-row">
-            <td>{p?.label ?? k.replace(/_/g, ' ')}</td>
-            <td>{windowLabel(p)}</td>
+            <td>
+              <span className="vpsess">{p?.label ?? k.replace(/_/g, ' ')}</span>
+              <span className="vpsess__win">{windowLabel(p)} UTC</span>
+            </td>
             <td className="num vppoc">{f(p?.poc ?? null)}</td>
             <td className="num">{f(p?.vah ?? null)}</td>
             <td className="num">{f(p?.val ?? null)}</td>
@@ -201,18 +210,22 @@ export function SessionsPanel({ snapshot, d }: { snapshot: VPSnapshot | null; d:
 
 export function ConfluencePanel({ items, d }: { items: ConfluenceItem[]; d: number }) {
   return (
-    <Panel title={`Confluence (${items.length})`} icon={<Waypoints size={15} />} testId="vp-confluence">
+    <Panel title={`Confluence (${items.length})`} icon={<Waypoints size={15} />} testId="vp-confluence" className="vpconf">
       {!items.length ? (
         <Empty>No confluence with other engines' published output.</Empty>
       ) : (
-        <Table head={['VP level', 'Price', 'With', 'Source engine', 'Detail', 'Strength']}>
+        <Table head={['VP level', 'Price', 'With', 'Source', 'Detail', 'Strength']}>
           {items.slice(0, 40).map((c) => (
             <tr key={c.id} data-testid="vp-conf-row">
-              <td>{c.level}</td>
+              <td title={c.level}>{c.level}</td>
               <td className="num">{formatPrice(c.price, d)}</td>
-              <td>{c.with}</td>
-              <td className="vpsrc">{c.engine}</td>
-              <td>{c.detail}</td>
+              <td title={c.with}>{c.with}</td>
+              <td>
+                <SrcBadge text={engineBadge(c.engine)} title={c.engine} />
+              </td>
+              <td className="vpclip" title={c.detail}>
+                {c.detail}
+              </td>
               <td>
                 <Tag v={c.strength} tone={c.strength === 'High' ? 'warn' : 'muted'} />
               </td>
@@ -256,7 +269,7 @@ export function LevelsPanel({ levels, d }: { levels: KeyLevel[]; d: number }) {
 export function ScorePanel({ score }: { score: VPScore | null }) {
   const total = score?.total ?? null;
   return (
-    <Panel title="Volume Profile Score" icon={<Target size={15} />} testId="vp-score">
+    <Panel title="Volume Profile Score" icon={<Target size={15} />} testId="vp-score" className="vpscore">
       <div className="smcscore">
         <div className="smcscore__ring" style={{ ['--p' as string]: `${total ?? 0}` }} aria-label={total === null ? 'No score' : `Score ${total} of 100`}>
           <strong data-testid="vp-score-total">{total === null ? '—' : total}</strong>
@@ -275,6 +288,7 @@ export function ScorePanel({ score }: { score: VPScore | null }) {
       </div>
       {score && score.uncapped !== null && score.total !== score.uncapped && <p className="smcnote smcnote--warn">Capped from {score.uncapped}.</p>}
       {!!score?.missing.length && <p className="smcnote smcnote--warn">Missing mandatory evidence: {score.missing.join('; ')}.</p>}
+      <p className="vpnot">Analysis / confluence score · NOT a probability of winning · NOT expected profit · NOT a trade signal</p>
       <p className="smcnote">{score?.note ?? 'No score.'}</p>
     </Panel>
   );
@@ -282,37 +296,51 @@ export function ScorePanel({ score }: { score: VPScore | null }) {
 
 /* -------------------------------- event log -------------------------------- */
 
+const RECENT_EVENTS = 8;
 export function EventLogPanel({ log, d }: { log: VPEvent[]; d: number }) {
   const [type, setType] = useState('All');
+  const [open, setOpen] = useState(false);
   const types = useMemo(() => ['All', ...new Set(log.map((e) => e.type))], [log]);
-  const rows = useMemo(() => [...log].reverse().filter((e) => type === 'All' || e.type === type).slice(0, 200), [log, type]);
+  const newest = useMemo(() => [...log].reverse(), [log]);
+  const rows = useMemo(
+    () => (open ? newest.filter((e) => type === 'All' || e.type === type).slice(0, 200) : newest.filter((e) => IMPORTANT_EVENT_TYPES.has(e.type)).slice(0, RECENT_EVENTS)),
+    [newest, type, open],
+  );
   return (
     <Panel
       title={`Event Log (${log.length})`}
       icon={<ScrollText size={15} />}
       testId="vp-log"
-      className="smclog"
+      className="smclog vplog"
       right={
-        <select value={type} onChange={(e) => setType(e.target.value)} aria-label="Event type filter" className="smcselect">
-          {types.map((x) => (
-            <option key={x}>{x}</option>
-          ))}
-        </select>
+        <button type="button" className="srtool" aria-expanded={open} onClick={() => setOpen((v) => !v)} data-testid="vp-log-toggle">
+          {open ? 'Show recent important' : `Show all (${log.length})`}
+        </button>
       }
     >
+      {open && (
+        <div className="vpchips" role="group" aria-label="Event type filter">
+          {types.map((x) => (
+            <button key={x} type="button" aria-pressed={type === x} onClick={() => setType(x)}>
+              {x}
+            </button>
+          ))}
+        </div>
+      )}
+      {!open && <p className="smcnote">Most recent important events (POC / value-area changes, rejections, reclaims, revisions). Tests and node events are in the full log.</p>}
       {!rows.length ? (
         <Empty>No events.</Empty>
       ) : (
         <Table head={['Time (UTC)', 'Event', 'Price', 'Profile', 'Details']}>
           {rows.map((e) => (
-            <tr key={e.id} className={e.superseded ? 'is-superseded' : ''} data-testid="vp-log-row" title={e.superseded ? 'No longer produced after a DATA REVISED rebuild (kept for the record).' : undefined}>
+            <tr key={e.id} className={e.superseded ? 'is-superseded' : ''} data-testid="vp-log-row" title={e.superseded ? 'No longer produced after a DATA REVISED rebuild (kept for the record).' : e.message}>
               <td>{fmtHm(e.time)}</td>
               <td>
                 <Tag v={e.type} tone={eventTone(e)} />
               </td>
               <td className="num">{e.price === null ? '—' : formatPrice(e.price, d)}</td>
               <td>{e.profile}</td>
-              <td>{e.message}</td>
+              <td className="vpclip">{e.message}</td>
             </tr>
           ))}
         </Table>
@@ -327,16 +355,16 @@ export function AcceptancePanel({ snapshot }: { snapshot: VPSnapshot | null }) {
   const a = snapshot?.acceptance ?? null;
   const s = snapshot?.sessionAcceptance ?? null;
   return (
-    <Panel title="Acceptance / Rejection" icon={<Target size={15} />} testId="vp-acceptance">
+    <Panel title="Acceptance / Rejection" icon={<Target size={15} />} testId="vp-acceptance" className="vpaccpanel">
       {!a && !s ? (
         <Empty>NO CONFIRMATION — no completed reference profile yet.</Empty>
       ) : (
         [a, s].map((x, i) =>
           x ? (
-            <div key={i} className="vpacc">
-              <span className="smccard__k">vs {x.referenceLabel}</span>
+            <div key={i} className="vpacc" title={x.evidence}>
+              <span className="vpacc__ref">vs {x.referenceLabel}</span>
               <Tag v={x.state} tone={acceptanceTone(x.state)} />
-              <p className="smcnote">
+              <p className="smcnote vpclip2">
                 {x.evidence}
                 {x.at ? ` (${fmtHm(x.at)} UTC)` : ''}
               </p>
@@ -344,7 +372,7 @@ export function AcceptancePanel({ snapshot }: { snapshot: VPSnapshot | null }) {
           ) : null,
         )
       )}
-      <p className="smcnote">Closed-candle rules only (documented in the engine). Descriptive state — never a BUY / SELL signal.</p>
+      <p className="smcnote">Closed-candle rules only. Descriptive state — never a BUY / SELL signal.</p>
     </Panel>
   );
 }

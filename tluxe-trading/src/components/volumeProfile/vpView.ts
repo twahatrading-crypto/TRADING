@@ -266,3 +266,71 @@ export const utcInputToSec = (v: string): number | null => {
   return Number.isFinite(ms) ? Math.floor(ms / 1000) : null;
 };
 export const secToUtcInput = (s: number) => new Date(s * 1000).toISOString().slice(0, 16);
+
+/* ------------------------------ presentation-only ------------------------------ */
+
+/** Overlay toggles grouped for the side panel (same keys, same defaults). */
+export const VP_TOGGLE_GROUPS: { title: string; keys: VPToggleKey[] }[] = [
+  { title: 'PROFILE', keys: ['volumeProfile', 'poc', 'vahVal', 'hvn', 'lvn', 'previous', 'sessions'] },
+  { title: 'CONFLUENCE', keys: ['liquidity', 'sweeps', 'sr', 'orderBlocks', 'fvg', 'bosChoch', 'mtf'] },
+];
+
+/** Chart-marker importance (lower = kept first when markers crowd each other). Events themselves are never changed. */
+const MARKER_RANK: Record<string, number> = {
+  'VALUE BREAK': 0,
+  'RE-ENTRY': 0,
+  'VAH REJ': 1,
+  'VAL RECLAIM': 1,
+  'NEW POC': 2,
+  'POC SHIFT': 3,
+  'VAH TEST': 4,
+  'VAL TEST': 4,
+};
+const rankOf = (m: VPMarker) => MARKER_RANK[m.text.replace(/ \+\d+$/, '')] ?? (/sweep/i.test(m.text) ? 2 : 5);
+
+/**
+ * Label collision avoidance for chart markers: on each side of the bars (above / below) no two markers may sit
+ * within `minGapBars` bars of each other. Markers are kept by importance, then recency; a kept marker absorbs the
+ * hidden neighbours it would have overlapped and shows them as "+N" (every event stays in the Event Log).
+ */
+export function declutterMarkers(markers: readonly VPMarker[], barTimes: readonly number[], minGapBars: number): VPMarker[] {
+  if (minGapBars <= 0 || markers.length < 2) return [...markers];
+  const idx = new Map(barTimes.map((t, i) => [t, i]));
+  const order = [...markers].sort((a, b) => rankOf(a) - rankOf(b) || b.time - a.time || (a.text < b.text ? -1 : 1));
+  const kept: { m: VPMarker; i: number; hidden: number }[] = [];
+  for (const m of order) {
+    const i = idx.get(m.time);
+    if (i === undefined) continue;
+    const clash = kept.find((k) => k.m.position === m.position && Math.abs(k.i - i) < minGapBars);
+    if (clash) clash.hidden += 1;
+    else kept.push({ m, i, hidden: 0 });
+  }
+  return kept.map((k) => (k.hidden ? { ...k.m, text: `${k.m.text} +${k.hidden}` } : k.m)).sort((a, b) => a.time - b.time);
+}
+
+/** Bars a marker label needs at the current bar spacing (≈ 64 px per label). */
+export const markerGapBars = (barSpacingPx: number) => Math.max(1, Math.ceil(64 / Math.max(1, barSpacingPx)));
+
+/** Concise volume-source badge; the full label / detail stays available as a tooltip. */
+export function sourceBadge(label: string | null | undefined): string {
+  const l = (label ?? '').toUpperCase();
+  if (!l || l.includes('UNAVAILABLE')) return 'NO VOLUME';
+  if (l.includes('DATABENTO')) return 'DATABENTO · CME REAL VOLUME';
+  if (l.includes('EXCHANGE')) return 'EXCHANGE VOLUME';
+  if (l.includes('MT5 REAL')) return 'MT5 REAL VOL';
+  if (l.includes('TICK')) return 'MT5 TICK VOL';
+  return label ?? '';
+}
+
+/** Concise source-engine badge for confluence rows (full provenance in the tooltip). */
+export function engineBadge(engine: string): string {
+  const e = engine.toLowerCase();
+  if (e.startsWith('s&r')) return 'S&R';
+  if (e.startsWith('liquidity')) return 'LIQUIDITY';
+  if (e.startsWith('order block')) return 'ORDER BLOCKS';
+  if (e.startsWith('smc')) return 'SMC';
+  return engine.toUpperCase();
+}
+
+/** Events shown in the collapsed Event Log (the full log and filters stay one click away). */
+export const IMPORTANT_EVENT_TYPES: ReadonlySet<VPEventType> = new Set<VPEventType>(['NEW POC', 'POC SHIFTED', 'VAH REJECTED', 'VAL RECLAIMED', 'VALUE BREAK', 'VALUE RE-ENTRY', 'DATA REVISED']);
