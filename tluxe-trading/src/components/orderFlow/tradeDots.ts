@@ -56,7 +56,7 @@ export type DotAggregation = 'auto' | 100 | 250 | 500 | 1000;
 export const DOT_AGGREGATIONS: readonly DotAggregation[] = ['auto', 100, 250, 500, 1000];
 export const DOT_BUCKETS_MS = [100, 250, 500, 1000, 2000, 5000, 10_000, 15_000, 30_000, 60_000, 120_000, 300_000] as const;
 /** Minimum width of a display bucket on screen in AUTO (px). */
-export const AUTO_MIN_BUCKET_PX = 7;
+export const AUTO_MIN_BUCKET_PX = 10;
 /** AUTO: at most roughly one filled bucket per this many px of plot width. */
 export const AUTO_PX_PER_BUCKET = 5;
 /** Share of the known (buy + sell) volume one side needs to colour the bubble; below = MIXED. */
@@ -187,9 +187,9 @@ export function priceBars(trades: readonly DisplayTrade[], ms: number, from = 0,
  */
 export function dotRadius(vol: number, norm: number, cellPx: number): number {
   const cell = Math.max(2, cellPx);
-  const rMin = Math.min(1.8, cell * 0.3);
-  const rNorm = Math.max(rMin, Math.min(7, cell * 0.45));
-  const rCap = Math.max(rNorm, Math.min(14, cell * 1.2));
+  const rMin = Math.min(1.4, cell * 0.3);
+  const rNorm = Math.max(rMin, Math.min(4.5, cell * 0.4));
+  const rCap = Math.max(rNorm, Math.min(13, cell * 1.2));
   const n = Math.max(1, norm);
   if (!(vol > 0)) return rMin;
   if (vol <= n) return rMin + (rNorm - rMin) * Math.sqrt(vol / n);
@@ -280,16 +280,113 @@ export function latestTrade(s: TradeSource | null): { price: number; time: numbe
  * diagonal segment implies movement that did not trade, and a silence longer than PRICE_MAX_HOLD_MS breaks the trace.
  * -------------------------------------------------------------------------- */
 
-export const PRICE_BUCKETS_MS = [10, 25, 50, 100, 250, 500, 1000, 2000, 5000, 10_000, 15_000, 30_000, 60_000, 120_000, 300_000, 600_000, 900_000, 1_800_000, 3_600_000] as const;
-/** Minimum on-screen width of one price micro-candle (px). */
-export const PRICE_MIN_BUCKET_PX = 4;
-/** A silence longer than this (no trade at all) breaks the step trace instead of drawing a flat hold across it. */
+/** Price micro-candle buckets. The finest four are the AUTO choices for a live window; coarser ones only for zoom-out. */
+export const PRICE_BUCKETS_MS = [100, 250, 500, 1000, 2000, 5000, 10_000, 15_000, 30_000, 60_000, 120_000, 300_000, 600_000, 900_000, 1_800_000, 3_600_000] as const;
+/** AUTO micro-candle sizes for a live window (the first that gives candles with real OHLC range is used). */
+export const PRICE_AUTO_BUCKETS_MS = [100, 250, 500, 1000, 2000, 5000] as const;
+/** Minimum on-screen slot per micro-candle (px) - a body plus a gap stays readable. */
+export const PRICE_MIN_BUCKET_PX = 3;
+/** AUTO window: aim for this many real micro-candles (fewer when the market is genuinely quiet). */
+export const PRICE_TARGET_CANDLES = 140;
+/** A bucket size is dense enough when at least this share of its slots in the window hold a real candle. */
+export const PRICE_MIN_FILL = 0.5;
+/** AUTO: at least this many real candles in the window ... */
+export const PRICE_MIN_CANDLES = 80;
+/** ... holding on average at least this many real trades each (so a candle has a genuine open / high / low / close). */
+export const PRICE_MIN_TRADES_PER_CANDLE = 3;
+/** AUTO window never reaches back further than this (no stale backlog to fill space). */
+export const PRICE_MAX_WINDOW_MS = 15 * 60_000;
+/** Smallest AUTO window (ms). */
+export const PRICE_MIN_WINDOW_MS = 20_000;
+/** A silence longer than this (no trade at all) breaks the close trace instead of drawing a flat hold across it. */
 export const PRICE_MAX_HOLD_MS = 15 * 60_000;
 
-/** Price micro-candle width: the finest bucket at least PRICE_MIN_BUCKET_PX wide. Depends on the viewport only. */
-export function priceBucketMs(spanMs: number, plotPx: number): number {
-  const minMs = (spanMs * PRICE_MIN_BUCKET_PX) / Math.max(1, plotPx);
-  return PRICE_BUCKETS_MS.find((ms) => ms >= minMs) ?? PRICE_BUCKETS_MS[PRICE_BUCKETS_MS.length - 1]!;
+/** First index with t > x (trades sorted by time). */
+export function upperBound(trades: readonly DisplayTrade[], x: number): number {
+  let lo = 0;
+  let hi = trades.length;
+  while (lo < hi) {
+    const m = (lo + hi) >> 1;
+    if (trades[m]!.t <= x) lo = m + 1;
+    else hi = m;
+  }
+  return lo;
+}
+
+/** Number of time buckets of `ms` that hold at least one real trade in [from, to). */
+export function filledBuckets(trades: readonly DisplayTrade[], ms: number, from = 0, to = trades.length): number {
+  let n = 0;
+  let prev = NaN;
+  for (let i = from; i < to; i++) {
+    const b = Math.floor(trades[i]!.t / ms);
+    if (b !== prev) {
+      n++;
+      prev = b;
+    }
+  }
+  return n;
+}
+
+export interface PriceWindow {
+  /** Micro-candle bucket (ms). */
+  ms: number;
+  /** Window length ending at tEnd (ms). */
+  span: number;
+  /** Real micro-candles inside the window. */
+  candles: number;
+}
+
+/**
+ * AUTO price window ending at the latest exchange time. For each size in PRICE_AUTO_BUCKETS_MS (finest first) the most
+ * recent real trades are walked back until PRICE_TARGET_CANDLES candles (or the readable / PRICE_MAX_WINDOW_MS limit);
+ * the first size giving >= PRICE_MIN_CANDLES candles of >= PRICE_MIN_TRADES_PER_CANDLE trades each on average is used.
+ * A quiet market that never reaches that gets the coarsest size over the widest allowed window - fewer candles,
+ * honestly. Only trades at or before tEnd are used.
+ */
+export function autoPriceWindow(trades: readonly DisplayTrade[], tEnd: number, plotPx: number): PriceWindow {
+  const w = Math.max(1, plotPx);
+  const end = upperBound(trades, tEnd);
+  const scan = (ms: number) => {
+    const maxSpan = Math.min(PRICE_MAX_WINDOW_MS, (w * ms) / PRICE_MIN_BUCKET_PX);
+    let count = 0;
+    let n = 0;
+    let prev = NaN;
+    let start = tEnd;
+    for (let i = end - 1; i >= 0; i--) {
+      const t = trades[i]!.t;
+      if (t < tEnd - maxSpan) break;
+      const b = Math.floor(t / ms);
+      if (b !== prev) {
+        if (count === PRICE_TARGET_CANDLES) break;
+        count++;
+        prev = b;
+        start = b * ms;
+      }
+      n++;
+    }
+    const span = Math.min(maxSpan, Math.max(PRICE_MIN_WINDOW_MS, tEnd - start + ms));
+    return { win: { ms, span, candles: count }, perCandle: count ? n / count : 0 };
+  };
+  for (const ms of PRICE_AUTO_BUCKETS_MS) {
+    const r = scan(ms);
+    if (r.win.candles >= PRICE_MIN_CANDLES && r.perCandle >= PRICE_MIN_TRADES_PER_CANDLE) return r.win;
+  }
+  return scan(PRICE_AUTO_BUCKETS_MS[PRICE_AUTO_BUCKETS_MS.length - 1]!).win;
+}
+
+/**
+ * Price bucket for an arbitrary (zoomed / panned) window: the finest bucket with at least PRICE_MIN_BUCKET_PX per slot
+ * whose slots are at least PRICE_MIN_FILL filled by real trades (from 1 s up, the first readable one).
+ */
+export function priceBucketFor(trades: readonly DisplayTrade[], t0: number, t1: number, plotPx: number): number {
+  const span = Math.max(1, t1 - t0);
+  const from = lowerBound(trades, t0);
+  const to = upperBound(trades, t1);
+  for (const ms of PRICE_BUCKETS_MS) {
+    if ((Math.max(1, plotPx) * ms) / span < PRICE_MIN_BUCKET_PX) continue;
+    if (ms >= 1000 || filledBuckets(trades, ms, from, to) / (span / ms) >= PRICE_MIN_FILL) return ms;
+  }
+  return PRICE_BUCKETS_MS[PRICE_BUCKETS_MS.length - 1]!;
 }
 
 /** One horizontal / vertical step-trace segment in (time, tick) space. */

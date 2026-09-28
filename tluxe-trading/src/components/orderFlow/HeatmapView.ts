@@ -9,9 +9,12 @@ import {
   dominance,
   dotRadius,
   lowerBound,
-  PRICE_MIN_BUCKET_PX,
+  autoPriceWindow,
+  CATCH_UP_LAG_MS,
   priceBars,
-  priceBucketMs,
+  priceBucketFor,
+  upperBound,
+  type PriceWindow,
   quantileTotal,
   stepTrace,
   TradeTape,
@@ -124,6 +127,8 @@ export class HeatmapView implements ChartNavigable {
   lastBucketMs: number | null = null;
   /** Price micro-candle bucket of the last frame (ms) - depends on the viewport only. */
   lastPriceMs: number | null = null;
+  /** AUTO price window of the default (following) view; null once the user zooms / pans. */
+  private autoWin: PriceWindow | null = null;
   /** Pixel geometry of the last drawn PRICE layer (trace + candles) - identical whatever the dot settings. */
   private priceGeom: number[] = [];
   private hovered: TradeHover | null = null;
@@ -251,13 +256,21 @@ export class HeatmapView implements ChartNavigable {
     this.set({ t0: t1 - this.defaultSpan(t1), t1, p0: c - DEFAULT_PRICE_TICKS / 2, p1: c + DEFAULT_PRICE_TICKS / 2 });
     this.emitViewport(true);
   }
-  /** Default time span: DEFAULT_SPAN_COLUMNS, or - with less real history - from the first column (never empty space). */
+  /**
+   * Default time span. With the raw tape: the AUTO price window ending at the latest exchange time (~140 real
+   * micro-candles, fewer when the market is quiet - see autoPriceWindow). Without it: DEFAULT_SPAN_COLUMNS, or less
+   * when less history exists.
+   */
   private defaultSpan(t1: number): number {
     const agg = this.agg();
+    if (this.opts.tape) {
+      const tr = this.trades();
+      const win = autoPriceWindow(tr, t1 - 2 * agg, Math.max(1, this.plotW()));
+      this.autoWin = win;
+      return win.span + 2 * agg;
+    }
     const first = this.source()?.allColumns()[0];
-    const ft = this.trades()[0]?.t;
-    const start = first ? Math.min(first.t, ft ?? first.t) : ft;
-    const have = start !== undefined ? t1 - start + agg : 0;
+    const have = first ? t1 - first.t + agg : 0;
     return Math.max(MIN_SPAN_COLUMNS * agg, Math.min(DEFAULT_SPAN_COLUMNS * agg, have));
   }
   /** Fit: all retained history and every price that has liquidity or prints. */
@@ -586,22 +599,23 @@ export class HeatmapView implements ChartNavigable {
     step('bestBid', 'rgba(52,211,153,0.55)', 0.5);
     step('bestAsk', 'rgba(248,113,113,0.55)', -0.5);
 
-    // 3) PRICE LAYER (independent of the volume dots): micro-candles from the real trades at a resolution set only by
-    //    the viewport, plus a step trace that holds the last traded price until the next real trade. Trade Agg,
-    //    Volume Dots and the dot rules never change this layer (regression-tested via priceGeometry()).
+    // 3) PRICE LAYER (independent of the volume dots): true micro-OHLC candles from the raw exchange-time trades -
+    //    open = first trade, high / low = extreme trades, close = last trade of each bucket; an empty bucket draws
+    //    nothing. The bucket comes from real trade density and the visible range only (AUTO window, or the finest
+    //    readable bucket after a zoom). A faint close trace holds the last traded price until the next real trade
+    //    (horizontal / vertical only, never interpolated). Trade Agg and Volume Dots never touch this layer.
     const span = v.t1 - v.t0;
     const tr = this.trades();
-    const pMs = priceBucketMs(span, pw);
-    const pBars = priceBars(tr, pMs, lowerBound(tr, v.t0 - pMs), lowerBound(tr, v.t1 + pMs));
+    const pMs = this.autoSpan && this.autoWin ? this.autoWin.ms : priceBucketFor(tr, v.t0, v.t1, pw);
+    const pBars = priceBars(tr, pMs, lowerBound(tr, v.t0 - pMs), upperBound(tr, v.t1 + pMs));
     const lNow = this.latest();
-    const runs = stepTrace(pBars, pMs, lNow ? Math.min(lNow.t, v.t1) : null);
-    const pBucketPx = (pMs / span) * pw;
+    const pSlot = (pMs / span) * pw;
     const geom: number[] = [pMs];
     const r2 = (x: number) => Math.round(x * 100) / 100;
     if (s.showPriceLine)
-      for (const run of runs) {
-        ctx.strokeStyle = 'rgba(226,232,240,0.8)';
-        ctx.lineWidth = 1.2;
+      for (const run of stepTrace(pBars, pMs, lNow ? Math.min(lNow.t, v.t1, (tr[tr.length - 1]?.t ?? -Infinity) + CATCH_UP_LAG_MS) : null)) {
+        ctx.strokeStyle = 'rgba(203,213,225,0.32)';
+        ctx.lineWidth = 1;
         ctx.beginPath();
         run.forEach(([t, k], i) => {
           const x = X(t);
@@ -613,32 +627,37 @@ export class HeatmapView implements ChartNavigable {
         ctx.stroke();
         geom.push(-1);
       }
-    if (pBucketPx >= PRICE_MIN_BUCKET_PX) {
-      const bw = Math.max(1, Math.min(9, pBucketPx * 0.6));
-      for (const b of pBars) {
-        const x = X(b.t + pMs / 2);
-        if (x < -bw || x > pw + bw) continue;
-        const col = b.c > b.o ? 'rgba(34,197,94,0.95)' : b.c < b.o ? 'rgba(239,68,68,0.95)' : 'rgba(203,213,225,0.9)';
-        ctx.strokeStyle = col;
-        ctx.fillStyle = col;
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(x, Y(b.h + 0.3));
-        ctx.lineTo(x, Y(b.l - 0.3));
-        ctx.stroke();
-        const yt = Y(Math.max(b.o, b.c) + 0.3);
-        const yb = Y(Math.min(b.o, b.c) - 0.3);
-        ctx.fillRect(x - bw / 2, yt, bw, Math.max(1, yb - yt));
-        geom.push(r2(x), r2(Y(b.h)), r2(Y(b.l)), r2(Y(b.o)), r2(Y(b.c)));
-      }
+    const bw = Math.max(1, Math.min(7, pSlot * 0.68));
+    for (const b of pBars) {
+      const x = Math.round(X(b.t + pMs / 2)) + 0.5;
+      if (x < -bw || x > pw + bw) continue;
+      const col = b.c > b.o ? 'rgba(34,197,94,0.95)' : b.c < b.o ? 'rgba(239,68,68,0.95)' : 'rgba(203,213,225,0.85)';
+      ctx.strokeStyle = col;
+      ctx.fillStyle = col;
+      ctx.lineWidth = 1;
+      const yh = Y(b.h) - 1;
+      const yl = Y(b.l) + 1;
+      ctx.beginPath(); // thin wick: actual high to actual low
+      ctx.moveTo(x, yh);
+      ctx.lineTo(x, yl);
+      ctx.stroke();
+      const yt = Y(Math.max(b.o, b.c));
+      const yb = Y(Math.min(b.o, b.c));
+      const bh = Math.max(2, yb - yt); // compact body: open-to-close (a flat candle is a 2 px dash)
+      ctx.fillRect(x - bw / 2, (yt + yb) / 2 - bh / 2, bw, bh);
+      geom.push(r2(x), r2(Y(b.h)), r2(Y(b.l)), r2(Y(b.o)), r2(Y(b.c)));
     }
     this.priceGeom = geom;
     this.lastPriceMs = pMs;
+    // Diagnostics for verification (no data values): price bucket and number of real micro-candles in view.
+    this.canvas.dataset.priceMs = String(pMs);
+    this.canvas.dataset.candles = String(pBars.filter((b) => b.t + pMs >= v.t0 && b.t <= v.t1).length);
 
     // 4-pre) Volume-dot display bucket (Trade Agg): affects the bubbles ONLY.
     const choice = this.opts.dotAggregation?.() ?? 'auto';
     const ms = choice === 'auto' ? autoBucketMs(span, pw, tr, lowerBound(tr, v.t0), lowerBound(tr, v.t1 + 1)) : choice;
     this.lastBucketMs = ms;
+    this.canvas.dataset.dotMs = String(ms);
     const bucketPx = (ms / span) * pw;
     const rowPx = ph / Math.max(1e-9, v.p1 - v.p0);
 

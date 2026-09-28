@@ -470,7 +470,7 @@ jobs:
                   if (n / ph > 0.5) wallCols++;
                 }
                 const agg = document.querySelector('[data-testid="of-dot-agg"]');
-                return { maxCol: Math.round(maxCol * 1000) / 1000, wallCols, colored, trace, bands, pts, agg: agg ? agg.value : null, legend: (document.querySelector('.ofheat__legend')?.textContent || '').replace(/\s+/g, ' ').trim() };
+                return { maxCol: Math.round(maxCol * 1000) / 1000, wallCols, colored, trace, bands, pts, agg: agg ? agg.value : null, priceMs: Number(c.dataset.priceMs), candles: Number(c.dataset.candles), dotMs: Number(c.dataset.dotMs), legend: (document.querySelector('.ofheat__legend')?.textContent || '').replace(/\s+/g, ' ').trim() };
               });
               let tip = '';
               if (px) {
@@ -482,11 +482,12 @@ jobs:
                 await p.mouse.move(0, 0);
               }
               const lastTrade = await p.evaluate(() => Number((document.querySelector('.ofbar__last')?.textContent || '').replace(/,/g, '')));
-              console.log(`  chart: maxColumnFill=${px && px.maxCol} wallColumns=${px && px.wallCols} dotPixels=${px && px.colored} tracePixels=${px && px.trace} liquidityBandPixels=${px && px.bands} tradeAgg=${px && px.agg} legend="${px && px.legend}"`);
+              console.log(`  chart: maxColumnFill=${px && px.maxCol} wallColumns=${px && px.wallCols} dotPixels=${px && px.colored} tracePixels=${px && px.trace} liquidityBandPixels=${px && px.bands} tradeAgg=${px && px.agg} priceBucketMs=${px && px.priceMs} microCandles=${px && px.candles} dotBucketMs=${px && px.dotMs} legend="${px && px.legend}"`);
               console.log(`  hover: ${tip}`);
               console.log(`  last(trade) page=${lastTrade} bridge=${st.lastTrade && st.lastTrade.price}`);
               check(px && px.maxCol < 0.5 && px.wallCols === 0, `${inst}: no vertical bubble walls (max column fill ${px && px.maxCol})`);
-              check(px && px.trace > 200 && px.colored > 50, `${inst}: price trace + aggregated volume dots drawn`);
+              check(px && px.colored > 200 && px.candles > 0, `${inst}: micro-candles + aggregated volume dots drawn (${px && px.candles} candles @ ${px && px.priceMs} ms)`);
+              check(px && px.priceMs <= 5000, `${inst}: AUTO price bucket is a micro-candle size (${px && px.priceMs} ms)`);
               check(px && px.bands < 50, `${inst}: zero liquidity heatmap bands (${px && px.bands} band-coloured px)`);
               check(px && px.agg === 'auto', `${inst}: Trade aggregation control present (AUTO)`);
               check(/DISPLAY AGGREGATION/.test(tip) && /Databento/i.test(tip) && /Unknown/.test(tip) && /Trades \d/.test(tip), `${inst}: bubble hover shows bucket sums, source, display-aggregation note`);
