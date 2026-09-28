@@ -245,6 +245,14 @@ export const windowLabel = (p: VolumeProfile | null | undefined) => (p ? `${fmtH
 
 /** Instrument-level volume label (never claims exchange volume for spot / CFD, never invents a source). */
 export function volumeSourceText(o: { snapshot: VPSnapshot | null; profile: VolumeProfile | null; symbol: string; isFuture: boolean }): { label: string; unavailable: boolean } {
+  // A window that has no CLOSED candle yet (e.g. a session that opened minutes ago) says nothing about the volume
+  // source: report the source of the instrument's profiles that do contain closed bars, never "unavailable".
+  const shownEmpty = !o.profile || o.profile.bars === 0;
+  if (shownEmpty && o.snapshot) {
+    const withBars = [...Object.values(o.snapshot.profiles), ...o.snapshot.mtf].filter((p): p is NonNullable<typeof p> => !!p && p.bars > 0);
+    const real = withBars.find((p) => p.source.mode !== 'NONE');
+    if (real && withBars.every((p) => p.source.mode === real.source.mode)) return { label: `${real.source.label} · no closed candle in this window yet`, unavailable: false };
+  }
   if (o.snapshot?.unavailable) return { label: o.snapshot.unavailable, unavailable: true };
   const src = o.profile?.source ?? o.snapshot?.source ?? null;
   if (!src || src.mode === 'NONE') return { label: o.isFuture ? `${o.symbol} VOLUME DATA UNAVAILABLE` : 'VOLUME DATA UNAVAILABLE', unavailable: true };

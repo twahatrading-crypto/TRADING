@@ -44,6 +44,16 @@ describe('vpView', () => {
     expect(volumeSourceText({ snapshot: null, profile: null, symbol: 'XAUUSD', isFuture: false }).label).toBe('VOLUME DATA UNAVAILABLE');
   });
 
+  it('a window with no closed candle yet (session just opened) reports the real source, not "unavailable"', () => {
+    const empty = { ...snap.profiles.DAILY!, bars: 0, poc: null, source: { mode: 'NONE' as const, label: 'VOLUME DATA UNAVAILABLE', detail: 'No closed candles for this profile.', usedBars: 0, missingBars: 0 } };
+    const s = { ...snap, unavailable: 'XAUUSD VOLUME DATA UNAVAILABLE' };
+    expect(volumeSourceText({ snapshot: s, profile: empty, symbol: 'XAUUSD', isFuture: false })).toEqual({ label: 'MT5 Tick Volume · no closed candle in this window yet', unavailable: false });
+    expect(vpViewState({ feed: 'LIVE', snapshot: s, profile: empty, replay: false, hasProvider: true })).toBe('INSUFFICIENT_DATA');
+    // Profiles WITH bars but no volume stay unavailable.
+    const noVol = { ...s, profiles: {}, mtf: s.mtf.map((m) => ({ ...m, source: { ...m.source, mode: 'NONE' as const } })) };
+    expect(volumeSourceText({ snapshot: noVol, profile: empty, symbol: 'XAUUSD', isFuture: false }).unavailable).toBe(true);
+  });
+
   it('view state is LIVE only with a live feed and a real profile', () => {
     const p = snap.profiles.DAILY!;
     expect(vpViewState({ feed: 'LIVE', snapshot: snap, profile: p, replay: false, hasProvider: true })).toBe('LIVE');

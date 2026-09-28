@@ -51,6 +51,7 @@ function InstrumentChart() {
   const def = useActiveInstrument();
   const instrument = useMarket((s) => s.instrument);
   const providerName = useMarket((s) => s.provider?.name ?? null);
+  const providerId = useMarket((s) => s.provider?.id ?? null);
   const [tf, setTf] = usePersistentState<Timeframe>(`tluxe.chart.tf.${def.id}`, DEFAULT_TIMEFRAME, isTimeframe);
   const containerRef = useRef<HTMLDivElement>(null);
   const { barCount, lastBar } = useChartController(market, def.id, tf, instrument.priceDecimals, containerRef);
@@ -66,7 +67,7 @@ function InstrumentChart() {
       id="chart"
       className="chart-panel"
       title={`${instrument.symbol} Price Chart`}
-      subtitle={`${instrument.name} · ${where}${instrument.contract ? ` · ${instrument.contract}` : ''} · ${tf}${feed?.providerSymbol ? ` · MT5 ${feed.providerSymbol}` : ''}`}
+      subtitle={`${instrument.name} · ${where}${instrument.contract ? ` · ${instrument.contract}` : ''} · ${tf}${feed?.providerSymbol ? ` · ${providerId === 'databento' ? 'Databento' : 'MT5'} ${feed.providerSymbol}` : ''}`}
       icon={<ChartCandlestick size={18} />}
       actions={<TimeframeTabs value={tf} onChange={setTf} />}
       bodyClassName="chart-body"
