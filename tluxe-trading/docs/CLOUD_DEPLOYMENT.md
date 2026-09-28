@@ -81,6 +81,20 @@ per-process.
 * A bad optional upstream URL shows as ERROR in `/api/status`; it never crashes the gateway.
 * The gateway retries the database for about 2 minutes while PostgreSQL is still starting.
 
+**Databento on the gateway (recommended, no extra service)**
+* Set `DATABENTO_API_KEY` on tluxe-web / tluxe-auth-gateway.
+* `cloud/gateway/entrypoint.py` then runs the Databento bridge next to the gateway in the same container. The bridge
+  uses the official SDK on `GLBX.MDP3`, and GC resolves through `GC.v.0` to the active contract.
+* The key goes to the bridge process only; the gateway process never receives it.
+* The gateway ↔ bridge token is random at each boot.
+* `GET /api/databento/status?root=GC` (signed in) reports:
+  * connection, dataset and plan
+  * the active contract and instrument ID
+  * the last event time (UTC), its age and freshness
+  * the last real trade and the last OHLCV bar
+  * `verifiedByRealData`, which is true only after real records have arrived
+* Without the key, Databento shows NOT CONNECTED and GC shows DATA UNAVAILABLE.
+
 **tluxe-ai**
 * `OPENAI_API_KEY`, `TLUXE_AI_TOKEN`
 * Optional: `TLUXE_AI_MODEL`, `TLUXE_AI_TIMEOUT_S`, `TLUXE_AI_MAX_OUTPUT_TOKENS`

@@ -100,6 +100,8 @@ def main() -> int:
         mgr.start()
         logging.info("TLUXE Databento bridge on http://%s:%s · dataset GLBX.MDP3 · plan %s (schemas %s; never mbp-10%s) · mode %s · origins %s", cfg.host, cfg.port, cfg.plan, ", ".join(["trades", "ohlcv-1m"] + (["mbo"] if cfg.depth_plan else [])), "" if cfg.depth_plan else ", never mbo", cfg.contract_mode, ", ".join(cfg.allowed_origins))
         def _stop(*_):  # SIGTERM (container stop / redeploy) -> same clean shutdown as Ctrl+C
+            # Once only: a repeated SIGTERM (e.g. sent to the whole process group) must not interrupt the cleanup.
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
             raise KeyboardInterrupt
 
         signal.signal(signal.SIGTERM, _stop)

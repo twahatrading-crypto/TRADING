@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import logging
 import re
 import time
@@ -22,7 +23,7 @@ from aiohttp import ClientSession, ClientTimeout, WSMsgType, web
 from . import __version__
 from .auth import COOKIE, ROTATE_AFTER_S, LoginLimiter, new_session_id, sid_hash, verify_password
 from .config import GatewayConfig, Upstream
-from .health import ai_states, comp, databento_state, mt5_states, news_state
+from .health import ai_states, comp, databento_state, databento_summary, mt5_states, news_state
 from .logs import Redactor
 from .mt5_relay import HEARTBEAT_S as MT5_HB_S, Mt5Relay, RelayError, token_ok
 from .store import MemoryStore, PgStore
@@ -221,6 +222,35 @@ async def _proxy_get(request: web.Request, up: Upstream, path: str) -> web.Respo
     if status is None:
         return _err(503 if "not configured" in (err or "") else 502, "UPSTREAM_UNAVAILABLE", err or "unavailable")
     return _json(body if body is not None else {}, status)
+
+
+@require_session
+async def databento_status(request: web.Request) -> web.Response:
+    """Safe COMEX GC Databento status, proven by the latest REAL trade / OHLCV bar the gateway can read back."""
+    app, cfg = request.app, request.app[K_CFG]
+    root = (request.query.get("root") or "GC").upper()
+    if root not in ("GC", "SI"):
+        return _err(400, "BAD_ROOT", "root must be GC or SI.")
+    now = int(time.time() * 1000)
+    s, h, err = await _upstream_get(app, cfg.databento, "/v1/health", 6)
+    trade = bar = None
+    if s == 200 and h:
+        lt = ((h.get("instruments") or {}).get(root) or {}).get("tape") or {}
+        last_index = int(lt.get("lastIndex") or 0)
+        if last_index > 0:
+            ts, tb, _ = await _upstream_get(app, cfg.databento, f"/v1/trades/{root}?after={max(0, last_index - 1)}&limit=1", 6)
+            if ts == 200 and tb and tb.get("trades"):
+                trade = tb["trades"][-1]
+        cs, cb, _ = await _upstream_get(app, cfg.databento, f"/v1/candles/{root}?timeframe=M1&limit=2", 6)
+        if cs == 200 and cb and cb.get("bars"):
+            closed = [b for b in cb["bars"] if b.get("isClosed")]
+            bar = (closed or cb["bars"])[-1]
+    # Set by the container entrypoint when it runs the bridge next to the gateway (the gateway itself starts nothing).
+    embedded = os.environ.get("TLUXE_DATABENTO_SOURCE") == "embedded"
+    source = ("embedded" if embedded else "service") if cfg.databento.configured else None
+    body = databento_summary(h if s == 200 else None, cfg.databento.configured, err or (None if s == 200 else f"HTTP {s}"), now,
+                             source=source, last_trade=trade, last_bar=bar, root=root)
+    return _json(body)
 
 
 @require_session
@@ -572,6 +602,7 @@ def make_app(cfg: GatewayConfig, store=None, workers: bool = True, http_session_
     r.add_get("/bridge/mt5", bridge_ws)
     r.add_get("/api/ai/health", ai_health)
     r.add_post("/api/ai/chat", ai_chat)
+    r.add_get("/api/databento/status", databento_status)
     r.add_get("/api/databento/{path:.+}", databento_proxy)
     r.add_get("/api/news/{path:.+}", news_proxy)
     r.add_route("*", "/api/mt5/{path:.+}", mt5_proxy)

@@ -32,6 +32,8 @@ def bind_host(host: str) -> str:
 
 def main() -> int:
     load_dotenv(Path.cwd() / ".env")
+    # Defence in depth: the container entrypoint never passes the Databento key to the gateway; drop it if present.
+    os.environ.pop("DATABENTO_API_KEY", None)
     try:
         cfg = from_env()
     except ConfigError as exc:

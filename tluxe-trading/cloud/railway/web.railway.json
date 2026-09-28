@@ -11,7 +11,8 @@
       "/tluxe-trading/vite.config.ts",
       "/tluxe-trading/tsconfig.json",
       "/tluxe-trading/scripts/**",
-      "/tluxe-trading/cloud/gateway/**"
+      "/tluxe-trading/cloud/gateway/**",
+      "/tluxe-trading/bridge/databento/**"
     ]
   },
   "deploy": {
