@@ -182,12 +182,20 @@ jobs:
           const check = (ok, msg) => { console.log(`    ${ok ? 'OK  ' : 'FAIL'} ${msg}`); if (!ok) fails++; };
           (async () => {
             const b = await chromium.launch();
-            for (const inst of ['GC', 'SI']) {
+            for (const inst of ['GC', 'SI', 'GC']) {
               const ctx = await b.newContext({ viewport: { width: 1400, height: 1000 } });
               await ctx.addInitScript((i) => { try { localStorage.setItem('tluxe.instrument.v1', i); localStorage.removeItem('tluxe.vp.profile'); } catch {} }, inst);
               const p = await ctx.newPage();
               const errs = [];
               p.on('pageerror', (e) => errs.push(String(e).slice(0, 200)));
+              const t0 = Date.now();
+              p.on('response', async (r) => {
+                const u = r.url();
+                if (!/\/v1\/candles\/(GC|SI)\?timeframe=(M5|M30)/.test(u)) return;
+                let info = '';
+                try { const j = await r.json(); const bs = j.bars || []; info = `bars=${bs.length} first=${bs[0] ? new Date(bs[0].time * 1000).toISOString().slice(0, 16) : '-'} last=${bs.at(-1) ? new Date(bs.at(-1).time * 1000).toISOString().slice(0, 16) : '-'} history=${j.history}`; } catch (e) { info = 'unreadable'; }
+                console.log(`    net +${((Date.now() - t0) / 1000).toFixed(1)}s ${r.status()} ${u.replace(base, '')} ${info}`);
+              });
               await p.goto(base + '/#/engines/volume-profile');
               await p.waitForTimeout(20000);
               const read = async () => p.evaluate(() => {
