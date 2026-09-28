@@ -39,7 +39,7 @@
 .ofpill--muted { color: var(--text-3); }
 .ofwarn { padding: 10px 14px; font-size: var(--fs-sm); display: flex; gap: 10px; align-items: center; flex-wrap: wrap; border-color: rgba(240, 180, 60, 0.4); }
 /* Main row: chart dominates (~65-75 %), COB then SVP on the right. Sized to the viewport so the bottom cards stay in view. */
-.ofgrid { display: grid; grid-template-columns: minmax(0, 1fr) 250px 300px; gap: 8px; height: max(440px, calc(100vh - 470px)); }
+.ofgrid { display: grid; grid-template-columns: minmax(0, 1fr) 250px 300px; gap: 8px; height: max(440px, calc(100vh - 505px)); }
 .ofgrid.no-cob { grid-template-columns: minmax(0, 1fr) 300px; }
 .ofgrid.no-svp { grid-template-columns: minmax(0, 1fr) 250px; }
 .ofgrid.no-cob.no-svp { grid-template-columns: minmax(0, 1fr); }
@@ -173,3 +173,5 @@
   .ofgrid.no-cob { grid-template-columns: minmax(0, 1fr) 440px; }
   .ofgrid.no-svp { grid-template-columns: minmax(0, 1fr) 340px; }
 }
+/* The heatmap card sizes its stage to the row (the shared stage minimum would overflow the card at 1080p). */
+.ofheat .srchart__stage, .ofheat .chart-stage { min-height: 0; }
