@@ -81,6 +81,12 @@ jobs:
               print(time.strftime("%H:%M:%S"), {r: (o["verifiedByRealData"], o["history"]["state"]) for r, o in out.items()}, flush=True)
               time.sleep(30)
           print(json.dumps(out, indent=1))
+          h = get("/api/databento/v1/health")
+          print("SESSIONS", json.dumps(h.get("sessions"), indent=1))
+          for root, inst in (h.get("instruments") or {}).items():
+              tape = inst.get("tape") or {}
+              print(f"HEALTH {root}: contract={inst.get('activeContract') or tape.get('contract')} counts={inst.get('counts')} "
+                    f"tapeCounts={tape.get('counts')} tapeVolume={tape.get('volume')} replaying={tape.get('replaying')} lagMs={tape.get('lagMs')}")
           for root in ("GC", "SI"):
               for tf in ("M1", "M5", "M15", "M30", "H1", "H4", "D1"):
                   c = get(f"/api/databento/v1/candles/{root}?timeframe={tf}&limit=5000")
@@ -130,6 +136,11 @@ jobs:
                 console.log(`--- ${inst} ${path}  header: ${head.replace(/\s+/g, ' ').slice(0, 220)}`);
                 console.log(`    has ${st.activeContract}: ${flat.includes(st.activeContract) || head.includes(st.activeContract)}  shows ${other} contract ${otherContract}: ${contam}`);
                 console.log(`    ${flat.slice(0, 900)}`);
+                if (path === '/engines/volume-footprint') {
+                  const m = flat.match(/CUMULATIVE DELTA .{0,60}/);
+                  console.log(`    FP CVD: ${m ? m[0] : 'n/a'}`);
+                  console.log(`    FP INTEGRITY: ${JSON.stringify([...new Set(flat.match(/[^.]{0,50}(late|out-of-order|sequence gap|duplicate|reconnect|disconnect|contract change|DEGRADED)[^.]{0,70}/gi) || [])].slice(0, 12))}`);
+                }
                 if (path === '/engines/volume-profile') {
                   for (const prof of ['Daily', 'Previous Day']) {
                     await p.getByRole('button', { name: prof, exact: true }).first().click().catch(() => {});
