@@ -130,6 +130,14 @@ jobs:
                 console.log(`--- ${inst} ${path}  header: ${head.replace(/\s+/g, ' ').slice(0, 220)}`);
                 console.log(`    has ${st.activeContract}: ${flat.includes(st.activeContract) || head.includes(st.activeContract)}  shows ${other} contract ${otherContract}: ${contam}`);
                 console.log(`    ${flat.slice(0, 900)}`);
+                if (path === '/engines/volume-profile') {
+                  for (const prof of ['Daily', 'Previous Day']) {
+                    await p.getByRole('button', { name: prof, exact: true }).first().click().catch(() => {});
+                    await p.waitForTimeout(2000);
+                    const v = (await p.evaluate(() => (document.querySelector('main') || document.body).innerText)).replace(/\s+/g, ' ');
+                    console.log(`    VP[${prof}] ${v.slice(v.indexOf('VOLUME SOURCE'), v.indexOf('VOLUME SOURCE') + 330)}`);
+                  }
+                }
               }
               await ctx.close();
             }
