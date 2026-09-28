@@ -52,6 +52,7 @@ jobs:
             sleep 60
           done
   gcsi:
+    if: ${{ !contains(github.event.head_commit.message, '[auth-only]') }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
@@ -100,7 +101,7 @@ jobs:
           python3 check.py
   frontend:
     needs: gcsi  # after the GC/SI job has seen the new deployment's history settle
-    if: ${{ !contains(github.event.head_commit.message, '[vp-only]') }}
+    if: ${{ !contains(github.event.head_commit.message, '[vp-only]') && !contains(github.event.head_commit.message, '[auth-only]') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -159,6 +160,7 @@ jobs:
           JS
           node probe.cjs
   vp:
+    if: ${{ !contains(github.event.head_commit.message, '[auth-only]') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -259,3 +261,85 @@ jobs:
           })();
           JS
           node vp.cjs
+  auth:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Production security posture without any credential (never uses or needs the owner password)
+        shell: bash
+        run: |
+          npm init -y >/dev/null && npm i -s playwright@1 >/dev/null && npx playwright install --with-deps chromium >/dev/null 2>&1
+          cat > auth.cjs <<'JS'
+          const { chromium } = require('playwright');
+          const base = 'https://trading-production-e1d5.up.railway.app';
+          let fails = 0;
+          const check = (ok, m) => { console.log(`${ok ? 'OK  ' : 'FAIL'} ${m}`); if (!ok) fails++; };
+          const get = async (path, init = {}) => { const r = await fetch(base + path, { redirect: 'manual', ...init }); let t = ''; try { t = await r.text(); } catch {} return { status: r.status, headers: r.headers, text: t }; };
+          (async () => {
+            const cfg = JSON.parse((await get('/api/config')).text);
+            const owner = cfg.authRequired === true && cfg.publicMarketData === false;
+            console.log(`MODE: authRequired=${cfg.authRequired} publicMarketData=${cfg.publicMarketData} -> ${owner ? 'OWNER AUTH ACTIVE' : 'PUBLIC READ-ONLY MARKET DATA (no owner hash configured)'}`);
+            const hz = await get('/healthz');
+            check(hz.status === 200 && hz.text.trim() === '{"ok": true}' || hz.text.replace(/\s/g, '') === '{"ok":true}', `/healthz public + minimal: ${hz.status} ${hz.text.slice(0, 40)}`);
+            const priv = ['/api/databento/status?root=GC', '/api/databento/status?root=SI', '/api/databento/v1/health', '/api/databento/v1/feed?cursor=0&roots=GC',
+                          '/api/databento/v1/candles/GC?timeframe=M1&limit=5', '/api/databento/v1/candles/SI?timeframe=H1&limit=5', '/api/databento/v1/trades/GC?after=0&limit=5',
+                          '/api/mt5/v1/health', '/api/mt5/v1/quote/XAUUSD'];
+            const always = ['/api/status', '/api/auth/me', '/api/ai/health', '/api/news/v1/health'];
+            for (const p of [...priv, ...always]) {
+              const r = await get(p);
+              const expect401 = owner || always.includes(p);
+              check(expect401 ? r.status === 401 : r.status !== 401, `unauthenticated GET ${p} -> ${r.status}${expect401 ? ' (must be 401)' : ' (public read-only mode)'}`);
+              check(!/DATABENTO_API_KEY=|db-[A-Za-z0-9]{20,}|pbkdf2_sha256\$|scrypt\$|Traceback|\/home\/|\/app\//.test(r.text), `  no secret / stack trace / path in body of ${p}`);
+            }
+            for (const [p, body] of [['/api/alerts', '{}'], ['/api/snapshots', '{}']]) {
+              const r = await get(p, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: base }, body });
+              check(r.status === 401, `unauthenticated POST ${p} -> ${r.status}`);
+            }
+            // WebSocket: an allowed Origin but no session must be refused before any upgrade.
+            const ws = await get('/api/stream', { headers: { Connection: 'Upgrade', Upgrade: 'websocket', 'Sec-WebSocket-Version': '13', 'Sec-WebSocket-Key': 'dGhlIHNhbXBsZSBub25jZQ==', Origin: base } });
+            check(ws.status === 401, `unauthenticated WebSocket /api/stream -> ${ws.status} (never 101)`);
+            // CSRF: login / logout need the app's own Origin.
+            const l1 = await get('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"password":"x"}' });
+            check(l1.status === 403, `login without Origin -> ${l1.status}`);
+            const l2 = await get('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'https://evil.example' }, body: '{"password":"x"}' });
+            check(l2.status === 403, `login from a foreign Origin -> ${l2.status}`);
+            const lo = await get('/api/auth/logout', { method: 'POST' });
+            check(lo.status === 403, `logout without Origin -> ${lo.status}`);
+            const l3 = await get('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: base }, body: '{"password":"probe-wrong-password-not-real"}' });
+            const e3 = (() => { try { return JSON.parse(l3.text).error; } catch { return {}; } })();
+            if (owner) check(l3.status === 401 && e3.message === 'Sign-in failed.', `wrong password -> ${l3.status} "${e3.message}" (generic)`);
+            else check(l3.status === 503 && !/TLUXE_|HASH/.test(l3.text), `login before configuration -> ${l3.status} "${e3.message}" (generic, no variable name)`);
+            const cors = await get('/api/config', { headers: { Origin: 'https://evil.example' } });
+            check(cors.status === 403 && !cors.headers.get('access-control-allow-origin'), `foreign Origin on API -> ${cors.status}, no ACAO`);
+            const root = await get('/');
+            const h = (k) => root.headers.get(k) || '';
+            check(/frame-ancestors 'none'/.test(h('content-security-policy')) && /default-src 'self'/.test(h('content-security-policy')), `CSP: ${h('content-security-policy').slice(0, 90)}…`);
+            check(h('x-content-type-options') === 'nosniff', `X-Content-Type-Options: ${h('x-content-type-options')}`);
+            check(h('referrer-policy') === 'no-referrer', `Referrer-Policy: ${h('referrer-policy')}`);
+            check(h('x-frame-options') === 'DENY', `X-Frame-Options: ${h('x-frame-options')}`);
+            check(/max-age=\d{7,}/.test(h('strict-transport-security')), `HSTS: ${h('strict-transport-security')}`);
+            // Browser: a fresh browser without a session.
+            const b = await chromium.launch();
+            const ctx = await b.newContext();
+            const p = await ctx.newPage();
+            const bad = [];
+            p.on('request', (r) => { if (/localhost|127\.0\.0\.1|:876\d/.test(r.url())) bad.push(r.url()); });
+            p.on('pageerror', (e) => bad.push('pageerror ' + String(e).slice(0, 120)));
+            await p.goto(base + '/#/engines/volume-footprint');
+            await p.waitForTimeout(12000);
+            const signin = await p.locator('form[aria-label="Sign in to TLUXE Trading"]').count();
+            const text = (await p.evaluate(() => document.body.innerText)).replace(/\s+/g, ' ');
+            if (owner) {
+              check(signin === 1, 'fresh browser on a private route -> TLUXE sign-in page');
+              check(!/GCZ6|SIZ6|Volume Footprint/.test(text), 'no private page / market data rendered without a session');
+              check(!/sign up|create account|forgot|google|facebook/i.test(text), 'no signup / social / recovery on the sign-in page');
+            } else console.log(`INFO public mode: sign-in page shown=${signin === 1} (expected false until the owner hash is set)`);
+            check(bad.length === 0, `no localhost requests / page errors ${JSON.stringify(bad).slice(0, 200)}`);
+            const cookies = await ctx.cookies();
+            check(!cookies.some((c) => c.name === 'tluxe_session'), 'no session cookie issued without a sign-in');
+            await b.close();
+            console.log(`\nAUTH PROBE (${owner ? 'OWNER AUTH ACTIVE' : 'PUBLIC MODE'}): ${fails ? `FAIL (${fails})` : 'PASS'}`);
+            process.exit(fails ? 1 : 0);
+          })();
+          JS
+          node auth.cjs
