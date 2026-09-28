@@ -181,7 +181,7 @@ export function VolumeFootprintPage() {
             <strong className={`num fp-${deltaTone(snap?.cvd)}`} data-testid="fp-cvd-card">
               {snap && snap.cvdAvailability !== 'UNAVAILABLE' ? fmtDelta(snap.cvd) : '—'}
             </strong>
-            <span className="smccard__sub">{snap?.cvdAvailability === 'PARTIAL' ? 'unknown volume excluded' : ''}</span>
+            <span className="smccard__sub">{snap?.cvdAvailability === 'PARTIAL' ? 'PARTIAL · unknown volume excluded' : snap?.cvdAvailability === 'FULL' ? 'FULL · every trade classified' : ''}</span>
           </div>
           <div className="panel smccard smccard--state">
             <span className="smccard__k">Data Integrity</span>
