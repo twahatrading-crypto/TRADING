@@ -24,6 +24,13 @@ from .redact import Redactor
 from .symbology import SymbolMap
 from .tape import TradeTape
 
+
+def _utc_ms(ms: int | None) -> str | None:
+    if not ms:
+        return None
+    import datetime as _dt
+    return _dt.datetime.fromtimestamp(ms / 1000, _dt.timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
 # Provider status (shared model, also used by the browser).
 CONNECTING, SYNCING_S, LIVE, DEGRADED_S, STALE, RECONNECTING, UNAVAILABLE, AUTH_ERROR = (
     "CONNECTING", "SYNCING", "LIVE", "DEGRADED", "STALE", "RECONNECTING", "UNAVAILABLE", "AUTH_ERROR")
@@ -511,6 +518,38 @@ class Hub:
                            "liveOnly": self.replay_disabled_reason is not None, "liveOnlyReason": self.replay_disabled_reason, "startRejections": self.start_rejections},
                 "timeMs": now,
             }
+
+    # ------------------------------------------------------------------ status (real-data proof)
+    def status_summary(self, root: str = "GC", *, with_prices: bool = False) -> dict:
+        """What has ACTUALLY been received for one root: active contract, last event time / age, record counts and -
+        only when `with_prices` (token-protected callers, private logs) - the latest real trade and closed OHLCV bar.
+        `verifiedByRealData` is true only after real trade / OHLCV records arrived; configuration alone never counts."""
+        with self.lock:
+            st = self.roots[root]
+            rs = self.root_status(st)
+            now = self.now()
+            last_ms = st.last_event_ns // 1_000_000 if st.last_event_ns else None
+            trade = st.tape.trades[-1] if st.tape and st.tape.trades else None
+            bar = None
+            if st.candles and st.candles.last_closed is not None:
+                bar = st.candles.bars.get(st.candles.last_closed)
+            n_trades, n_bars = int(st.counts.get("trades", 0)), int(st.counts.get("ohlcv", 0))
+            out = {
+                "provider": "Databento", "dataset": DATASET, "plan": self.cfg.plan, "market": "COMEX", "root": root,
+                "subscribed": st.symbol, "stypeIn": st.stype, "activeContract": st.contract, "instrumentId": st.instrument_id,
+                "connection": self.sessions["tape"].state, "status": rs["status"], "freshness": rs["freshness"],
+                "lastEventUtc": _utc_ms(last_ms), "lastEventAgeMs": None if last_ms is None else max(0, now - last_ms),
+                "received": {"trades": n_trades, "ohlcvBars": n_bars},
+                "schemas": {"requested": self.requested_schemas("tape"), "depth": "UNSUPPORTED" if not self.depth_active() else "MBO"},
+                "verifiedByRealData": bool(last_ms and ((n_trades and trade) or (n_bars and bar))),
+                "timeUtc": _utc_ms(now),
+            }
+            if with_prices:
+                out["lastTrade"] = None if trade is None else {"price": trade["price"], "size": trade["size"], "side": trade.get("side"),
+                                                              "timeUtc": _utc_ms(trade["tsEventNs"] // 1_000_000)}
+                out["lastBar"] = None if bar is None else {**{k: bar[k] for k in ("open", "high", "low", "close", "volume")},
+                                                          "timeUtc": _utc_ms(bar["time"] * 1000), "schema": "ohlcv-1m"}
+            return out
 
     # ------------------------------------------------------------------ frames
     def publish(self) -> dict | None:

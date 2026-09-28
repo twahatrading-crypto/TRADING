@@ -74,6 +74,12 @@ def make_handler(cfg: BridgeConfig, hub: Hub, started_ms: int):
         def do_GET(self):  # noqa: N802
             if self.path == "/healthz":  # container liveness probe: no auth, no details
                 return self._json(200, {"ok": True})
+            if urlparse(self.path).path == "/status":
+                # Public real-data proof WITHOUT prices or secrets: contract, last event time / age, record counts.
+                root = (parse_qs(urlparse(self.path).query).get("root") or ["GC"])[0].upper()
+                if root not in ROOTS:
+                    return self._json(404, {"error": {"code": "UNKNOWN_INSTRUMENT", "message": "Supported: GC, SI"}})
+                return self._json(200, hub.status_summary(root))
             if not self._authorised():
                 return self._json(401, {"error": {"code": "UNAUTHORIZED", "message": "Missing or invalid bridge token"}})
             url = urlparse(self.path)
@@ -84,6 +90,11 @@ def make_handler(cfg: BridgeConfig, hub: Hub, started_ms: int):
                     body = hub.health()
                     body["bridge"] = {"version": __version__, "startedAtMs": started_ms, "heartbeatAtMs": hub.now()}
                     return self._json(200, body)
+                if parts == ["v1", "status"]:  # token-protected: also the latest real trade and OHLCV bar
+                    root = (q.get("root") or ["GC"])[0].upper()
+                    if root not in ROOTS:
+                        return self._json(404, {"error": {"code": "UNKNOWN_INSTRUMENT", "message": "Supported: GC, SI"}})
+                    return self._json(200, hub.status_summary(root, with_prices=True))
                 if parts == ["v1", "feed"]:
                     cursor = int((q.get("cursor") or ["0"])[0])
                     roots = [r for r in (q.get("roots") or [""])[0].split(",") if r in ROOTS] or None

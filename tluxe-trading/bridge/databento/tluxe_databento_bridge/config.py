@@ -154,7 +154,8 @@ def from_env(env: dict | None = None) -> BridgeConfig:
         api_key=Secret(key),
         token=Secret(token),
         host=host,
-        port=_int(e, "TLUXE_DB_BRIDGE_PORT", 8766, 1, 65535),
+        # Container (Railway): the platform-assigned PORT wins, so routing and health checks reach the bridge.
+        port=_int(e, "PORT", 8766, 1, 65535) if e.get("TLUXE_CONTAINER") == "1" and (e.get("PORT") or "").strip() else _int(e, "TLUXE_DB_BRIDGE_PORT", 8766, 1, 65535),
         allowed_origins=origins,
         contract_mode=mode,
         plan=plan,

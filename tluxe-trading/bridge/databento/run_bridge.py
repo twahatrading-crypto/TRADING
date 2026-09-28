@@ -7,6 +7,7 @@ import logging
 import os
 import signal
 import sys
+import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -51,6 +52,28 @@ class InstanceLock:
         if self.held:
             self.path.unlink(missing_ok=True)
             self.held = False
+
+
+def _status_log(hub, every_s: float = 60.0) -> None:
+    """Once a minute, write what was ACTUALLY received (contract, last event, last real trade / OHLCV bar) to the
+    service's own log - the operator's real-data proof in the Railway log view. Never the key or the bridge token."""
+    import threading
+
+    def loop() -> None:
+        while True:
+            time.sleep(every_s)
+            try:
+                s = hub.status_summary("GC", with_prices=True)
+                t, b = s.get("lastTrade") or {}, s.get("lastBar") or {}
+                logging.info("GC status: contract=%s status=%s lastEvent=%s ageMs=%s trades=%s ohlcvBars=%s verifiedByRealData=%s "
+                             "lastTrade=%s x%s @%s lastBar[%s] O=%s H=%s L=%s C=%s V=%s",
+                             s["activeContract"], s["status"], s["lastEventUtc"], s["lastEventAgeMs"], s["received"]["trades"],
+                             s["received"]["ohlcvBars"], s["verifiedByRealData"], t.get("price"), t.get("size"), t.get("timeUtc"),
+                             b.get("timeUtc"), b.get("open"), b.get("high"), b.get("low"), b.get("close"), b.get("volume"))
+            except Exception:  # noqa: BLE001 - status logging must never stop the bridge
+                logging.exception("status log failed")
+
+    threading.Thread(target=loop, name="gc-status-log", daemon=True).start()
 
 
 def _alive(pid: int) -> bool:
@@ -98,6 +121,7 @@ def main() -> int:
             logging.error("Cannot listen on %s:%s (%s) - is the port already in use?", cfg.host, cfg.port, exc)
             return EXIT_PORT
         mgr.start()
+        _status_log(mgr.hub)
         logging.info("TLUXE Databento bridge on http://%s:%s · dataset GLBX.MDP3 · plan %s (schemas %s; never mbp-10%s) · mode %s · origins %s", cfg.host, cfg.port, cfg.plan, ", ".join(["trades", "ohlcv-1m"] + (["mbo"] if cfg.depth_plan else [])), "" if cfg.depth_plan else ", never mbo", cfg.contract_mode, ", ".join(cfg.allowed_origins))
         def _stop(*_):  # SIGTERM (container stop / redeploy) -> same clean shutdown as Ctrl+C
             # Once only: a repeated SIGTERM (e.g. sent to the whole process group) must not interrupt the cleanup.
