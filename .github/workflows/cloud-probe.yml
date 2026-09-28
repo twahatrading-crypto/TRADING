@@ -14,7 +14,7 @@ jobs:
     # set MAX_PROBES via the trigger file content if needed
     env:
       BASE: https://trading-production-e1d5.up.railway.app
-      MAX_PROBES: 20
+      MAX_PROBES: 1
     steps:
       - name: Probe splendid-exploration (once)
         shell: bash
@@ -51,3 +51,34 @@ jobs:
             fi
             sleep 60
           done
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Load the live TRADING app in Chromium and read what it shows
+        shell: bash
+        run: |
+          npm init -y >/dev/null && npm i -s playwright@1 >/dev/null && npx playwright install --with-deps chromium >/dev/null 2>&1
+          cat > probe.cjs <<'JS'
+          const { chromium } = require('playwright');
+          (async () => {
+            const base = 'https://trading-production-e1d5.up.railway.app';
+            const b = await chromium.launch(); const p = await b.newPage({ viewport: { width: 1400, height: 900 } });
+            const api = new Set(); const errs = [];
+            p.on('request', (r) => { const u = new URL(r.url()); if (u.pathname.startsWith('/api/')) api.add(u.pathname); if (/:876\d/.test(r.url())) errs.push('LOCALHOST ' + r.url()); });
+            p.on('pageerror', (e) => errs.push(String(e)));
+            await p.goto(base + '/'); await p.waitForTimeout(25000);
+            const text = await p.evaluate(() => document.body.innerText);
+            const pick = (re) => (text.match(re) || [null])[0];
+            const st = await (await p.request.get(base + '/api/databento/status?root=GC')).json();
+            console.log(JSON.stringify({
+              signInShown: /Password/.test(text) && /Sign in/.test(text),
+              databentoStrip: pick(/DATABENTO[^\n]*/), gcStrip: pick(/GC •[^\n]*/),
+              header: text.split('\n').slice(0, 30).join(' | ').slice(0, 900),
+              apiCalls: [...api], problems: errs,
+              gatewayLastTrade: st.lastTrade, gatewayContract: st.activeContract, verifiedByRealData: st.verifiedByRealData,
+            }, null, 1));
+            await p.screenshot({ path: 'app.png' }); await b.close();
+          })();
+          JS
+          node probe.cjs
