@@ -130,6 +130,15 @@ def _parse_end(rng) -> dt.datetime:
     return dt.datetime.fromisoformat(f"{m.group(1)}T{m.group(2) or '00:00:00'}").replace(tzinfo=dt.timezone.utc)
 
 
+_SCHEMA_SEC = {"ohlcv-1m": 60, "ohlcv-1h": 3600, "ohlcv-1d": 86400}
+
+
+def _floor(end: dt.datetime, schema: str) -> dt.datetime:
+    sec = _SCHEMA_SEC[schema]
+    ts = int(end.timestamp())
+    return dt.datetime.fromtimestamp(ts - ts % sec, dt.timezone.utc)
+
+
 class HistoryLoader:
     """Fetches history in a background thread whenever a root resolves to a (new) contract."""
 
@@ -156,7 +165,9 @@ class HistoryLoader:
         try:
             client = self.client_factory()
             end = _parse_end(client.metadata.get_dataset_range(dataset=DATASET))
-            reqs = [(s, end - dt.timedelta(days=days[s]), end) for s in SCHEMAS if days[s] > 0]
+            # Each schema is only available up to its last COMPLETE interval (Databento answers 422
+            # data_schema_not_fully_available otherwise): end ohlcv-1m at the minute, -1h at the hour, -1d at the day.
+            reqs = [(s, _floor(end, s) - dt.timedelta(days=days[s]), _floor(end, s)) for s in SCHEMAS if days[s] > 0]
             cost = 0.0
             for schema, start, stop in reqs:
                 cost += float(client.metadata.get_cost(dataset=DATASET, symbols=[store.contract], schema=schema, stype_in="raw_symbol",

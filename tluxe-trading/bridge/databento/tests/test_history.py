@@ -98,6 +98,20 @@ class TestLoader(unittest.TestCase):
         self.assertEqual([c_[0] for c_ in fake.calls[:3]], ["cost", "cost", "cost"])  # cost estimated BEFORE any download
         self.assertIs(done[0], st)
 
+    def test_each_schema_ends_at_its_last_complete_interval(self):
+        # Production: Databento 422 data_schema_not_fully_available when ohlcv-1h was requested up to 06:46.
+        fake = FakeHistorical({}, end="2026-09-28T06:46:58.829000000Z")
+        ends = {}
+        orig = fake.timeseries.get_range
+
+        def spy(**kw):
+            ends[kw["schema"]] = kw["end"]
+            return orig(**kw)
+
+        fake.timeseries.get_range = spy
+        HistoryLoader(cfg(TLUXE_DB_HISTORY="1"), lambda s: None, client_factory=lambda: fake).load(self.store())
+        self.assertEqual(ends, {"ohlcv-1m": "2026-09-28T06:46:00", "ohlcv-1h": "2026-09-28T06:00:00", "ohlcv-1d": "2026-09-28T00:00:00"})
+
     def test_cost_guard_blocks_download(self):
         fake = FakeHistorical({}, cost=5.0)
         st = HistoryLoader(cfg(TLUXE_DB_HISTORY="1", TLUXE_DB_HIST_MAX_COST_USD="1"), lambda s: None, client_factory=lambda: fake).load(self.store())

@@ -93,44 +93,47 @@ jobs:
           PY
           python3 check.py
   frontend:
+    needs: gcsi  # after the GC/SI job has seen the new deployment's history settle
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
-      - name: Load the live TRADING app in Chromium and read what it shows
+      - name: GC -> SI -> GC in fresh browser contexts; every Databento engine page; contamination check
         shell: bash
         run: |
           npm init -y >/dev/null && npm i -s playwright@1 >/dev/null && npx playwright install --with-deps chromium >/dev/null 2>&1
           cat > probe.cjs <<'JS'
           const { chromium } = require('playwright');
+          const base = 'https://trading-production-e1d5.up.railway.app';
+          const pages = ['/', '/engines/support-resistance', '/engines/liquidity', '/engines/order-blocks', '/engines/high-low-reversal',
+                         '/engines/high-low-engine', '/engines/smc', '/engines/volume-profile', '/engines/volume-footprint', '/engines/liquidity-heatmap'];
           (async () => {
-            const base = 'https://trading-production-e1d5.up.railway.app';
-            const b = await chromium.launch(); const p = await b.newPage({ viewport: { width: 1400, height: 900 } });
-            const api = new Set(); const errs = [];
-            p.on('request', (r) => { const u = new URL(r.url()); if (u.pathname.startsWith('/api/')) api.add(u.pathname); if (/:876\d/.test(r.url())) errs.push('LOCALHOST ' + r.url()); });
-            p.on('pageerror', (e) => errs.push(String(e)));
-            await p.goto(base + '/'); await p.waitForTimeout(25000);
-            const text = await p.evaluate(() => document.body.innerText);
-            const pick = (re) => (text.match(re) || [null])[0];
-            const st = await (await p.request.get(base + '/api/databento/status?root=GC')).json();
-            console.log(JSON.stringify({
-              signInShown: /Password/.test(text) && /Sign in/.test(text),
-              databentoStrip: pick(/DATABENTO[^\n]*/), gcStrip: pick(/GC •[^\n]*/),
-              header: text.split('\n').slice(0, 30).join(' | ').slice(0, 900),
-              apiCalls: [...api], problems: errs,
-              gatewayLastTrade: st.lastTrade, gatewayContract: st.activeContract, verifiedByRealData: st.verifiedByRealData,
-            }, null, 1));
-            // Settings: two independent provider cards; MT5 relay answer (isolation: MT5 down must not affect GC).
-            await p.goto(base + '/#/settings'); await p.waitForTimeout(12000);
-            const st2 = await p.evaluate(() => document.body.innerText);
-            const card = (t, n) => { const i = st2.indexOf(t); return i < 0 ? null : st2.slice(i, i + n).replace(/\n+/g, ' | '); };
-            const mt5 = await p.request.get(base + '/api/mt5/v1/quote/XAUUSD');
-            const st3 = await (await p.request.get(base + '/api/databento/status?root=GC')).json();
-            console.log(JSON.stringify({
-              mt5CloudCard: card('MT5 CLOUD', 420), databentoCard: card('DATABENTO', 700),
-              mt5RelayQuote: { status: mt5.status(), body: (await mt5.text()).slice(0, 200) },
-              gcWhileMt5Down: { verifiedByRealData: st3.verifiedByRealData, contract: st3.activeContract, lastEventUtc: st3.lastEventUtc, ageMs: st3.lastEventAgeMs },
-              localhostRequests: errs.filter((e) => e.startsWith('LOCALHOST')).length,
-            }, null, 1));
+            const b = await chromium.launch();
+            const errs = [];
+            for (const inst of ['GC', 'SI', 'GC']) {
+              // A fresh context = closing and reopening the browser (no state carried over).
+              const ctx = await b.newContext({ viewport: { width: 1400, height: 900 } });
+              await ctx.addInitScript((i) => { try { localStorage.setItem('tluxe.instrument.v1', i); } catch {} }, inst);
+              const p = await ctx.newPage();
+              p.on('request', (r) => { if (/:876\d|localhost|127\.0\.0\.1/.test(r.url())) errs.push('LOCALHOST ' + r.url()); });
+              p.on('pageerror', (e) => errs.push(String(e).slice(0, 200)));
+              const st = await (await p.request.get(base + `/api/databento/status?root=${inst}`)).json();
+              const other = inst === 'GC' ? 'SI' : 'GC';
+              const otherContract = (await (await p.request.get(base + `/api/databento/status?root=${other}`)).json()).activeContract;
+              console.log(`\n######## ${inst}  contract=${st.activeContract}  lastTrade=${JSON.stringify(st.lastTrade)}`);
+              for (const path of pages) {
+                await p.goto(base + '/#' + path);
+                await p.waitForTimeout(path === '/' ? 20000 : 15000);
+                const t = await p.evaluate(() => (document.querySelector('main') || document.body).innerText);
+                const head = await p.evaluate(() => (document.querySelector('header') || document.body).innerText.slice(0, 400));
+                const flat = t.replace(/\s+/g, ' ');
+                const contam = otherContract && (flat.includes(otherContract) || head.includes(otherContract));
+                console.log(`--- ${inst} ${path}  header: ${head.replace(/\s+/g, ' ').slice(0, 220)}`);
+                console.log(`    has ${st.activeContract}: ${flat.includes(st.activeContract) || head.includes(st.activeContract)}  shows ${other} contract ${otherContract}: ${contam}`);
+                console.log(`    ${flat.slice(0, 900)}`);
+              }
+              await ctx.close();
+            }
+            console.log('\nPROBLEMS', JSON.stringify(errs));
             await b.close();
           })();
           JS
