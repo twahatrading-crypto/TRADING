@@ -75,7 +75,11 @@ per-process.
   * `TLUXE_NEWS_URL`, `TLUXE_NEWS_TOKEN`
 * MT5 link: `TLUXE_MT5_BRIDGE_TOKEN_SHA256` (comma list for rotation; optional `@expiry`)
 * Optional: `TLUXE_SESSION_TTL_HOURS`, `LOG_FORMAT`, `LOG_LEVEL`
-* Railway sets `PORT`. The Dockerfile sets `TLUXE_STATIC_DIR` and `TLUXE_GATEWAY_HOST`.
+* Railway sets `PORT`, which always wins in production. The gateway listens on `0.0.0.0:$PORT`.
+* `PUBLIC_APP_URL` defaults to `https://$RAILWAY_PUBLIC_DOMAIN`, and a domain without `https://` is accepted.
+* A start-up configuration error names **every** missing variable in one log line and exits with code 2. Authentication is never optional in production.
+* A bad optional upstream URL shows as ERROR in `/api/status`; it never crashes the gateway.
+* The gateway retries the database for about 2 minutes while PostgreSQL is still starting.
 
 **tluxe-ai**
 * `OPENAI_API_KEY`, `TLUXE_AI_TOKEN`

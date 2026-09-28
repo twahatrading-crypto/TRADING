@@ -63,10 +63,12 @@ class Upstream:
     name: str
     url: str
     token: Secret = field(repr=False)
+    # A misconfigured OPTIONAL upstream never stops the gateway: it is reported as ERROR in /api/status instead.
+    problem: str = ""
 
     @property
     def configured(self) -> bool:
-        return bool(self.url) and bool(self.token)
+        return bool(self.url) and bool(self.token) and not self.problem
 
 
 @dataclass(frozen=True)
@@ -128,6 +130,8 @@ def _url(raw: str, key: str, https_only: bool) -> str:
     u = raw.strip().rstrip("/")
     if not u:
         return ""
+    if "://" not in u and https_only:
+        u = "https://" + u  # Railway shows domains without a scheme (xyz.up.railway.app)
     p = urlparse(u)
     if p.scheme not in ("http", "https") or not p.netloc:
         raise ConfigError(f"{key} must be an absolute http(s) URL")
@@ -136,11 +140,22 @@ def _url(raw: str, key: str, https_only: bool) -> str:
     return u
 
 
-def _internal_url(raw: str, key: str) -> str:
+def _internal_url(raw: str, key: str) -> tuple[str, str]:
+    """(url, problem). Bare `host[:port]` (e.g. a ${{svc.RAILWAY_PRIVATE_DOMAIN}} reference) becomes http://host[:port].
+    A bad value is reported, never fatal - an optional upstream must not crash the gateway."""
     u = raw.strip().rstrip("/")
-    if u and urlparse(u).scheme not in ("http", "https"):
-        raise ConfigError(f"{key} must be an http(s) URL (Railway private network, e.g. http://tluxe-ai.railway.internal:8767)")
-    return u
+    if not u:
+        return "", ""
+    if "://" not in u:
+        u = "http://" + u
+    p = urlparse(u)
+    if p.scheme not in ("http", "https") or not p.hostname or "${{" in u:
+        return "", f"{key} is not a valid http(s) URL (e.g. http://tluxe-ai.railway.internal:8080)"
+    try:
+        p.port
+    except ValueError:
+        return "", f"{key} has an invalid port"
+    return u, ""
 
 
 def _mt5_keys(raw: str) -> tuple[Mt5BridgeKey, ...]:
@@ -162,55 +177,82 @@ def _mt5_keys(raw: str) -> tuple[Mt5BridgeKey, ...]:
 
 
 def from_env(env: dict | None = None) -> GatewayConfig:
+    """Validate everything first and report EVERY problem at once (one redeploy fixes them all)."""
     e = dict(os.environ if env is None else env)
+    errors: list[str] = []
+
+    def check(fn, *a, default=None):
+        try:
+            return fn(*a)
+        except ConfigError as exc:
+            errors.append(str(exc))
+            return default
+
     mode = (e.get("TLUXE_ENV") or "development").strip().lower()
     if mode not in ("production", "development"):
         raise ConfigError("TLUXE_ENV must be 'production' or 'development'")
     prod = mode == "production"
-    public_app_url = _url(e.get("PUBLIC_APP_URL") or "", "PUBLIC_APP_URL", prod)
-    api_public_url = _url(e.get("API_PUBLIC_URL") or public_app_url, "API_PUBLIC_URL", prod)
+    # Railway injects RAILWAY_PUBLIC_DOMAIN once a public domain is generated: a sane default for the app URL.
+    raw_public = e.get("PUBLIC_APP_URL") or (e.get("RAILWAY_PUBLIC_DOMAIN") if prod else "") or ""
+    public_app_url = check(_url, raw_public, "PUBLIC_APP_URL", prod, default="")
+    api_public_url = check(_url, e.get("API_PUBLIC_URL") or public_app_url or "", "API_PUBLIC_URL", prod, default="")
     raw_origins = (e.get("ALLOWED_ORIGINS") or "").strip()
     origins = tuple(o.strip().rstrip("/") for o in raw_origins.split(",") if o.strip()) if raw_origins else ()
     if prod:
-        if not public_app_url:
-            raise ConfigError("PUBLIC_APP_URL is required in production (the Railway https domain or your custom domain)")
-        if not origins:
-            origins = (public_app_url,)
+        if not public_app_url and not errors:
+            errors.append("PUBLIC_APP_URL is required in production (the Railway https domain or your custom domain)")
+        origins = tuple(o if "://" in o or o == "*" else "https://" + o for o in origins) or ((public_app_url,) if public_app_url else ())
         for o in origins:
             p = urlparse(o)
             if o == "*" or "*" in o or p.scheme != "https" or not p.netloc or p.hostname in _LOCAL_HOSTS or p.path not in ("", "/"):
-                raise ConfigError("ALLOWED_ORIGINS in production must be exact https origins (never *, never localhost)")
-        if not e.get("DATABASE_URL"):
-            raise ConfigError("DATABASE_URL is required in production (Railway PostgreSQL)")
+                errors.append("ALLOWED_ORIGINS in production must be exact https origins (never *, never localhost)")
+                break
+        if not (e.get("DATABASE_URL") or "").strip():
+            errors.append("DATABASE_URL is required in production (reference the Railway PostgreSQL service: ${{Postgres.DATABASE_URL}})")
         if not _HASH_RE.match((e.get("TLUXE_OWNER_PASSWORD_HASH") or "").strip()):
-            raise ConfigError("TLUXE_OWNER_PASSWORD_HASH is required in production (python -m tluxe_gateway.hashpw)")
+            errors.append("TLUXE_OWNER_PASSWORD_HASH is required in production and must be a scrypt hash (python -m tluxe_gateway.hashpw)")
     else:
         origins = origins or DEV_ORIGINS
         for o in origins:
             if o == "*" or "*" in o:
-                raise ConfigError("ALLOWED_ORIGINS must list exact origins (never *)")
+                errors.append("ALLOWED_ORIGINS must list exact origins (never *)")
+                break
     pw_hash = (e.get("TLUXE_OWNER_PASSWORD_HASH") or "").strip()
-    if pw_hash and not _HASH_RE.match(pw_hash):
-        raise ConfigError("TLUXE_OWNER_PASSWORD_HASH has an invalid format (python -m tluxe_gateway.hashpw)")
-    port_default = int(e["PORT"]) if (e.get("PORT") or "").isdigit() else DEV_PORT
-    host = (e.get("TLUXE_GATEWAY_HOST") or ("::" if prod else "127.0.0.1")).strip()
+    if pw_hash and not _HASH_RE.match(pw_hash) and not prod:
+        errors.append("TLUXE_OWNER_PASSWORD_HASH has an invalid format (python -m tluxe_gateway.hashpw)")
+    # Railway assigns PORT: it always wins in production, so a stale TLUXE_GATEWAY_PORT can never mis-bind the service.
+    railway_port = (e.get("PORT") or "").strip()
+    if prod and railway_port:
+        port = check(_int, {"PORT": railway_port}, "PORT", DEV_PORT, 1, 65535, default=0)
+    else:
+        port = check(_int, e, "TLUXE_GATEWAY_PORT", int(railway_port) if railway_port.isdigit() else DEV_PORT, 1, 65535, default=0)
+    host = (e.get("TLUXE_GATEWAY_HOST") or ("0.0.0.0" if prod else "127.0.0.1")).strip()
     log_format = (e.get("LOG_FORMAT") or ("json" if prod else "text")).strip().lower()
     if log_format not in ("json", "text"):
-        raise ConfigError("LOG_FORMAT must be json or text")
+        errors.append("LOG_FORMAT must be json or text")
+    ttl_h = check(_int, e, "TLUXE_SESSION_TTL_HOURS", 12, 1, 24 * 30, default=12)
+    mt5_keys = check(_mt5_keys, e.get("TLUXE_MT5_BRIDGE_TOKEN_SHA256") or "", default=())
+    if errors:
+        raise ConfigError("; ".join(dict.fromkeys(errors)))
+
+    def upstream(name: str, url_key: str, token_key: str) -> Upstream:
+        url, problem = _internal_url(e.get(url_key) or "", url_key)
+        return Upstream(name, url, Secret((e.get(token_key) or "").strip()), problem)
+
     return GatewayConfig(
         env=mode,
         host=host,
-        port=_int(e, "TLUXE_GATEWAY_PORT", port_default, 1, 65535),
+        port=port,
         public_app_url=public_app_url,
         api_public_url=api_public_url,
         allowed_origins=origins,
         database_url=Secret((e.get("DATABASE_URL") or "").strip()),
         owner_password_hash=Secret(pw_hash),
-        session_ttl_s=_int(e, "TLUXE_SESSION_TTL_HOURS", 12, 1, 24 * 30) * 3600,
-        ai=Upstream("ai", _internal_url(e.get("TLUXE_AI_URL") or "", "TLUXE_AI_URL"), Secret((e.get("TLUXE_AI_TOKEN") or "").strip())),
-        databento=Upstream("databento", _internal_url(e.get("TLUXE_DATABENTO_URL") or "", "TLUXE_DATABENTO_URL"), Secret((e.get("TLUXE_DB_BRIDGE_TOKEN") or "").strip())),
-        news=Upstream("news", _internal_url(e.get("TLUXE_NEWS_URL") or "", "TLUXE_NEWS_URL"), Secret((e.get("TLUXE_NEWS_TOKEN") or "").strip())),
-        mt5_bridge_keys=_mt5_keys(e.get("TLUXE_MT5_BRIDGE_TOKEN_SHA256") or ""),
+        session_ttl_s=ttl_h * 3600,
+        ai=upstream("ai", "TLUXE_AI_URL", "TLUXE_AI_TOKEN"),
+        databento=upstream("databento", "TLUXE_DATABENTO_URL", "TLUXE_DB_BRIDGE_TOKEN"),
+        news=upstream("news", "TLUXE_NEWS_URL", "TLUXE_NEWS_TOKEN"),
+        mt5_bridge_keys=mt5_keys,
         static_dir=(e.get("TLUXE_STATIC_DIR") or "").strip(),
         log_format=log_format,
     )

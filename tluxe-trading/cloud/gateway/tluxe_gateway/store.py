@@ -113,11 +113,28 @@ class PgStore:
         self.dsn = dsn
         self.pool = None
 
-    async def open(self) -> None:
+    async def open(self, attempts: int = 6, wait_s: float = 15.0) -> None:
+        """Connect, retrying while the database is still starting / private networking is coming up (a fresh Railway
+        deploy). Gives up after ~attempts x wait_s and raises - Railway then restarts the service. The DSN is never logged."""
+        import asyncio
+
         from psycopg_pool import AsyncConnectionPool
 
-        self.pool = AsyncConnectionPool(self.dsn, min_size=1, max_size=5, open=False, kwargs={"autocommit": True, "application_name": "tluxe-gateway"})
-        await self.pool.open(wait=True, timeout=30)
+        last: Exception | None = None
+        for attempt in range(1, attempts + 1):
+            self.pool = AsyncConnectionPool(self.dsn, min_size=1, max_size=5, open=False, kwargs={"autocommit": True, "application_name": "tluxe-gateway"})
+            try:
+                await self.pool.open(wait=True, timeout=wait_s)
+                if attempt > 1:
+                    log.info("database reachable after %d attempts", attempt)
+                return
+            except Exception as exc:  # noqa: BLE001
+                last = exc
+                await self.pool.close()
+                log.warning("database not reachable yet (attempt %d/%d: %s) - retrying", attempt, attempts, type(exc).__name__)
+                if attempt < attempts:
+                    await asyncio.sleep(min(5.0, wait_s))
+        raise RuntimeError(f"PostgreSQL unreachable after {attempts} attempts ({type(last).__name__}) - check DATABASE_URL") from None
 
     async def close(self) -> None:
         if self.pool is not None:

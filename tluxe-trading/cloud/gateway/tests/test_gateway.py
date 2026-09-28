@@ -57,12 +57,38 @@ class TestConfig(unittest.TestCase):
 
     def test_production_has_no_localhost_dependency(self):
         c = from_env(prod_env(TLUXE_AI_URL="http://tluxe-ai.railway.internal:8767", TLUXE_AI_TOKEN=AI_TOKEN))
-        self.assertEqual(c.host, "::")  # Railway private networking is IPv6
+        self.assertEqual(c.host, "0.0.0.0")  # Railway public networking: 0.0.0.0 on $PORT
         self.assertTrue(c.cookie_secure)
         self.assertEqual(c.log_format, "json")
         for o in c.allowed_origins:
             self.assertNotIn("localhost", o)
             self.assertNotIn("127.0.0.1", o)
+
+    def test_railway_crash_causes_are_handled(self):
+        # Every missing required variable is reported in ONE message (one redeploy fixes them all).
+        with self.assertRaises(ConfigError) as cm:
+            from_env({"TLUXE_ENV": "production", "PORT": "8080"})
+        msg = str(cm.exception)
+        for key in ("PUBLIC_APP_URL", "DATABASE_URL", "TLUXE_OWNER_PASSWORD_HASH"):
+            self.assertIn(key, msg)
+        # Railway shows domains without a scheme; RAILWAY_PUBLIC_DOMAIN is a fallback.
+        self.assertEqual(from_env(prod_env(PUBLIC_APP_URL="tluxe.example.app", ALLOWED_ORIGINS="tluxe.example.app")).allowed_origins, (APP,))
+        env = prod_env()
+        env.pop("PUBLIC_APP_URL")
+        env.pop("ALLOWED_ORIGINS", None)
+        self.assertEqual(from_env({**env, "RAILWAY_PUBLIC_DOMAIN": "tluxe.example.app"}).public_app_url, APP)
+        # $PORT always wins in production and the gateway binds 0.0.0.0.
+        c = from_env(prod_env(PORT="7123", TLUXE_GATEWAY_PORT="8780"))
+        self.assertEqual((c.host, c.port), ("0.0.0.0", 7123))
+        # A bare private hostname works; a broken optional upstream is reported, never fatal.
+        self.assertEqual(from_env(prod_env(TLUXE_AI_URL="tluxe-ai.railway.internal:8080", TLUXE_AI_TOKEN=AI_TOKEN)).ai.url, "http://tluxe-ai.railway.internal:8080")
+        bad = from_env(prod_env(TLUXE_AI_URL="http://${{tluxe-ai.RAILWAY_PRIVATE_DOMAIN}}", TLUXE_AI_TOKEN=AI_TOKEN)).ai
+        self.assertFalse(bad.configured)
+        self.assertIn("TLUXE_AI_URL", bad.problem)
+        self.assertNotIn(AI_TOKEN, bad.problem)
+        # Authentication stays mandatory: no hash -> no start, whatever else is set.
+        with self.assertRaises(ConfigError):
+            from_env(prod_env(TLUXE_OWNER_PASSWORD_HASH=""))
 
     def test_development_keeps_localhost(self):
         c = from_env(dev_env())
@@ -567,6 +593,20 @@ class TestPostgres(unittest.IsolatedAsyncioTestCase):
             await store2.retention()
         finally:
             await client.close()
+
+
+class TestDatabaseStartup(unittest.IsolatedAsyncioTestCase):
+    async def test_unreachable_database_retries_then_fails_without_leaking_the_dsn(self):
+        from tluxe_gateway.store import PgStore
+
+        dsn = "postgresql://tluxe:secretpw123@127.0.0.1:1/tluxe"  # nothing listens on port 1
+        store = PgStore(dsn)
+        with self.assertLogs("tluxe.gateway.store", level="WARNING") as logs, self.assertRaises(RuntimeError) as cm:
+            await store.open(attempts=2, wait_s=0.5)
+        self.assertIn("after 2 attempts", str(cm.exception))
+        self.assertEqual(len(logs.records), 2)
+        for text in [str(cm.exception)] + logs.output:
+            self.assertNotIn("secretpw123", text)
 
 
 class TestNoTradingSurface(unittest.TestCase):

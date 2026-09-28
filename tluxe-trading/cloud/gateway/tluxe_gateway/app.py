@@ -71,6 +71,8 @@ def _set_cookie(resp: web.StreamResponse, cfg: GatewayConfig, sid: str) -> None:
 
 async def _upstream_get(app: web.Application, up: Upstream, path: str, timeout: float = 8.0):
     """GET an internal service with its server-side token. Returns (status, json | None, error text | None)."""
+    if up.problem:
+        return None, None, f"{up.name} service misconfigured: {up.problem}"
     if not up.configured:
         return None, None, f"{up.name} service not configured"
     try:
@@ -246,7 +248,7 @@ async def ai_health(request: web.Request) -> web.Response:
 async def ai_chat(request: web.Request) -> web.Response:
     up = request.app[K_CFG].ai
     if not up.configured:
-        return _err(503, "NOT_CONFIGURED", "TLUXE AI service is not configured.")
+        return _err(503, "NOT_CONFIGURED", f"TLUXE AI service is misconfigured: {up.problem}" if up.problem else "TLUXE AI service is not configured.")
     if request.content_length is None or request.content_length > MAX_JSON:
         return _err(413, "BODY_TOO_LARGE", "Request too large.")
     raw = await request.read()
@@ -326,6 +328,12 @@ async def compute_status(app: web.Application) -> dict:
     out["databento"] = databento_state(h if s == 200 else None, cfg.databento.configured, err or (None if s == 200 else f"HTTP {s}"), now)
     s, h, err = await _upstream_get(app, cfg.news, "/v1/health", 6)
     out["news"] = news_state(h if s == 200 else None, cfg.news.configured, err or (None if s == 200 else f"HTTP {s}"))
+    # A misconfigured upstream is a real ERROR (never "not connected", never LIVE).
+    for key, up in (("ai", cfg.ai), ("databento", cfg.databento), ("news", cfg.news)):
+        if up.problem:
+            out[key] = comp("ERROR", up.problem)
+    if cfg.ai.problem:
+        out["openai"] = comp("ERROR", "TLUXE AI service misconfigured on the gateway.")
     link = relay.status()
     if not cfg.mt5_bridge_keys:
         link = {**link, "connected": False, "detail": "No MT5 bridge token hash configured (TLUXE_MT5_BRIDGE_TOKEN_SHA256)."}
