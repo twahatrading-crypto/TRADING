@@ -1,12 +1,13 @@
 import { Bell, ChevronDown, ChevronUp, Flame, LineChart, Play, SlidersHorizontal } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+
 import { useServices } from '../app/servicesContext';
 import { UPCOMING_WINDOW_MS } from '../config/sessions';
 import { tickSizeOf } from '../config/instruments';
 import { DEFAULT_HEATMAP_VIEW, type HeatmapViewSettings } from '../engines/orderFlow/config';
 import { rangeProfile } from '../engines/orderFlow/engine';
 import type { OrderFlowReplay } from '../engines/orderFlow/replay';
-import type { FeedStatus, OrderFlowEvent } from '../engines/orderFlow/types';
+import type { FeedStatus, OrderFlowEvent, OrderFlowMsg } from '../engines/orderFlow/types';
 import { useActiveInstrument, useMarket } from '../hooks/useMarket';
 import { useOptionalStore } from '../hooks/useOptionalStore';
 import { usePersistentState } from '../hooks/usePersistentState';
@@ -17,6 +18,7 @@ import { getSessionState } from '../utils/sessions';
 import { HeatmapPanel } from '../components/orderFlow/HeatmapPanel';
 import type { HeatmapView } from '../components/orderFlow/HeatmapView';
 import type { Viewport } from '../components/orderFlow/heatmapMath';
+import { DOT_AGGREGATIONS, latestTrade, type DotAggregation, type TradeSource } from '../components/orderFlow/tradeDots';
 import { BookPanel, CvdPanel, EventsPanel, Pill, ProfilePanel, SettingsPanel } from '../components/orderFlow/OrderFlowPanels';
 import { capLabel } from '../components/databento/capabilities';
 import '../components/sr/sr.css';
@@ -40,6 +42,8 @@ interface OfUi {
 }
 const DEFAULT_OF_UI: OfUi = { heatmap: true, cvd: true, cob: true, svp: true };
 const isUi = (v: unknown): v is OfUi => !!v && typeof v === 'object' && ['heatmap', 'cvd', 'cob', 'svp'].every((k) => typeof (v as Record<string, unknown>)[k] === 'boolean');
+const isDotAgg = (v: unknown): v is DotAggregation => DOT_AGGREGATIONS.includes(v as DotAggregation);
+const dotAggLabel = (v: DotAggregation) => (v === 'auto' ? 'AUTO' : v >= 1000 ? `${v / 1000} sec` : `${v} ms`);
 const TIME_FRAMES: [number, string][] = [
   [250, 'Real-time · 0.25s'],
   [500, 'Real-time · 0.5s'],
@@ -114,6 +118,15 @@ function Workspace() {
   const [profileMode, setProfileMode] = useState<'session' | 'visible'>('session');
   useEffect(() => () => replay?.dispose(), [replay]);
   const replayCursor = useOptionalStore(replay?.store, (s) => s.cursor, 0);
+  const [dotAgg, setDotAgg] = usePersistentState<DotAggregation>('tluxe.orderflow.dots.v1', 'auto', isDotAgg);
+  /** The messages the replay was built from (same list, same order) - the chart draws its trades up to the cursor. */
+  const replayMsgs = useRef<readonly OrderFlowMsg[]>([]);
+  /** Raw accepted messages, READ ONLY: the chart places every trade at its own exchange time (display only). */
+  const tape = useCallback((): TradeSource | null => {
+    if (replay) return { msgs: replayMsgs.current, count: replay.store.getState().cursor };
+    const msgs = orderFlow.recording();
+    return { msgs, count: msgs.length };
+  }, [replay, orderFlow]);
 
   const engine = useCallback(() => (replay ? replay.engine : orderFlow.engine()), [replay, orderFlow]);
   const version = replay ? replayCursor : st.version;
@@ -131,8 +144,10 @@ function Workspace() {
   const tradeStatus = replayStatus ?? st.trade.status;
   const priceStatus: FeedStatus = connection === 'LIVE' ? 'LIVE' : !priceProvider ? 'DATA_UNAVAILABLE' : connection === 'CONNECTING' ? 'CONNECTING' : connection === 'DELAYED' ? 'STALE' : 'DISCONNECTED';
   const book = data.book;
-  const lastTradeLive = tradeStatus === 'LIVE' && data.lastTrade;
-  const last = lastTradeLive ? data.lastTrade!.price : quote.last;
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- recomputed on every engine version
+  const latest = useMemo(() => latestTrade(tape()), [tape, version]);
+  const lastTradeLive = tradeStatus === 'LIVE' && (latest ?? data.lastTrade);
+  const last = lastTradeLive ? (latest ?? data.lastTrade)!.price : quote.last;
   const bid = book?.bestBid ?? quote.bid;
   const ask = book?.bestAsk ?? quote.ask;
   const session = def.tradingHours && def.tradingHours !== '24/7' ? getSessionState(def.tradingHours, now, UPCOMING_WINDOW_MS) : null;
@@ -147,7 +162,10 @@ function Workspace() {
   const dbCaps = (dbFeed?.health?.instruments as Record<string, { capabilities?: Record<string, string> } | undefined> | undefined)?.[def.id]?.capabilities ?? null;
   const futures = instruments.list.filter((x) => x.kind === 'future' && x.exchange === 'COMEX');
   const pickable = futures.some((x) => x.id === def.id) ? futures : [def, ...futures];
-  const startReplay = () => setReplay(orderFlow.createReplay());
+  const startReplay = () => {
+    replayMsgs.current = [...orderFlow.recording()];
+    setReplay(orderFlow.createReplay());
+  };
   const exitReplay = () => {
     replay?.dispose();
     setReplay(null);
@@ -203,6 +221,12 @@ function Workspace() {
         <span className="ofctl__sep" aria-hidden="true" />
         <Toggle label="Heatmap" on={ui.heatmap} onChange={(v) => setU('heatmap', v)} disabled={!depthAvailable} note="DATA UNAVAILABLE" />
         <Toggle label="Volume Dots" on={view.showTrades} onChange={(v) => setView({ ...view, showTrades: v })} />
+        <label className="ofsel ofsel--sm" title="Display aggregation of the executed-volume dots and price trace only - CVD, SVP, events and the raw trades are unchanged">
+          <span>Trade agg.</span>
+          <select value={String(dotAgg)} onChange={(e) => setDotAgg(e.target.value === 'auto' ? 'auto' : (Number(e.target.value) as DotAggregation))} aria-label="Trade aggregation" data-testid="of-dot-agg">
+            {DOT_AGGREGATIONS.map((v) => <option key={v} value={String(v)}>{dotAggLabel(v)}</option>)}
+          </select>
+        </label>
         <Toggle label="CVD" on={ui.cvd} onChange={(v) => setU('cvd', v)} />
         <Toggle label="COB" on={ui.cob} onChange={(v) => setU('cob', v)} />
         <Toggle label="SVP" on={ui.svp} onChange={(v) => setU('svp', v)} />
@@ -257,6 +281,8 @@ function Workspace() {
           depthAvailable={depthAvailable}
           showHeatmap={ui.heatmap}
           tradeSource={st.trade.provider}
+          tape={tape}
+          dotAggregation={dotAgg}
         />
         {ui.cob && <BookPanel className={cls('dom')} data={data} d={d} depthStatus={depthStatus} depthDetail={st.depth.detail} />}
         {ui.svp && <ProfilePanel className={cls('profile')} session={data.profile} visible={visibleProfile} mode={profileMode} onMode={setProfileMode} d={d} tradeStatus={tradeStatus} tradeDetail={st.trade.detail} aggressor={st.capabilities.aggressorSide} />}

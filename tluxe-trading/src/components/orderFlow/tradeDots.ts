@@ -1,0 +1,274 @@
+import type { Aggressor, OrderFlowMsg } from '../../engines/orderFlow/types';
+
+/* ============================================================================
+ * DISPLAY-ONLY aggregation of executed trades for the main order-flow chart.
+ *
+ * The chart draws REAL executed trades, but never one circle per print: prints are collapsed into
+ * deterministic display buckets (time bucket × price band) so a burst of prints at nearly the same
+ * time / price reads as ONE bubble instead of a vertical wall. Nothing here writes anywhere:
+ *   - the raw messages (the order-flow recording) are read, never mutated;
+ *   - the engine (CVD, SVP, events, columns) never sees this module;
+ *   - every quantity is summed exactly (buy / sell / unknown kept apart, UNKNOWN never becomes a side).
+ * Trades are placed at their own EXCHANGE time (a late-delivered backlog lands where it happened,
+ * not in the bucket that happened to be open when it arrived).
+ * ========================================================================== */
+
+/** One executed trade as the chart sees it (exchange time, price in ticks, exact size, provider aggressor). */
+export interface DisplayTrade {
+  t: number;
+  tick: number;
+  size: number;
+  side: Aggressor;
+}
+
+/** A display bucket: exact sums of the real trades it contains. */
+export interface DotBucket {
+  /** Bucket start (exchange ms) and width. */
+  t: number;
+  ms: number;
+  /** Lowest tick of the price band and its height in ticks. */
+  band: number;
+  bandTicks: number;
+  /** Volume-weighted price of the bucket, in ticks (bubble position). */
+  vwapTick: number;
+  buy: number;
+  sell: number;
+  unknown: number;
+  total: number;
+  count: number;
+  first: number;
+  last: number;
+}
+
+/** OHLC of the real trade prices in one time bucket (ticks) - the price trace. */
+export interface PriceBar {
+  t: number;
+  o: number;
+  h: number;
+  l: number;
+  c: number;
+}
+
+export type Dominance = 'BUY' | 'SELL' | 'MIXED' | 'UNKNOWN';
+
+/** User choice for the display bucket. AUTO picks from DOT_BUCKETS_MS by pixel width and density. */
+export type DotAggregation = 'auto' | 100 | 250 | 500 | 1000;
+export const DOT_AGGREGATIONS: readonly DotAggregation[] = ['auto', 100, 250, 500, 1000];
+export const DOT_BUCKETS_MS = [100, 250, 500, 1000, 2000, 5000, 10_000, 15_000, 30_000, 60_000, 120_000, 300_000] as const;
+/** Minimum width of a display bucket on screen in AUTO (px). */
+export const AUTO_MIN_BUCKET_PX = 7;
+/** AUTO: at most roughly one filled bucket per this many px of plot width. */
+export const AUTO_PX_PER_BUCKET = 5;
+/** Share of the known (buy + sell) volume one side needs to colour the bubble; below = MIXED. */
+export const DOMINANCE_MIN = 0.2;
+
+/** Dominant side of a bucket. UNKNOWN when unknown volume is at least the known volume. */
+export function dominance(b: { buy: number; sell: number; unknown: number }): Dominance {
+  const known = b.buy + b.sell;
+  if (b.unknown >= known) return 'UNKNOWN';
+  const d = (b.buy - b.sell) / known;
+  if (Math.abs(d) < DOMINANCE_MIN) return 'MIXED';
+  return d > 0 ? 'BUY' : 'SELL';
+}
+
+/**
+ * AUTO display bucket: the smallest bucket that is at least AUTO_MIN_BUCKET_PX wide at the current zoom and
+ * whose count of filled time buckets fits the plot width (dense tape -> coarser buckets). Deterministic.
+ */
+export function autoBucketMs(spanMs: number, plotPx: number, trades: readonly DisplayTrade[], from = 0, to = trades.length): number {
+  const w = Math.max(1, plotPx);
+  const minMs = (spanMs * AUTO_MIN_BUCKET_PX) / w;
+  const maxFilled = Math.max(8, Math.floor(w / AUTO_PX_PER_BUCKET));
+  for (const ms of DOT_BUCKETS_MS) {
+    if (ms < minMs) continue;
+    let filled = 0;
+    let prev = NaN;
+    for (let i = from; i < to && filled <= maxFilled; i++) {
+      const b = Math.floor(trades[i]!.t / ms);
+      if (b !== prev) {
+        filled += 1;
+        prev = b;
+      }
+    }
+    if (filled <= maxFilled) return ms;
+  }
+  return DOT_BUCKETS_MS[DOT_BUCKETS_MS.length - 1]!;
+}
+
+/** Price band height (ticks) so a band is about as tall as a time bucket is wide (bubbles cannot stack into a wall). */
+export function bandTicksFor(bucketPx: number, rowPx: number): number {
+  return Math.max(1, Math.round(Math.max(bucketPx, 6) / Math.max(1e-6, rowPx)));
+}
+
+/** First index with t >= x (trades sorted by time). */
+export function lowerBound(trades: readonly DisplayTrade[], x: number): number {
+  let lo = 0;
+  let hi = trades.length;
+  while (lo < hi) {
+    const m = (lo + hi) >> 1;
+    if (trades[m]!.t < x) lo = m + 1;
+    else hi = m;
+  }
+  return lo;
+}
+
+/** At most this many bubbles per time bucket: a bucket spanning more price bands gets proportionally wider bands. */
+export const MAX_DOTS_PER_BUCKET = 3;
+
+/**
+ * Aggregate trades [from, to) (sorted by time) into display buckets of `ms` × price band. Bands are `bandTicks` tall,
+ * widened per time bucket so it never shows more than `maxPer` bubbles (a same-ms sweep through 15 ticks is one to three
+ * bubbles, not a column of 15). Exact sums; the input is only read. Output: by time bucket, then band (deterministic).
+ */
+export function aggregateDots(trades: readonly DisplayTrade[], ms: number, bandTicks: number, from = 0, to = trades.length, maxPer = MAX_DOTS_PER_BUCKET): DotBucket[] {
+  const out: DotBucket[] = [];
+  let s = from;
+  while (s < to) {
+    const t = Math.floor(trades[s]!.t / ms) * ms;
+    let e = s;
+    let lo = Infinity;
+    let hi = -Infinity;
+    while (e < to && trades[e]!.t < t + ms) {
+      lo = Math.min(lo, trades[e]!.tick);
+      hi = Math.max(hi, trades[e]!.tick);
+      e++;
+    }
+    let band = Math.max(1, bandTicks);
+    let base = Math.floor(lo / band) * band;
+    if (Math.floor((hi - base) / band) + 1 > maxPer) {
+      band = Math.ceil((hi - lo + 1) / maxPer);
+      base = lo;
+    }
+    const group = new Map<number, DotBucket & { pv: number }>();
+    for (let i = s; i < e; i++) {
+      const x = trades[i]!;
+      const k = base + Math.floor((x.tick - base) / band) * band;
+      let b = group.get(k);
+      if (!b) group.set(k, (b = { t, ms, band: k, bandTicks: band, vwapTick: k, buy: 0, sell: 0, unknown: 0, total: 0, count: 0, first: x.t, last: x.t, pv: 0 }));
+      if (x.side === 'BUY') b.buy += x.size;
+      else if (x.side === 'SELL') b.sell += x.size;
+      else b.unknown += x.size;
+      b.total += x.size;
+      b.pv += x.size * x.tick;
+      b.count += 1;
+      if (x.t < b.first) b.first = x.t;
+      if (x.t > b.last) b.last = x.t;
+    }
+    for (const k of [...group.keys()].sort((a2, b2) => a2 - b2)) {
+      const { pv, ...b } = group.get(k)!;
+      out.push({ ...b, vwapTick: b.total > 0 ? pv / b.total : b.band });
+    }
+    s = e;
+  }
+  return out;
+}
+
+/** OHLC price trace per time bucket from the real trades [from, to) (sorted by time; ties keep arrival order). */
+export function priceBars(trades: readonly DisplayTrade[], ms: number, from = 0, to = trades.length): PriceBar[] {
+  const out: PriceBar[] = [];
+  let cur: PriceBar | null = null;
+  for (let i = from; i < to; i++) {
+    const x = trades[i]!;
+    const t = Math.floor(x.t / ms) * ms;
+    if (!cur || cur.t !== t) out.push((cur = { t, o: x.tick, h: x.tick, l: x.tick, c: x.tick }));
+    else {
+      cur.h = Math.max(cur.h, x.tick);
+      cur.l = Math.min(cur.l, x.tick);
+      cur.c = x.tick;
+    }
+  }
+  return out;
+}
+
+/**
+ * Bubble radius (px): area grows with the square root of the quantity up to the robust norm (p95 of the visible
+ * buckets), then only logarithmically, and is clamped to the bucket's cell so bubbles never merge into walls.
+ * A big print is visibly bigger than a small one but can never cover the chart.
+ */
+export function dotRadius(vol: number, norm: number, cellPx: number): number {
+  const cell = Math.max(2, cellPx);
+  const rMin = Math.min(1.8, cell * 0.3);
+  const rNorm = Math.max(rMin, Math.min(7, cell * 0.45));
+  const rCap = Math.max(rNorm, Math.min(14, cell * 1.2));
+  const n = Math.max(1, norm);
+  if (!(vol > 0)) return rMin;
+  if (vol <= n) return rMin + (rNorm - rMin) * Math.sqrt(vol / n);
+  return rNorm + (rCap - rNorm) * Math.min(1, Math.log2(vol / n) / 4);
+}
+
+/** p-quantile (0..1) of bucket totals (0 when empty). */
+export function quantileTotal(buckets: readonly DotBucket[], q: number): number {
+  if (!buckets.length) return 0;
+  const v = buckets.map((b) => b.total).sort((a, b) => a - b);
+  return v[Math.min(v.length - 1, Math.floor(v.length * q))]!;
+}
+
+/** A readable view of the trade messages in a recording (live) or a replay prefix. */
+export interface TradeSource {
+  msgs: readonly OrderFlowMsg[];
+  /** Messages [0, count) are visible (replay cursor; live = msgs.length). */
+  count: number;
+}
+
+/**
+ * Incremental, time-sorted index of the executed trades in a message list (read-only). Appends new messages as they
+ * arrive; a different list (new engine / trimmed recording / replay rewind) rebuilds. Trades that arrive late are
+ * placed by their exchange time (stable: equal times keep arrival order).
+ */
+export class TradeTape {
+  private src: readonly OrderFlowMsg[] | null = null;
+  private seen = 0;
+  private sorted = true;
+  private list: DisplayTrade[] = [];
+  private seq: number[] = [];
+
+  constructor(private readonly tickSize: number) {}
+
+  /** Sync with the source and return the trades sorted by exchange time. */
+  sync(s: TradeSource | null): readonly DisplayTrade[] {
+    if (!s) {
+      this.src = null;
+      this.seen = 0;
+      this.list = [];
+      this.seq = [];
+      this.sorted = true;
+      return this.list;
+    }
+    if (s.msgs !== this.src || s.count < this.seen) {
+      this.src = s.msgs;
+      this.seen = 0;
+      this.list = [];
+      this.seq = [];
+      this.sorted = true;
+    }
+    const n = Math.min(s.count, s.msgs.length);
+    for (let i = this.seen; i < n; i++) {
+      const m = s.msgs[i]!;
+      if (m.type !== 'trade') continue;
+      const last = this.list[this.list.length - 1];
+      if (last && m.exchTime < last.t) this.sorted = false;
+      this.list.push({ t: m.exchTime, tick: Math.round(m.price / this.tickSize), size: Math.max(0, m.size), side: m.aggressor });
+      this.seq.push(i);
+    }
+    this.seen = n;
+    if (!this.sorted) {
+      const idx = this.list.map((_, i) => i).sort((a, b) => this.list[a]!.t - this.list[b]!.t || this.seq[a]! - this.seq[b]!);
+      this.list = idx.map((i) => this.list[i]!);
+      this.seq = idx.map((i) => this.seq[i]!);
+      this.sorted = true;
+    }
+    return this.list;
+  }
+}
+
+/** The trade with the latest EXCHANGE time in the source (the current price) - not the last one delivered. */
+export function latestTrade(s: TradeSource | null): { price: number; time: number } | null {
+  if (!s) return null;
+  let best: { price: number; time: number } | null = null;
+  const n = Math.min(s.count, s.msgs.length);
+  for (let i = 0; i < n; i++) {
+    const m = s.msgs[i]!;
+    if (m.type === 'trade' && (!best || m.exchTime >= best.time)) best = { price: m.price, time: m.exchTime };
+  }
+  return best;
+}

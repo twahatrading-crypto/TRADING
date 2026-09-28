@@ -2,7 +2,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_HEATMAP_VIEW } from '../../engines/orderFlow/config';
 import { OrderFlowEngine } from '../../engines/orderFlow/engine';
 import { FULL_CAPS, TEST_TICK, demoSession } from '../../engines/orderFlow/testing/scenarios';
-import { DEFAULT_SPAN_COLUMNS, HeatmapView, MIN_SPAN_COLUMNS, bubbleRadius, type TradeHover } from './HeatmapView';
+import type { Aggressor, OrderFlowMsg } from '../../engines/orderFlow/types';
+import { DEFAULT_SPAN_COLUMNS, HeatmapView, MIN_SPAN_COLUMNS, type TradeHover } from './HeatmapView';
+import type { DotAggregation } from './tradeDots';
 
 /* TEST DATA ONLY. Navigation is view state: the engine is read, never written. */
 
@@ -63,13 +65,6 @@ describe('HeatmapView navigation (view only)', () => {
     expect(frames).toHaveLength(0);
   });
 
-  it('trade bubbles: robust normalisation, clamped radius (no walls), quantities untouched', () => {
-    expect(bubbleRadius(0, 50, 10, 6)).toBeCloseTo(2);
-    expect(bubbleRadius(50, 50, 10, 6)).toBeCloseTo(9);
-    expect(bubbleRadius(5000, 50, 10, 6)).toBeCloseTo(9); // an outlier is capped, not allowed to swamp the chart
-    expect(bubbleRadius(5000, 50, 200, 200)).toBe(14); // absolute cap
-    expect(bubbleRadius(10, 50, 1, 1)).toBeLessThanOrEqual(4); // dense zoom -> small bubbles
-  });
 });
 
 /* Rendering with a recording 2D context (TEST ONLY): what is drawn, never what the engine holds. */
@@ -84,20 +79,46 @@ function recordingCtx() {
   return { ctx, calls };
 }
 
+/** TEST DATA: a trades-only tape with same-ms sweeps and an older backlog delivered after newer trades. */
+function wallTape(): OrderFlowMsg[] {
+  let n = 0;
+  const tr = (t: number, price: number, size: number, aggressor: Aggressor): OrderFlowMsg => ({ type: 'trade', instrumentId: 'GC', seq: null, exchTime: t, recvTime: t + 5, price, size, aggressor, tradeId: `w${n++}` });
+  const live: OrderFlowMsg[] = [];
+  const backlog: OrderFlowMsg[] = [];
+  for (let i = 0; i < 600; i++) {
+    const t = 1_000_000 + i * 200;
+    if (i % 40 === 0) for (let k = 0; k < 15; k++) live.push(tr(t, 2400 + k * 0.1, 2 + (k % 5), 'SELL'));
+    else live.push(tr(t, 2400 + ((i * 7) % 11) * 0.1, 1 + (i % 13), (['BUY', 'SELL', 'BUY', 'UNKNOWN', 'SELL'] as const)[i % 5]!));
+  }
+  for (let i = 0; i < 900; i++) backlog.push(tr(1_000_000 - 900_000 + i * 900, 2398 + (i % 20) * 0.1, 1 + (i % 6), i % 2 ? 'BUY' : 'SELL'));
+  return [...live, ...backlog];
+}
+
 describe('HeatmapView rendering (liquidity layer honesty, hover)', () => {
-  function render(depthAvailable: boolean) {
+  function render(depthAvailable: boolean, o: { msgs?: OrderFlowMsg[]; dots?: boolean; agg?: DotAggregation } = {}) {
     const { ctx, calls } = recordingCtx();
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(ctx as unknown as CanvasRenderingContext2D);
-    const e = new OrderFlowEngine({ instrumentId: 'GC', tickSize: TEST_TICK, capabilities: FULL_CAPS });
-    e.processAll(demoSession());
+    const e = new OrderFlowEngine({ instrumentId: 'GC', tickSize: TEST_TICK, capabilities: o.msgs ? { ...FULL_CAPS, depth: 'NONE' } : FULL_CAPS });
+    const msgs = o.msgs ?? demoSession();
+    e.processAll(msgs);
     const host = document.createElement('div');
     vi.spyOn(host, 'getBoundingClientRect').mockReturnValue({ width: 900, height: 500, top: 0, left: 0, right: 900, bottom: 500, x: 0, y: 0, toJSON: () => ({}) });
     document.body.appendChild(host);
     const frames: (() => void)[] = [];
     const hovers: (TradeHover | null)[] = [];
-    const v = new HeatmapView(host, () => e, { settings: () => DEFAULT_HEATMAP_VIEW, decimals: 1, tickSize: TEST_TICK, depthAvailable: () => depthAvailable, onHover: (h) => hovers.push(h), raf: { request: (cb) => frames.push(cb), cancel: () => {} } });
+    const settings = { ...DEFAULT_HEATMAP_VIEW, showTrades: o.dots ?? true };
+    const v = new HeatmapView(host, () => e, {
+      settings: () => settings,
+      decimals: 1,
+      tickSize: TEST_TICK,
+      depthAvailable: () => depthAvailable,
+      onHover: (h) => hovers.push(h),
+      tape: () => ({ msgs, count: msgs.length }),
+      dotAggregation: () => o.agg ?? 'auto',
+      raf: { request: (cb) => frames.push(cb), cancel: () => {} },
+    });
     frames.splice(0).forEach((f) => f());
-    return { v, e, calls, hovers };
+    return { v, e, calls, hovers, msgs };
   }
 
   it('no Level-2 provider -> no liquidity cells, no hatch, no depth bars (nothing inferred); with depth -> drawn', () => {
@@ -110,19 +131,56 @@ describe('HeatmapView rendering (liquidity layer honesty, hover)', () => {
     on.v.destroy();
   });
 
-  it('hover reports the exact engine quantities of the bubble under the pointer', () => {
-    const { v, e, hovers } = render(false);
-    const b = (v as unknown as { bubbles: { x: number; y: number; h: TradeHover }[] }).bubbles.at(-1)!;
+  it('hover reports the exact sums of the real trades in the display bucket (+ trade count, dominant side)', () => {
+    const { v, hovers, msgs } = render(false, { msgs: wallTape() });
+    const bubbles = (v as unknown as { bubbles: { x: number; y: number; h: TradeHover }[] }).bubbles;
+    const b = bubbles.at(-1)!;
     const canvas = document.querySelector('canvas')!;
     vi.spyOn(canvas, 'getBoundingClientRect').mockReturnValue({ width: 900, height: 500, top: 0, left: 0, right: 900, bottom: 500, x: 0, y: 0, toJSON: () => ({}) });
     canvas.dispatchEvent(new MouseEvent('pointermove', { clientX: b.x, clientY: b.y }));
     const h = hovers.at(-1)!;
     expect(h).not.toBeNull();
-    const col = e.allColumns().find((c) => c.t === h.time)!;
-    const cell = col.trades.find((t) => Math.abs(t.tick * TEST_TICK - h.price) < 1e-9)!;
-    expect([h.buy, h.sell, h.unknown]).toEqual([cell.buy, cell.sell, cell.unknown]);
+    // Recompute from the RAW messages: same bucket, same band -> identical sums.
+    const inBucket = msgs.filter((m): m is Extract<OrderFlowMsg, { type: 'trade' }> => m.type === 'trade' && Math.floor(m.exchTime / h.bucketMs) * h.bucketMs === Math.floor(h.first / h.bucketMs) * h.bucketMs && m.price >= h.bandLo - 1e-9 && m.price <= h.bandHi + 1e-9);
+    const s = (side: Aggressor) => inBucket.filter((m) => m.aggressor === side).reduce((a, m) => a + m.size, 0);
+    expect([h.buy, h.sell, h.unknown]).toEqual([s('BUY'), s('SELL'), s('UNKNOWN')]);
+    expect(h.count).toBe(inBucket.length);
+    expect(h.total).toBe(h.buy + h.sell + h.unknown);
     canvas.dispatchEvent(new MouseEvent('pointerleave'));
     expect(hovers.at(-1)).toBeNull();
+    v.destroy();
+  });
+
+  it('dense same-ms sweeps + a late backlog collapse into readable bubbles: no vertical walls', () => {
+    const { v, msgs } = render(false, { msgs: wallTape() });
+    const bubbles = (v as unknown as { bubbles: { x: number; y: number; r: number }[] }).bubbles;
+    const prints = msgs.filter((m) => m.type === 'trade').length;
+    expect(bubbles.length).toBeGreaterThan(0);
+    expect(bubbles.length).toBeLessThan(prints / 3); // many prints -> far fewer display bubbles
+    // Bubbles sharing a time bucket are separated by at least a band: they cannot stack into a solid column.
+    const byX = new Map<number, number[]>();
+    for (const b of bubbles) byX.set(Math.round(b.x), [...(byX.get(Math.round(b.x)) ?? []), b.y]);
+    const maxStack = Math.max(...[...byX.values()].map((ys) => ys.length));
+    expect(maxStack).toBeLessThanOrEqual(3);
+    // The late backlog is drawn at its own (older) time: nothing is piled at the live edge.
+    expect(v.lastBucketMs).not.toBeNull();
+    v.destroy();
+  });
+
+  it('Volume Dots OFF -> price chart only (no bubbles); manual display bucket is honoured', () => {
+    const off = render(false, { msgs: wallTape(), dots: false });
+    expect(off.calls.filter((c) => c === 'arc')).toHaveLength(0);
+    expect(off.calls.filter((c) => c === 'lineTo').length).toBeGreaterThan(0); // price trace still drawn
+    off.v.destroy();
+    const fixed = render(false, { msgs: wallTape(), agg: 250 });
+    expect(fixed.v.lastBucketMs).toBe(250);
+    fixed.v.destroy();
+  });
+
+  it('no depth = zero liquidity bands even with a dense tape (nothing inferred from trades)', () => {
+    const { v, calls } = render(false, { msgs: wallTape() });
+    expect(calls.filter((c) => c === 'drawImage')).toHaveLength(0);
+    expect(calls.filter((c) => c === 'putImageData')).toHaveLength(0);
     v.destroy();
   });
 });

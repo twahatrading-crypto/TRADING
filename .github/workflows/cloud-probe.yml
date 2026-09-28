@@ -435,6 +435,50 @@ jobs:
                          prof: t('[data-testid="of-profile-totals"]'), header: (document.querySelector('header')?.innerText || '').replace(/\s+/g, ' ').slice(0, 300), page: document.querySelector('.ofmain').innerText,
                          overflowX: document.documentElement.scrollWidth - innerWidth, grid: box('.ofgrid'), chart: box('.ofheat'), bottom: box('.ofbottom') };
               });
+              // Main chart (canvas pixels): executed-volume dots must never form walls; the price trace must be visible.
+              const px = await p.evaluate(() => {
+                const c = document.querySelector('canvas.ofheat__canvas');
+                if (!c) return null;
+                const g = c.getContext('2d');
+                const W = c.width, H = c.height, dpr = window.devicePixelRatio || 1;
+                const pw = Math.floor(W - 70 * dpr), ph = Math.floor(H - 22 * dpr);
+                const d = g.getImageData(0, 0, pw, ph).data;
+                let maxCol = 0, wallCols = 0, colored = 0, trace = 0, bands = 0;
+                const pts = [];
+                for (let x = 0; x < pw; x++) {
+                  let n = 0;
+                  for (let y = 0; y < ph; y++) {
+                    const o = (y * pw + x) * 4, r = d[o], gg = d[o + 1], bb = d[o + 2];
+                    const green = gg > 140 && r < 110 && bb < 150, red = r > 170 && gg < 110 && bb < 110, violet = r > 120 && bb > 180 && gg < 170;
+                    if (green || red || violet) { n++; colored++; if (x % 7 === 0 && y % 5 === 0 && pts.length < 400) pts.push([x / dpr, y / dpr]); }
+                    else if (r > 90 && Math.abs(r - gg) < 25 && Math.abs(gg - bb) < 35) trace++; // neutral grey / white price trace
+                    else if ((bb > 150 && r < 90) || (r > 200 && gg > 150 && bb < 80)) bands++; // cyan / blue / yellow liquidity colours
+                  }
+                  maxCol = Math.max(maxCol, n / ph);
+                  if (n / ph > 0.5) wallCols++;
+                }
+                const agg = document.querySelector('[data-testid="of-dot-agg"]');
+                return { maxCol: Math.round(maxCol * 1000) / 1000, wallCols, colored, trace, bands, pts, agg: agg ? agg.value : null, legend: (document.querySelector('.ofheat__legend')?.textContent || '').replace(/\s+/g, ' ').trim() };
+              });
+              let tip = '';
+              if (px) {
+                const box = await p.locator('canvas.ofheat__canvas').boundingBox();
+                for (const [x, y] of px.pts.slice().reverse()) {
+                  await p.mouse.move(box.x + x, box.y + y);
+                  if (await p.locator('[data-testid="of-trade-tip"]').count()) { tip = (await p.locator('[data-testid="of-trade-tip"]').innerText()).replace(/\n/g, ' | '); break; }
+                }
+                await p.mouse.move(0, 0);
+              }
+              const lastTrade = await p.evaluate(() => Number((document.querySelector('.ofbar__last')?.textContent || '').replace(/,/g, '')));
+              console.log(`  chart: maxColumnFill=${px && px.maxCol} wallColumns=${px && px.wallCols} dotPixels=${px && px.colored} tracePixels=${px && px.trace} liquidityBandPixels=${px && px.bands} tradeAgg=${px && px.agg} legend="${px && px.legend}"`);
+              console.log(`  hover: ${tip}`);
+              console.log(`  last(trade) page=${lastTrade} bridge=${st.lastTrade && st.lastTrade.price}`);
+              check(px && px.maxCol < 0.5 && px.wallCols === 0, `${inst}: no vertical bubble walls (max column fill ${px && px.maxCol})`);
+              check(px && px.trace > 200 && px.colored > 50, `${inst}: price trace + aggregated volume dots drawn`);
+              check(px && px.bands < 50, `${inst}: zero liquidity heatmap bands (${px && px.bands} band-coloured px)`);
+              check(px && px.agg === 'auto', `${inst}: Trade aggregation control present (AUTO)`);
+              check(/DISPLAY AGGREGATION/.test(tip) && /Databento/i.test(tip) && /Unknown/.test(tip) && /Trades \d/.test(tip), `${inst}: bubble hover shows bucket sums, source, display-aggregation note`);
+              check(st.lastTrade && Math.abs(lastTrade - st.lastTrade.price) <= st.lastTrade.price * 0.0015, `${inst}: last trade = latest exchange-time trade (${lastTrade} vs bridge ${st.lastTrade && st.lastTrade.price})`);
               console.log(`  contract=${u.contract} feeds="${u.feeds}"`);
               console.log(`  depthBadge="${u.depthNa}" heatmapToggle disabled=${u.heatDisabled} checked=${u.heatChecked} canvas=${u.canvas}`);
               console.log(`  COB="${u.book.slice(0, 160)}" bookTotals=${u.bookTotals}`);

@@ -2,6 +2,21 @@ import type { HeatmapViewSettings } from '../../engines/orderFlow/config';
 import type { HeatmapColumn, OrderFlowEngine } from '../../engines/orderFlow/engine';
 import type { ChartNavigable } from '../chart/ChartStage';
 import { bounds, colorAt, columnRows, intensity, smooth, type Viewport } from './heatmapMath';
+import {
+  aggregateDots,
+  autoBucketMs,
+  bandTicksFor,
+  dominance,
+  dotRadius,
+  lowerBound,
+  priceBars,
+  quantileTotal,
+  TradeTape,
+  type DisplayTrade,
+  type Dominance,
+  type DotAggregation,
+  type TradeSource,
+} from './tradeDots';
 
 /* ============================================================================
  * Canvas liquidity heatmap: batched rendering (one requestAnimationFrame loop; a frame is drawn
@@ -18,28 +33,28 @@ export const DEFAULT_PRICE_TICKS = 60;
 /** With little history (e.g. just after connecting) the default window starts at the first real column (min 30). */
 export const MIN_SPAN_COLUMNS = 30;
 const ZOOM = 1.25;
+/** Smallest auto-fitted price range (ticks) - a quiet tape is not stretched into noise. */
+export const MIN_AUTO_TICKS = 20;
 
-/** A drawn executed-trade bubble (for hover): exact quantities as aggregated by the engine for that column / price. */
+/** A drawn executed-volume bubble (for hover): exact sums of the real trades in that DISPLAY bucket. */
 export interface TradeHover {
   x: number;
   y: number;
-  time: number;
-  aggMs: number;
+  /** Exchange time of the first / last trade in the bucket, and the display bucket width. */
+  first: number;
+  last: number;
+  bucketMs: number;
+  /** Volume-weighted price of the bucket and the price band it covers. */
   price: number;
+  bandLo: number;
+  bandHi: number;
+  /** Number of real trades (null when only per-price engine cells were available). */
+  count: number | null;
   buy: number;
   sell: number;
   unknown: number;
-}
-
-/**
- * Trade-bubble radius: area ∝ executed quantity, normalised to the 95th percentile of the visible cells (one outlier
- * no longer shrinks everything else) and clamped to the row / column size so bubbles never form solid walls.
- * The quantities themselves are never changed - hover shows them exactly.
- */
-export function bubbleRadius(vol: number, norm: number, rowPx: number, colPx: number): number {
-  const rMax = Math.max(4, Math.min(14, Math.max(rowPx, colPx) * 0.9));
-  const rMin = Math.min(2, rMax);
-  return rMin + (rMax - rMin) * Math.sqrt(Math.min(1, vol / Math.max(1, norm)));
+  total: number;
+  dominant: Dominance;
 }
 
 type Raf = { request: (cb: () => void) => number; cancel: (id: number) => void };
@@ -58,9 +73,25 @@ export interface HeatmapViewOptions {
   depthAvailable?: () => boolean;
   /** UI toggle for the liquidity layer (cells + right-edge depth). */
   showCells?: () => boolean;
-  /** Hovered executed-trade bubble (exact engine quantities) or null. */
+  /** Hovered executed-volume bubble (exact sums of real trades) or null. */
   onHover?: (h: TradeHover | null) => void;
+  /**
+   * The raw accepted messages (live recording or replay prefix), READ ONLY: trades are drawn at their own exchange
+   * time. Without it the chart falls back to the engine's per-column trade cells.
+   */
+  tape?: () => TradeSource | null;
+  /** Display bucket for the executed-volume dots and the price trace (display only; default AUTO). */
+  dotAggregation?: () => DotAggregation;
 }
+
+/** Colours per dominant side. UNKNOWN is never shown as a side. */
+const DOT_FILL: Record<Dominance, string> = {
+  BUY: 'rgba(34,197,94,0.78)',
+  SELL: 'rgba(239,68,68,0.78)',
+  MIXED: 'rgba(167,139,250,0.72)',
+  UNKNOWN: 'rgba(156,163,175,0.35)',
+};
+const DOT_RING: Record<Dominance, string | null> = { BUY: null, SELL: null, MIXED: 'rgba(221,214,254,0.85)', UNKNOWN: 'rgba(209,213,219,0.9)' };
 
 export class HeatmapView implements ChartNavigable {
   vp: Viewport | null = null;
@@ -85,6 +116,9 @@ export class HeatmapView implements ChartNavigable {
   /** Default window grows with the available history until DEFAULT_SPAN_COLUMNS (cleared by any manual zoom). */
   private autoSpan = true;
   private bubbles: { x: number; y: number; r: number; h: Omit<TradeHover, 'x' | 'y'> }[] = [];
+  private tapeIndex: TradeTape;
+  /** Display bucket used by the last frame (ms) - diagnostics / tests. */
+  lastBucketMs: number | null = null;
   private hovered: TradeHover | null = null;
 
   constructor(
@@ -93,6 +127,7 @@ export class HeatmapView implements ChartNavigable {
     private readonly opts: HeatmapViewOptions,
   ) {
     this.raf = opts.raf ?? defaultRaf();
+    this.tapeIndex = new TradeTape(opts.tickSize);
     this.canvas = document.createElement('canvas');
     this.canvas.className = 'ofheat__canvas';
     this.canvas.setAttribute('aria-label', 'Liquidity heatmap');
@@ -151,12 +186,31 @@ export class HeatmapView implements ChartNavigable {
   private agg(): number {
     return this.source()?.settings.timeAggregationMs ?? 1000;
   }
+  /**
+   * Executed trades sorted by EXCHANGE time: from the raw tape when available (a late-delivered backlog is placed
+   * where it happened), otherwise from the engine's per-column cells. Read only.
+   */
+  private trades(): readonly DisplayTrade[] {
+    if (this.opts.tape) return this.tapeIndex.sync(this.opts.tape());
+    const out: DisplayTrade[] = [];
+    for (const c of this.source()?.allColumns() ?? [])
+      for (const x of c.trades) {
+        if (x.buy) out.push({ t: c.t, tick: x.tick, size: x.buy, side: 'BUY' });
+        if (x.sell) out.push({ t: c.t, tick: x.tick, size: x.sell, side: 'SELL' });
+        if (x.unknown) out.push({ t: c.t, tick: x.tick, size: x.unknown, side: 'UNKNOWN' });
+      }
+    return out;
+  }
   private latest(): { t: number; tick: number | null } | null {
     const e = this.source();
     if (!e) return null;
     const cols = e.allColumns();
     const last = cols[cols.length - 1];
     if (!last) return null;
+    const tr = this.opts.tape ? this.trades() : [];
+    const lt = tr[tr.length - 1];
+    // Current price = the trade with the latest EXCHANGE time (not the last one delivered).
+    if (lt) return { t: Math.max(last.t, lt.t), tick: lt.tick };
     let tick = last.lastTick;
     if (tick === null) {
       for (let i = cols.length - 1; i >= 0 && tick === null; i--) {
@@ -194,7 +248,9 @@ export class HeatmapView implements ChartNavigable {
   private defaultSpan(t1: number): number {
     const agg = this.agg();
     const first = this.source()?.allColumns()[0];
-    const have = first ? t1 - first.t + agg : 0;
+    const ft = this.trades()[0]?.t;
+    const start = first ? Math.min(first.t, ft ?? first.t) : ft;
+    const have = start !== undefined ? t1 - start + agg : 0;
     return Math.max(MIN_SPAN_COLUMNS * agg, Math.min(DEFAULT_SPAN_COLUMNS * agg, have));
   }
   /** Fit: all retained history and every price that has liquidity or prints. */
@@ -211,12 +267,19 @@ export class HeatmapView implements ChartNavigable {
         hi = Math.max(hi, t);
       }
     }
+    const tr = this.trades();
+    for (const x of tr) {
+      lo = Math.min(lo, x.tick);
+      hi = Math.max(hi, x.tick);
+    }
     if (!Number.isFinite(lo)) return this.resetView();
     const agg = this.agg();
+    const t0 = Math.min(cols[0]!.t, tr[0]?.t ?? Infinity);
+    const t1 = Math.max(cols[cols.length - 1]!.t, tr[tr.length - 1]?.t ?? -Infinity) + 2 * agg;
     this.follow = true;
     this.autoPrice = false;
     this.autoSpan = false;
-    this.set({ t0: cols[0]!.t, t1: cols[cols.length - 1]!.t + 2 * agg, p0: lo - 2, p1: hi + 3 });
+    this.set({ t0, t1, p0: lo - 2, p1: hi + 3 });
     this.emitViewport(true);
   }
   private zoomTime(f: number, anchor: number | null): void {
@@ -367,7 +430,7 @@ export class HeatmapView implements ChartNavigable {
     this.setHover(best ? { x: best.x, y: best.y, ...best.h } : null);
   }
   private setHover(h: TradeHover | null): void {
-    if (h === this.hovered || (h && this.hovered && h.time === this.hovered.time && h.price === this.hovered.price)) return;
+    if (h === this.hovered || (h && this.hovered && h.first === this.hovered.first && h.price === this.hovered.price)) return;
     this.hovered = h;
     this.opts.onHover?.(h);
   }
@@ -391,10 +454,7 @@ export class HeatmapView implements ChartNavigable {
         const span = this.autoSpan ? this.defaultSpan(t1) : this.vp.t1 - this.vp.t0;
         this.vp = { ...this.vp, t1, t0: t1 - span };
       }
-      if (this.autoPrice && l && l.tick !== null) {
-        const half = (this.vp.p1 - this.vp.p0) / 2;
-        this.vp = { ...this.vp, p0: l.tick - half, p1: l.tick + half };
-      }
+      if (this.autoPrice && l && l.tick !== null) this.vp = { ...this.vp, ...this.autoPriceRange(this.vp, l.tick) };
     }
     if (this.dirty) {
       this.dirty = false;
@@ -402,6 +462,21 @@ export class HeatmapView implements ChartNavigable {
     }
     this.frameId = this.raf.request(this.loop);
   };
+
+  /** Auto price scale: the visible real trades (and the current price) with padding, at least MIN_AUTO_TICKS tall. */
+  private autoPriceRange(v: Viewport, cur: number): { p0: number; p1: number } {
+    const tr = this.trades();
+    let lo = cur;
+    let hi = cur;
+    for (let i = lowerBound(tr, v.t0); i < tr.length && tr[i]!.t <= v.t1; i++) {
+      const k = tr[i]!.tick;
+      if (k < lo) lo = k;
+      if (k > hi) hi = k;
+    }
+    const span = Math.max(MIN_AUTO_TICKS, (hi - lo) * 1.3 + 4);
+    const mid = (lo + hi) / 2;
+    return { p0: mid - span / 2, p1: mid + span / 2 };
+  }
 
   private visibleColumns(cols: readonly HeatmapColumn[], v: Viewport, agg: number): HeatmapColumn[] {
     let lo = 0;
@@ -476,17 +551,15 @@ export class HeatmapView implements ChartNavigable {
         ctx.drawImage(this.off, 0, 0, vis.length, rows, x0, Y(base + rows * pAgg), x1 - x0, Y(base) - Y(base + rows * pAgg));
       }
     }
-    const cw = (agg / (v.t1 - v.t0)) * pw;
-
-    // 2) Best bid / ask steps and the last-trade price line.
-    const step = (key: 'bestBid' | 'bestAsk' | 'lastTick', color: string, width: number, off: number) => {
+    // 2) Best bid / ask steps - genuine Level-2 only (a trades-only feed has none).
+    const step = (key: 'bestBid' | 'bestAsk', color: string, off: number) => {
       ctx.strokeStyle = color;
-      ctx.lineWidth = width;
+      ctx.lineWidth = 1;
       ctx.beginPath();
       let open = false;
       for (const c of vis) {
         const tk = c[key];
-        if (tk === null || (key !== 'lastTick' && !c.valid)) {
+        if (tk === null || !c.valid) {
           open = false;
           continue;
         }
@@ -498,39 +571,86 @@ export class HeatmapView implements ChartNavigable {
       }
       ctx.stroke();
     };
-    step('bestBid', 'rgba(52,211,153,0.55)', 1, 0.5);
-    step('bestAsk', 'rgba(248,113,113,0.55)', 1, -0.5);
-    if (s.showPriceLine) step('lastTick', 'rgba(255,255,255,0.9)', 1.4, 0);
+    step('bestBid', 'rgba(52,211,153,0.55)', 0.5);
+    step('bestAsk', 'rgba(248,113,113,0.55)', -0.5);
 
-    // 3) Executed trades: one bubble per column × price, area ∝ executed quantity (robust p95 normalisation, clamped
-    //    to the row / column size); colour only from the provider's aggressor side - UNKNOWN stays grey.
+    // 3) PRICE FIRST: the real trade prices per display bucket (OHLC) - candles when a bucket is wide enough, always
+    //    a continuous close-to-close trace. DISPLAY aggregation only: the trades themselves are never changed.
+    const span = v.t1 - v.t0;
+    const tr = this.trades();
+    const pad = 5 * 60_000;
+    const i0 = lowerBound(tr, v.t0 - pad);
+    const i1 = lowerBound(tr, v.t1 + pad);
+    const choice = this.opts.dotAggregation?.() ?? 'auto';
+    const ms = choice === 'auto' ? autoBucketMs(span, pw, tr, lowerBound(tr, v.t0), lowerBound(tr, v.t1 + 1)) : choice;
+    this.lastBucketMs = ms;
+    const bucketPx = (ms / span) * pw;
+    const rowPx = ph / Math.max(1e-9, v.p1 - v.p0);
+    const bars = priceBars(tr, ms, i0, i1);
+    const cx = (t: number) => X(t) + bucketPx / 2;
+    if (s.showPriceLine && bars.length) {
+      ctx.strokeStyle = bucketPx >= 5 ? 'rgba(226,232,240,0.55)' : 'rgba(241,245,249,0.9)';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      bars.forEach((b, i) => (i ? ctx.lineTo(cx(b.t), Y(b.c)) : ctx.moveTo(cx(b.t), Y(b.c))));
+      ctx.stroke();
+    }
+    if (bucketPx >= 5) {
+      const bw = Math.max(1, Math.min(12, bucketPx * 0.56));
+      for (const b of bars) {
+        const x = cx(b.t);
+        if (x < -bw || x > pw + bw) continue;
+        const col = b.c > b.o ? 'rgba(34,197,94,0.95)' : b.c < b.o ? 'rgba(239,68,68,0.95)' : 'rgba(203,213,225,0.9)';
+        ctx.strokeStyle = col;
+        ctx.fillStyle = col;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(x, Y(b.h + 0.5));
+        ctx.lineTo(x, Y(b.l - 0.5));
+        ctx.stroke();
+        const yt = Y(Math.max(b.o, b.c) + 0.35);
+        const yb = Y(Math.min(b.o, b.c) - 0.35);
+        ctx.fillRect(x - bw / 2, yt, bw, Math.max(1, yb - yt));
+      }
+    }
+
+    // 4) Executed-volume dots: prints collapsed into display buckets (time bucket × price band sized so a band is
+    //    about as tall as a bucket is wide) - one bubble per bucket at its VWAP, never a wall of circles. Radius:
+    //    sqrt up to the robust p95 norm, then log, clamped to the cell. Colour from the dominant KNOWN side;
+    //    weak dominance = MIXED, unknown >= known = UNKNOWN (never recoloured as a side).
     this.bubbles = [];
-    if (s.showTrades) {
-      const totals: number[] = [];
-      for (const c of vis) for (const t of c.trades) totals.push(t.buy + t.sell + t.unknown);
-      if (totals.length) {
-        totals.sort((a, b) => a - b);
-        const norm = totals[Math.min(totals.length - 1, Math.floor(totals.length * 0.95))]!;
-        const rowPx = ph / Math.max(1, v.p1 - v.p0);
-        for (const c of vis)
-          for (const t of c.trades) {
-            const vol = t.buy + t.sell + t.unknown;
-            if (!vol) continue;
-            const r = bubbleRadius(vol, norm, rowPx, cw);
-            const x = X(c.t) + cw / 2;
-            const y = Y(t.tick);
-            const known = t.buy + t.sell;
-            ctx.fillStyle = t.unknown >= known ? 'rgba(156,163,175,0.78)' : t.buy >= t.sell ? 'rgba(34,197,94,0.82)' : 'rgba(239,68,68,0.82)';
-            ctx.beginPath();
-            ctx.arc(x, y, r, 0, Math.PI * 2);
-            ctx.fill();
-            if (known && t.unknown && t.unknown < known) {
-              ctx.strokeStyle = 'rgba(156,163,175,0.9)'; // part of this cell's volume has no aggressor side
-              ctx.lineWidth = 1;
-              ctx.stroke();
-            }
-            this.bubbles.push({ x, y, r, h: { time: c.t, aggMs: agg, price: t.tick * this.opts.tickSize, buy: t.buy, sell: t.sell, unknown: t.unknown } });
-          }
+    if (s.showTrades && tr.length) {
+      const band = bandTicksFor(bucketPx, rowPx);
+      const dots = aggregateDots(tr, ms, band, lowerBound(tr, v.t0 - ms), lowerBound(tr, v.t1 + ms));
+      const norm = quantileTotal(dots, 0.95);
+      const cell = Math.max(bucketPx, band * rowPx);
+      const fromTape = !!this.opts.tape;
+      const order = dots.map((_, i) => i).sort((a, b) => dots[b]!.total - dots[a]!.total || a - b); // big under small
+      for (const i of order) {
+        const d = dots[i]!;
+        if (!d.total) continue;
+        const r = dotRadius(d.total, norm, cell);
+        const x = cx(d.t);
+        const y = Y(d.vwapTick);
+        if (x < -r || x > pw + r) continue;
+        const dom = dominance(d);
+        ctx.fillStyle = DOT_FILL[dom];
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.fill();
+        const ring = DOT_RING[dom];
+        if (ring) {
+          ctx.strokeStyle = ring;
+          ctx.lineWidth = 1;
+          ctx.stroke();
+        }
+        const ts = this.opts.tickSize;
+        this.bubbles.push({
+          x,
+          y,
+          r,
+          h: { first: d.first, last: d.last, bucketMs: ms, price: d.vwapTick * ts, bandLo: d.band * ts, bandHi: (d.band + d.bandTicks - 1) * ts, count: fromTape ? d.count : null, buy: d.buy, sell: d.sell, unknown: d.unknown, total: d.total, dominant: dom },
+        });
       }
     }
     // 3b) Current displayed depth at the right edge (latest VALID book only - genuine Level-2 levels, never inferred).
@@ -553,7 +673,7 @@ export class HeatmapView implements ChartNavigable {
         bar(lastCol.askTicks, lastCol.askSizes, 'rgba(239,68,68,0.75)');
       }
     }
-    // 4) Highlighted event.
+    // 5) Highlighted event.
     if (this.highlight) {
       ctx.strokeStyle = '#efcd84';
       ctx.lineWidth = 2;
@@ -567,7 +687,7 @@ export class HeatmapView implements ChartNavigable {
       ctx.stroke();
       ctx.setLineDash([]);
     }
-    // 5) "Now" edge (latest exchange time).
+    // 6) "Now" edge (latest exchange time) and the current-price guide.
     const l = this.latest();
     if (l) {
       ctx.strokeStyle = 'rgba(212,169,79,0.6)';
@@ -576,6 +696,13 @@ export class HeatmapView implements ChartNavigable {
       ctx.moveTo(X(l.t + agg), 0);
       ctx.lineTo(X(l.t + agg), ph);
       ctx.stroke();
+      if (l.tick !== null) {
+        ctx.strokeStyle = 'rgba(212,169,79,0.45)';
+        ctx.beginPath();
+        ctx.moveTo(0, Y(l.tick));
+        ctx.lineTo(pw, Y(l.tick));
+        ctx.stroke();
+      }
       ctx.setLineDash([]);
     }
     ctx.restore();

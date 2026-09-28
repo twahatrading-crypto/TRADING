@@ -8,6 +8,7 @@ import { useOptionalStore } from '../../hooks/useOptionalStore';
 import { ChartStage } from '../chart/ChartStage';
 import type { Viewport } from './heatmapMath';
 import { HeatmapView, type TradeHover } from './HeatmapView';
+import type { DotAggregation, TradeSource } from './tradeDots';
 import { Unavailable } from './OrderFlowPanels';
 
 interface Props {
@@ -36,6 +37,10 @@ interface Props {
   showHeatmap: boolean;
   /** Name of the executed-trade source (hover provenance). */
   tradeSource: string | null;
+  /** Raw accepted messages (read only) - trades are drawn at their own exchange time. */
+  tape?: () => TradeSource | null;
+  /** Display bucket for dots / price trace (display only). */
+  dotAggregation?: DotAggregation;
 }
 
 /** The central heatmap, rendered by HeatmapView on a canvas inside the shared ChartStage. */
@@ -53,6 +58,10 @@ export function HeatmapPanel(p: Props) {
   depthRef.current = p.depthAvailable || !!p.replay;
   const cellsRef = useRef(p.showHeatmap);
   cellsRef.current = p.showHeatmap;
+  const tapeRef = useRef(p.tape);
+  tapeRef.current = p.tape;
+  const aggRef = useRef<DotAggregation>(p.dotAggregation ?? 'auto');
+  aggRef.current = p.dotAggregation ?? 'auto';
   const [hover, setHover] = useState<TradeHover | null>(null);
   const { hasData, decimals, tickSize, onReady } = p;
 
@@ -68,6 +77,8 @@ export function HeatmapPanel(p: Props) {
       depthAvailable: () => depthRef.current,
       showCells: () => cellsRef.current,
       onHover: setHover,
+      tape: () => tapeRef.current?.() ?? null,
+      dotAggregation: () => aggRef.current,
     });
     setView(v);
     onReady(v);
@@ -77,7 +88,7 @@ export function HeatmapPanel(p: Props) {
       onReady(null);
     };
   }, [hasData, decimals, tickSize, onReady]);
-  useEffect(() => view?.invalidate(), [view, p.view, p.version, p.replay, p.depthAvailable, p.showHeatmap]);
+  useEffect(() => view?.invalidate(), [view, p.view, p.version, p.replay, p.depthAvailable, p.showHeatmap, p.dotAggregation]);
 
   const depthOk = p.depthStatus === 'LIVE' || !!p.replay;
   return (
@@ -87,7 +98,7 @@ export function HeatmapPanel(p: Props) {
           <Flame size={15} aria-hidden="true" /> {p.title}
         </h2>
         <span className="ofheat__legend" aria-label="Legend">
-          <i className="is-buy" /> buy aggressor <i className="is-sell" /> sell aggressor <i className="is-unk" /> unknown side
+          <i className="is-buy" /> buy <i className="is-sell" /> sell <i className="is-mixed" /> mixed <i className="is-unk" /> unknown side
         </span>
         <div className="srchart__tools">
           <button type="button" className="srtool" aria-pressed={!!p.replay} onClick={p.replay ? p.onExitReplay : p.onStartReplay} disabled={!p.replay && !p.canReplay} title={p.canReplay ? 'Replay the recorded depth + trades' : 'Replay needs a recorded stream'}>
@@ -106,15 +117,20 @@ export function HeatmapPanel(p: Props) {
         </p>
       )}
       {hover && (
-        <div className="ofheat__tip" role="tooltip" data-testid="of-trade-tip" style={{ left: hover.x + 14, top: Math.max(4, hover.y - 10) }}>
-          <b>{new Date(hover.time).toLocaleTimeString('en-GB', { hour12: false })}</b>
-          {hover.aggMs > 1 && <span className="ofdim"> ({hover.aggMs >= 1000 ? `${hover.aggMs / 1000}s` : `${hover.aggMs}ms`} bucket)</span>}
-          <span>Price <b className="num">{hover.price.toFixed(p.decimals)}</b></span>
-          <span>Size <b className="num">{(hover.buy + hover.sell + hover.unknown).toLocaleString()}</b></span>
+        <div className="ofheat__tip" role="tooltip" data-testid="of-trade-tip" style={{ left: hover.x + 14 + TIP_W > (containerRef.current?.clientWidth ?? Infinity) ? Math.max(4, hover.x - 14 - TIP_W) : hover.x + 14, top: Math.max(4, hover.y - 10) }}>
+          <b>
+            {fmtT(hover.first)}
+            {hover.last !== hover.first && <> – {fmtT(hover.last)}</>}
+          </b>
+          <span>Price <b className="num">{hover.price.toFixed(p.decimals)}</b>{hover.bandHi > hover.bandLo && <span className="ofdim"> (VWAP · {hover.bandLo.toFixed(p.decimals)}–{hover.bandHi.toFixed(p.decimals)})</span>}</span>
+          {hover.count !== null && <span>Trades <b className="num">{hover.count.toLocaleString()}</b></span>}
+          <span>Total volume <b className="num">{hover.total.toLocaleString()}</b></span>
           <span>
-            Side: <b className="ofbid-t">buy {hover.buy.toLocaleString()}</b> · <b className="ofask-t">sell {hover.sell.toLocaleString()}</b> · <b>unknown {hover.unknown.toLocaleString()}</b>
+            <b className="ofbid-t">Buy {hover.buy.toLocaleString()}</b> · <b className="ofask-t">Sell {hover.sell.toLocaleString()}</b> · <b>Unknown {hover.unknown.toLocaleString()}</b>
           </span>
+          <span>Dominant side <b>{hover.dominant}</b></span>
           <span className="ofdim">Source: {p.tradeSource ?? '—'} · executed trades</span>
+          <span className="ofdim">DISPLAY AGGREGATION ({hover.bucketMs >= 1000 ? `${hover.bucketMs / 1000}s` : `${hover.bucketMs}ms`}) — underlying trades preserved</span>
         </div>
       )}
       <ChartStage containerRef={containerRef} controller={view} hasBars={p.hasData}>
@@ -131,6 +147,13 @@ export function HeatmapPanel(p: Props) {
     </section>
   );
 }
+
+/** Tooltip width (px): the tooltip flips to the left of the bubble near the right edge. */
+const TIP_W = 290;
+const fmtT = (t: number) => {
+  const d = new Date(t);
+  return `${d.toLocaleTimeString('en-GB', { hour12: false })}.${String(d.getMilliseconds()).padStart(3, '0')}`;
+};
 
 function ReplayBar({ replay, onExit }: { replay: OrderFlowReplay; onExit: () => void }) {
   const st = useOptionalStore(replay.store, (s) => s, null)!;

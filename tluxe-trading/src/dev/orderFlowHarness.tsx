@@ -3,7 +3,9 @@
  * order-flow stream (scripted provider, `info.test = true`). Served only by the dev server at
  * /orderflow-harness.html; never a production entry. 20 minutes of history are preloaded, then the
  * stream continues in real time. `?caps=noaggressor` simulates a provider without aggressor side;
- * `?depth=off` a trades-only provider (depth DATA UNAVAILABLE).
+ * `?depth=off` a trades-only provider (depth DATA UNAVAILABLE). `?tape=burst` = a dense trades-only TEST tape shaped
+ * like the production problem case: same-millisecond sweeps through many ticks, and an hour of backlog delivered
+ * AFTER newer live trades (out of exchange-time order), as a bridge's intraday replay can arrive.
  */
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
@@ -15,13 +17,58 @@ import '../styles/global.css';
 import { App } from '../app/App';
 import { ServicesProvider } from '../app/ServicesProvider';
 import { FULL_CAPS, generatedSession } from '../engines/orderFlow/testing/scenarios';
+import type { OrderFlowMsg } from '../engines/orderFlow/types';
 import { ScriptedOrderFlowProvider } from '../providers/orderFlow/testing/ScriptedOrderFlowProvider';
 import { connectServices, createServices, defaultProviders } from '../services/registry';
 
+/** TEST DATA: dense trades-only tape (seeded) - live A, then older backlog B (delivered late), then live C. */
+function burstTape(): { script: OrderFlowMsg[]; preload: number } {
+  let seed = 11;
+  const rnd = () => {
+    seed = (seed + 0x6d2b79f5) >>> 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  const side = () => (rnd() < 0.02 ? 'UNKNOWN' : rnd() < 0.5 ? 'BUY' : 'SELL') as 'BUY' | 'SELL' | 'UNKNOWN';
+  const size = () => (rnd() < 0.03 ? 60 + Math.floor(rnd() * 240) : 1 + Math.floor(rnd() * rnd() * 25));
+  let n = 0;
+  const trade = (t: number, tick: number, sz: number, ag: 'BUY' | 'SELL' | 'UNKNOWN'): OrderFlowMsg => ({ type: 'trade', instrumentId: 'GC', seq: null, exchTime: t, recvTime: t + 40, price: tick / 10, size: sz, aggressor: ag, tradeId: `T${n++}` });
+  const hb = (t: number): OrderFlowMsg => ({ type: 'heartbeat', instrumentId: 'GC', seq: null, exchTime: t, recvTime: t + 40, stream: 'trade' });
+  const walk = (t0: number, t1: number, start: number, out: OrderFlowMsg[]) => {
+    let tick = start;
+    let nextHb = t0;
+    for (let t = t0; t < t1; t += 40 + Math.floor(rnd() * 260)) {
+      while (nextHb <= t) out.push(hb((nextHb += 1000)));
+      if (rnd() < 0.25) tick += rnd() < 0.5 ? -1 : 1;
+      if (rnd() < 0.04) {
+        // sweep: many prints in the SAME millisecond through several ticks
+        const dir = rnd() < 0.5 ? -1 : 1;
+        const levels = 5 + Math.floor(rnd() * 12);
+        const ag = dir > 0 ? 'BUY' : 'SELL';
+        for (let k = 0; k < levels; k++) for (let j = 0; j < 1 + Math.floor(rnd() * 3); j++) out.push(trade(t, tick + dir * k, 1 + Math.floor(rnd() * 12), rnd() < 0.03 ? 'UNKNOWN' : ag));
+        tick += dir * (levels - 1);
+      } else out.push(trade(t, tick, size(), side()));
+    }
+    return tick;
+  };
+  const A: OrderFlowMsg[] = [];
+  const B: OrderFlowMsg[] = [];
+  const C: OrderFlowMsg[] = [];
+  const mid = walk(-3_600_000, -45_000, 41700, B); // backlog: the hour before (delivered AFTER the newer trades in A)
+  const end = walk(-45_000, 0, mid, A);
+  A.push(hb(0));
+  walk(1, 15 * 60_000, end, C);
+  B.push(hb(0)); // anchors the preload at "now"
+  return { script: [...A, ...B, ...C], preload: A.length + B.length };
+}
+
 const q = new URLSearchParams(location.search);
-const script = generatedSession(45);
-const caps = { ...FULL_CAPS, aggressorSide: q.get('caps') !== 'noaggressor', depth: q.get('depth') === 'off' ? ('NONE' as const) : ('MBP' as const) };
-const provider = new ScriptedOrderFlowProvider(script, caps, { mode: 'realtime', preload: Math.floor(script.length * 0.45), contract: 'TEST-GC' });
+const burst = q.get('tape') === 'burst';
+const tape = burst ? burstTape() : null;
+const script = tape ? tape.script : generatedSession(45);
+const caps = { ...FULL_CAPS, aggressorSide: q.get('caps') !== 'noaggressor', depth: burst || q.get('depth') === 'off' ? ('NONE' as const) : ('MBP' as const) };
+const provider = new ScriptedOrderFlowProvider(script, caps, { mode: 'realtime', preload: tape ? tape.preload : Math.floor(script.length * 0.45), contract: 'TEST-GC' });
 const services = createServices({ ...defaultProviders(), orderFlow: { depth: provider, trade: provider } }, { storage: null, allowTestProviders: true });
 services.instruments.select('GC');
 import.meta.hot?.dispose(connectServices(services));

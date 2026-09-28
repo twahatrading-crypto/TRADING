@@ -71,6 +71,8 @@
 .ofheat__legend .is-buy, .ofprof__head .is-buy { background: rgba(34, 197, 94, 0.85); }
 .ofheat__legend .is-sell, .ofprof__head .is-sell { background: rgba(239, 68, 68, 0.85); }
 .ofheat__legend .is-unk, .ofprof__head .is-unk { background: rgba(156, 163, 175, 0.8); }
+.ofheat__legend .is-mixed { background: rgba(167, 139, 250, 0.8); }
+.ofheat__legend .is-unk { background: transparent; border: 1px solid rgba(209, 213, 219, 0.9); }
 .ofheat__head { display: flex; align-items: center; gap: 10px; padding: 7px 12px; flex-wrap: wrap; }
 .ofheat__head .srchart__tools { margin-left: auto; }
 .ofheat__banner { margin: 0 12px 6px; padding: 6px 10px; font-size: var(--fs-xs); color: var(--amber); border: 1px solid rgba(240, 180, 60, 0.35); border-radius: var(--radius-sm); background: var(--amber-soft); }
