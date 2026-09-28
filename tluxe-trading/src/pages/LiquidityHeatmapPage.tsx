@@ -1,4 +1,4 @@
-import { Flame } from 'lucide-react';
+import { Bell, ChevronDown, ChevronUp, Flame, LineChart, Play, SlidersHorizontal } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useServices } from '../app/servicesContext';
 import { UPCOMING_WINDOW_MS } from '../config/sessions';
@@ -18,6 +18,7 @@ import { HeatmapPanel } from '../components/orderFlow/HeatmapPanel';
 import type { HeatmapView } from '../components/orderFlow/HeatmapView';
 import type { Viewport } from '../components/orderFlow/heatmapMath';
 import { BookPanel, CvdPanel, EventsPanel, Pill, ProfilePanel, SettingsPanel } from '../components/orderFlow/OrderFlowPanels';
+import { capLabel } from '../components/databento/capabilities';
 import '../components/sr/sr.css';
 import '../components/orderFlow/orderFlow.css';
 
@@ -30,6 +31,39 @@ const TABS: [Tab, string][] = [
   ['events', 'Events'],
   ['settings', 'Settings'],
 ];
+/** Page-level panel toggles (presentation only; engine / view settings are unchanged). */
+interface OfUi {
+  heatmap: boolean;
+  cvd: boolean;
+  cob: boolean;
+  svp: boolean;
+}
+const DEFAULT_OF_UI: OfUi = { heatmap: true, cvd: true, cob: true, svp: true };
+const isUi = (v: unknown): v is OfUi => !!v && typeof v === 'object' && ['heatmap', 'cvd', 'cob', 'svp'].every((k) => typeof (v as Record<string, unknown>)[k] === 'boolean');
+const TIME_FRAMES: [number, string][] = [
+  [250, 'Real-time · 0.25s'],
+  [500, 'Real-time · 0.5s'],
+  [1000, 'Real-time · 1s'],
+  [5000, '5s'],
+  [10_000, '10s'],
+];
+const capTone = (v: string | null | undefined) => (v === 'LIVE' ? 'ok' : v === 'STALE' || v === 'WAITING' || v === 'SYNCING' || v === 'DEGRADED' ? 'warn' : v === 'OFFLINE' || v === 'UNAVAILABLE' ? 'bad' : 'muted');
+const CapPill = ({ label, v }: { label: string; v: string | null | undefined }) => (
+  <span className={`ofpill ofpill--${capTone(v)}`}>
+    <i aria-hidden="true" />
+    {label}: {v ? capLabel(v) : '—'}
+  </span>
+);
+function Toggle({ label, on, onChange, disabled, note }: { label: string; on: boolean; onChange: (v: boolean) => void; disabled?: boolean; note?: string }) {
+  return (
+    <label className={`oftoggle${disabled ? ' is-off' : ''}`} title={note}>
+      <span>{label}</span>
+      <input type="checkbox" role="switch" checked={on && !disabled} disabled={disabled} onChange={(e) => onChange(e.target.checked)} aria-label={label} />
+      {disabled && note && <em>{note}</em>}
+    </label>
+  );
+}
+
 const isView = (v: unknown): v is HeatmapViewSettings => !!v && typeof v === 'object' && 'contrast' in (v as object) && 'colorScheme' in (v as object);
 
 /** Trading Strategy → Liquidity Heatmap (order flow). Observation only: no signals, entries, SL / TP. */
@@ -59,7 +93,10 @@ function useNow(ms = 1000) {
 }
 
 function Workspace() {
-  const { orderFlow, instruments } = useServices();
+  const { orderFlow, instruments, databento } = useServices();
+  const dbFeed = useOptionalStore(databento?.state, (s) => s, null);
+  const [ui, setUi] = usePersistentState<OfUi>('tluxe.orderflow.ui.v1', { ...DEFAULT_OF_UI }, isUi);
+  const [diag, setDiag] = useState(false);
   const def = useActiveInstrument();
   const st = useStore(orderFlow.store, (s) => s);
   const quote = useMarket((s) => s.quote);
@@ -106,6 +143,18 @@ function Workspace() {
   };
   const cls = (t: Tab) => (tab === t ? '' : 'ofhide-narrow');
 
+  const depthAvailable = st.capabilities.depth !== 'NONE' || !!replay;
+  const dbCaps = (dbFeed?.health?.instruments as Record<string, { capabilities?: Record<string, string> } | undefined> | undefined)?.[def.id]?.capabilities ?? null;
+  const futures = instruments.list.filter((x) => x.kind === 'future' && x.exchange === 'COMEX');
+  const pickable = futures.some((x) => x.id === def.id) ? futures : [def, ...futures];
+  const startReplay = () => setReplay(orderFlow.createReplay());
+  const exitReplay = () => {
+    replay?.dispose();
+    setReplay(null);
+  };
+  const setU = (k: keyof OfUi, v: boolean) => setUi({ ...ui, [k]: v });
+  const gridCls = `ofgrid${ui.cob ? '' : ' no-cob'}${ui.svp ? '' : ' no-svp'}`;
+
   return (
     <main className="srmain ofmain">
       <div className="ofbar" data-testid="of-bar">
@@ -113,31 +162,68 @@ function Workspace() {
           <span className="hlehead__icon" aria-hidden="true"><Flame size={18} /></span>
           <div>
             <h1 className="ofbar__title">Liquidity Heatmap</h1>
-            <p className="ofbar__sub">Order flow · displayed exchange liquidity and executed trades</p>
+            <p className="ofbar__sub">Order flow · executed trades{depthAvailable ? ' + displayed exchange liquidity' : ''} · observation only</p>
           </div>
         </div>
-        <div className="ofbar__cell"><span>Instrument</span><strong>{def.shortName} · {def.exchange ?? def.venue}</strong></div>
         <div className="ofbar__cell"><span>Contract</span><strong data-testid="of-contract">{st.contract ?? '—'}</strong></div>
-        <div className="ofbar__cell"><span>Last{lastTradeLive ? ' (trade)' : ''}</span><strong className="num">{last == null ? '—' : formatPrice(last, d)}</strong></div>
+        <div className="ofbar__cell"><span>Last{lastTradeLive ? ' (trade)' : ''}</span><strong className="num ofbar__last">{last == null ? '—' : formatPrice(last, d)}</strong></div>
         <div className="ofbar__cell"><span>Change</span><strong className={`num ${(quote.change ?? 0) >= 0 ? 'up' : 'down'}`}>{quote.change == null ? '—' : `${quote.change >= 0 ? '+' : ''}${formatPrice(quote.change, d)} (${(quote.changePercent ?? 0).toFixed(2)}%)`}</strong></div>
         <div className="ofbar__cell"><span>Bid</span><strong className="num ofbid-t">{bid == null ? '—' : formatPrice(bid, d)}</strong></div>
         <div className="ofbar__cell"><span>Ask</span><strong className="num ofask-t">{ask == null ? '—' : formatPrice(ask, d)}</strong></div>
         <div className="ofbar__cell"><span>Spread</span><strong className="num">{bid != null && ask != null ? formatPrice(ask - bid, d) : '—'}</strong></div>
         <div className="ofbar__cell"><span>Session</span><strong>{session ? (session.status === 'OPEN' ? 'OPEN' : session.status) : '—'}</strong></div>
-        <div className="ofbar__cell ofbar__feeds" data-testid="of-feeds">
-          <Pill status={priceStatus} label="PRICE" />
-          <Pill status={depthStatus} label="DEPTH" />
-          <Pill status={tradeStatus} label="TRADES" />
-        </div>
         <div className="ofbar__cell"><span>Latency</span><strong className="num">{st.latencyMs == null ? '—' : `${st.latencyMs} ms`}</strong></div>
         <div className="ofbar__cell"><span>Exchange time</span><strong className="num">{st.exchTime ? new Date(st.exchTime).toLocaleTimeString('en-GB', { hour12: false }) : '—'}</strong></div>
-        <div className="ofbar__cell"><span>Local time</span><strong className="num">{new Date(now).toLocaleTimeString('en-GB', { hour12: false })}</strong></div>
+        <div className="ofbar__feeds" data-testid="of-feeds">
+          <Pill status={priceStatus} label="PRICE" />
+          <Pill status={tradeStatus} label="TRADES" />
+          {dbCaps && <CapPill label="OHLCV" v={dbCaps.ohlcv} />}
+          {dbCaps && <CapPill label="VOLUME" v={dbCaps.volume} />}
+          <Pill status={depthStatus} label="DEPTH" />
+          {dbCaps && <CapPill label="MBO" v={dbCaps.mbo} />}
+          <button type="button" className="ofbtn ofbtn--ghost" aria-expanded={diag} onClick={() => setDiag(!diag)} data-testid="of-diag-toggle">
+            Diagnostics {diag ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+          </button>
+        </div>
+      </div>
+
+      <div className="ofctl" data-testid="of-controls">
+        <label className="ofsel">
+          <span>Instrument</span>
+          <select value={def.id} onChange={(e) => instruments.select(e.target.value)} aria-label="Instrument">
+            {pickable.map((x) => <option key={x.id} value={x.id}>{x.shortName} ({x.exchange ?? x.venue})</option>)}
+          </select>
+        </label>
+        <label className="ofsel">
+          <span>Time frame</span>
+          <select value={st.settings.timeAggregationMs} onChange={(e) => orderFlow.setEngineSettings({ timeAggregationMs: Number(e.target.value) })} aria-label="Time frame">
+            {(TIME_FRAMES.some(([v]) => v === st.settings.timeAggregationMs) ? TIME_FRAMES : [...TIME_FRAMES, [st.settings.timeAggregationMs, `${st.settings.timeAggregationMs / 1000}s`] as [number, string]]).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+          </select>
+        </label>
+        <span className="ofctl__sep" aria-hidden="true" />
+        <Toggle label="Heatmap" on={ui.heatmap} onChange={(v) => setU('heatmap', v)} disabled={!depthAvailable} note="DATA UNAVAILABLE" />
+        <Toggle label="Volume Dots" on={view.showTrades} onChange={(v) => setView({ ...view, showTrades: v })} />
+        <Toggle label="CVD" on={ui.cvd} onChange={(v) => setU('cvd', v)} />
+        <Toggle label="COB" on={ui.cob} onChange={(v) => setU('cob', v)} />
+        <Toggle label="SVP" on={ui.svp} onChange={(v) => setU('svp', v)} />
+        <span className="ofctl__sep" aria-hidden="true" />
+        <button type="button" className="ofbtn" disabled title="No indicators are available on the order-flow chart yet"><LineChart size={13} aria-hidden="true" /> Indicators</button>
+        <button type="button" className="ofbtn" disabled title="Order-flow alerts are not available yet"><Bell size={13} aria-hidden="true" /> Alerts</button>
+        <button type="button" className="ofbtn" aria-pressed={!!replay} onClick={replay ? exitReplay : startReplay} disabled={!replay && orderFlow.recording().length === 0} title="Replay the recorded stream"><Play size={13} aria-hidden="true" /> Replay</button>
+        <button type="button" className="ofbtn" onClick={() => document.querySelector('[data-testid="of-settings"]')?.scrollIntoView({ behavior: 'smooth', block: 'center' })}><SlidersHorizontal size={13} aria-hidden="true" /> Settings</button>
       </div>
 
       {!st.supported && (
         <div className="panel ofwarn" role="status">
           <strong>{def.shortName}: no exchange Level-2.</strong> {st.reason}
           <button type="button" className="ofbtn" onClick={() => instruments.select('GC')}>Switch to GC — COMEX Gold Futures</button>
+        </div>
+      )}
+      {diag && (
+        <div className="panel ofdiag" data-testid="of-diagnostics">
+          <span>Depth provider <b>{st.depth.provider ?? 'none'}</b> · {st.depth.status.replace(/_/g, ' ')}{st.depth.detail ? ` — ${st.depth.detail}` : ''}</span>
+          <span>Trade provider <b>{st.trade.provider ?? 'none'}</b> · {st.trade.status.replace(/_/g, ' ')}{st.trade.detail ? ` — ${st.trade.detail}` : ''}</span>
+          <span>Capabilities: depth <b>{st.capabilities.depth}</b> · aggressor side <b>{st.capabilities.aggressorSide ? 'exchange' : 'none'}</b> · sequenced <b>{st.capabilities.sequenced ? 'yes' : 'no'}</b></span>
         </div>
       )}
 
@@ -147,7 +233,7 @@ function Workspace() {
         ))}
       </nav>
 
-      <div className="ofgrid">
+      <div className={gridCls}>
         <HeatmapPanel
           className={cls('heatmap')}
           source={engine}
@@ -164,21 +250,21 @@ function Workspace() {
           hasData={hasData}
           replay={replay}
           canReplay={orderFlow.recording().length > 0}
-          onStartReplay={() => setReplay(orderFlow.createReplay())}
-          onExitReplay={() => {
-            replay?.dispose();
-            setReplay(null);
-          }}
+          onStartReplay={startReplay}
+          onExitReplay={exitReplay}
           onViewport={setVp}
           onReady={setHeat}
+          depthAvailable={depthAvailable}
+          showHeatmap={ui.heatmap}
+          tradeSource={st.trade.provider}
         />
-        <BookPanel className={cls('dom')} data={data} d={d} depthStatus={depthStatus} depthDetail={st.depth.detail} />
-        <ProfilePanel className={cls('profile')} session={data.profile} visible={visibleProfile} mode={profileMode} onMode={setProfileMode} d={d} tradeStatus={tradeStatus} tradeDetail={st.trade.detail} aggressor={st.capabilities.aggressorSide} />
+        {ui.cob && <BookPanel className={cls('dom')} data={data} d={d} depthStatus={depthStatus} depthDetail={st.depth.detail} />}
+        {ui.svp && <ProfilePanel className={cls('profile')} session={data.profile} visible={visibleProfile} mode={profileMode} onMode={setProfileMode} d={d} tradeStatus={tradeStatus} tradeDetail={st.trade.detail} aggressor={st.capabilities.aggressorSide} />}
       </div>
-      <div className="ofbottom">
-        <SettingsPanel className={cls('settings')} view={view} onView={setView} engine={st.settings} onEngine={(p) => orderFlow.setEngineSettings(p)} />
+      <div className={`ofbottom${ui.cvd ? '' : ' no-cvd'}`}>
+        <SettingsPanel className={cls('settings')} view={view} onView={setView} engine={st.settings} onEngine={(p) => orderFlow.setEngineSettings(p)} depthAvailable={depthAvailable} />
         <EventsPanel className={cls('events')} events={data.events} limitations={data.limitations} d={d} onSelect={onSelect} selected={selected} />
-        <CvdPanel className={cls('cvd')} data={data} tradeDetail={st.trade.detail} />
+        {ui.cvd && <CvdPanel className={cls('cvd')} data={data} tradeDetail={st.trade.detail} />}
       </div>
       <p className="ofnote ofintegrity" data-testid="of-integrity">
         Integrity — depth: {st.depth.integrity ? `seq ${st.depth.integrity.lastSeq ?? '—'} · gaps ${st.depth.integrity.gaps} · duplicates ${st.depth.integrity.duplicates} · out-of-order ${st.depth.integrity.outOfOrder} · snapshots ${st.depth.integrity.snapshots}` : '—'}

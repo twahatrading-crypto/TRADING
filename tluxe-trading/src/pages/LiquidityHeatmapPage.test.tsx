@@ -143,4 +143,48 @@ describe('Liquidity Heatmap page', () => {
     expect(services.orderFlow.recording().length).toBe(recBefore);
     expect(p.snapshotRequests).toBe(0);
   });
+
+  it('trades-only provider (Databento Standard today): honest depth state, no book, PRINTS events, CVD PARTIAL, toggles', async () => {
+    window.location.hash = '#/engines/liquidity-heatmap';
+    const p = new ScriptedOrderFlowProvider(demoSession(), { ...FULL_CAPS, depth: 'NONE' }, { tickSize: TEST_TICK, contract: 'TEST-GC' });
+    const { services } = renderWithServices(<App />, { orderFlow: { depth: p, trade: p } }, { storage: memoryStorage({ 'tluxe.instrument.v1': 'GC' }), allowTestProviders: true });
+    await flush();
+    act(() => {
+      p.emitAll();
+      services.orderFlow.publish();
+    });
+    await flush();
+    const feeds = screen.getByTestId('of-feeds').textContent!;
+    expect(feeds).toContain('TRADES: LIVE');
+    expect(feeds).not.toContain('DEPTH: LIVE');
+    expect(screen.getByTestId('of-depth-na').textContent).toMatch(/DEPTH DATA UNAVAILABLE.*LEVEL-2 PROVIDER NOT CONNECTED/);
+    // Heatmap (liquidity) layer cannot be switched on without depth.
+    const heat = within(screen.getByTestId('of-controls')).getByRole('switch', { name: 'Heatmap' }) as HTMLInputElement;
+    expect(heat.disabled).toBe(true);
+    expect(heat.checked).toBe(false);
+    // COB: unavailable, never derived from executed trades.
+    const book = screen.getByTestId('of-book');
+    expect(book.textContent).toMatch(/LEVEL-2 DATA UNAVAILABLE/);
+    expect(book.textContent).toMatch(/PROVIDER NOT CONNECTED/);
+    expect(screen.queryByTestId('of-book-totals')).toBeNull();
+    // Events: print-based only, labelled as such; book detectors stay at zero.
+    const rows = screen.getAllByTestId('of-event-row');
+    expect(rows.length).toBeGreaterThan(0);
+    for (const r of rows) expect(r.textContent).toContain('PRINTS');
+    expect(screen.getByTestId('of-events').textContent).not.toMatch(/PULLING\s*\d{2}|STACKING\s*\d{2}/);
+    // CVD semantics unchanged: unknown volume kept separate, PARTIAL spelled out.
+    expect(screen.getByTestId('of-cvd-state').textContent).toMatch(/PARTIAL/);
+    expect(screen.getByTestId('of-cvd-partial').textContent).toMatch(/unknown volume excluded/);
+    expect(screen.getByTestId('of-cvd-totals').textContent).toMatch(/Unknown volume/);
+    expect(screen.getByTestId('of-profile-totals').textContent).toMatch(/Unknown/);
+    // Panel toggles are presentation only.
+    const digest = services.orderFlow.engine()!.digest();
+    fireEvent.click(within(screen.getByTestId('of-controls')).getByRole('switch', { name: 'COB' }));
+    expect(screen.queryByTestId('of-book')).toBeNull();
+    fireEvent.click(within(screen.getByTestId('of-controls')).getByRole('switch', { name: 'CVD' }));
+    expect(screen.queryByTestId('of-cvd')).toBeNull();
+    fireEvent.click(screen.getByTestId('of-diag-toggle'));
+    expect(screen.getByTestId('of-diagnostics').textContent).toMatch(/depth NONE/);
+    expect(services.orderFlow.engine()!.digest()).toBe(digest);
+  });
 });

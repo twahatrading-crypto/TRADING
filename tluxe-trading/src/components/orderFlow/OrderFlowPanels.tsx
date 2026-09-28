@@ -3,7 +3,7 @@ import { useMemo, useState, type ReactNode } from 'react';
 import { DEFAULT_HEATMAP_VIEW, DEFAULT_ORDER_FLOW_SETTINGS, type HeatmapViewSettings, type OrderFlowEngineSettings } from '../../engines/orderFlow/config';
 import type { FeedStatus, OrderFlowEvent, OrderFlowEventType, VolumeAtPrice } from '../../engines/orderFlow/types';
 import type { OrderFlowPanelsData } from '../../services/orderFlow/view';
-import { STATUS_TONE, statusText } from './status';
+import { EV_BASIS, STATUS_TONE, statusText } from './status';
 import { formatPrice } from '../../utils/format';
 
 export const Pill = ({ status, label }: { status: FeedStatus; label?: string }) => (
@@ -42,9 +42,9 @@ export function Unavailable({ title, detail }: { title: string; detail: ReactNod
 export function BookPanel({ data, d, depthStatus, depthDetail, className }: { data: OrderFlowPanelsData; d: number; depthStatus: FeedStatus; depthDetail: string | null; className?: string }) {
   const b = data.book;
   return (
-    <Panel title="COB — Current Order Book" icon={<BookOpen size={15} aria-hidden="true" />} right={<Pill status={depthStatus} />} className={`ofbook ${className ?? ''}`} testId="of-book">
+    <Panel title="COB (Order Book)" icon={<BookOpen size={15} aria-hidden="true" />} right={b ? <Pill status={depthStatus} /> : undefined} className={`ofbook ${className ?? ''}`} testId="of-book">
       {!b ? (
-        <Unavailable title="LEVEL-2 DATA UNAVAILABLE" detail={depthDetail ?? 'No valid order book. Levels are never invented.'} />
+        <Unavailable title="LEVEL-2 DATA UNAVAILABLE" detail={<><b>PROVIDER NOT CONNECTED</b><br />{depthDetail ?? 'No valid order book.'} Bid / ask sizes are never derived from executed trades.</>} />
       ) : (
         <>
           <table className="ofbook__t">
@@ -107,6 +107,7 @@ export function ProfilePanel({ session, visible, mode, onMode, d, tradeStatus, t
         <Unavailable title={tradeStatus === 'DATA_UNAVAILABLE' ? 'TRADE DATA UNAVAILABLE' : 'NO EXECUTED VOLUME YET'} detail={tradeDetail ?? 'Executed volume appears only from real prints.'} />
       ) : (
         <>
+          <div className="ofprof__head" aria-hidden="true"><span>Price</span><span><i className="is-sell" /> Sell <i className="is-buy" /> Buy <i className="is-unk" /> Unknown</span></div>
           <ol className="ofprof">
             {rows.slice(0, 80).map((r) => (
               <li key={r.price}>
@@ -119,11 +120,12 @@ export function ProfilePanel({ session, visible, mode, onMode, d, tradeStatus, t
               </li>
             ))}
           </ol>
-          <div className="oftotals">
+          <div className="oftotals" data-testid="of-profile-totals">
             <span>Buy <b className="num ofbid-t">{t.buy.toLocaleString()}</b></span>
             <span>Sell <b className="num ofask-t">{t.sell.toLocaleString()}</b></span>
             <span>Unknown <b className="num">{t.unknown.toLocaleString()}</b></span>
           </div>
+          <p className="ofnote">Executed exchange volume at price — not resting liquidity.</p>
           {!aggressor && <p className="ofnote">This provider supplies no aggressor side: all volume is UNKNOWN (never split into buy / sell).</p>}
         </>
       )}
@@ -151,6 +153,7 @@ export function CvdPanel({ data, tradeDetail, className }: { data: OrderFlowPane
       ) : (
         <>
           <strong className={`ofcvd__v num ${t.cvd >= 0 ? 'up' : 'down'}`}>{t.cvd >= 0 ? '+' : ''}{t.cvd.toLocaleString()}</strong>
+          {data.cvd === 'PARTIAL' && <span className="ofcvd__partial" data-testid="of-cvd-partial">PARTIAL · unknown volume excluded</span>}
           {path && (
             <svg className="ofcvd__spark" viewBox="0 0 100 40" preserveAspectRatio="none" aria-hidden="true">
               <path d={path} />
@@ -176,7 +179,7 @@ export function CvdPanel({ data, tradeDetail, className }: { data: OrderFlowPane
 const EV_LABEL: Record<OrderFlowEventType, string> = {
   LARGE_TRADE: 'Large Trade',
   LIQUIDITY_HIT: 'Liquidity Hit',
-  DEPTH_SWEEP: 'Depth Sweep',
+  DEPTH_SWEEP: 'Print Sweep',
   STACKING: 'Stacking',
   PULLING: 'Pulling',
   ABSORPTION_CANDIDATE: 'Absorption Candidate',
@@ -203,7 +206,7 @@ export function EventsPanel({ events, limitations, d, onSelect, selected, classN
       <div className="srtable-wrap ofevents__wrap">
         <table className="srtable ofevents__t">
           <thead>
-            <tr><th>Time</th><th>Event</th><th className="num-col">Price</th><th className="num-col">Size</th><th>Side</th><th>Evidence</th></tr>
+            <tr><th>Time</th><th>Type</th><th className="num-col">Price</th><th className="num-col">Size</th><th>Side</th><th>Basis</th><th>Details / evidence</th></tr>
           </thead>
           <tbody>
             {rows.slice(0, 100).map((e) => (
@@ -213,7 +216,8 @@ export function EventsPanel({ events, limitations, d, onSelect, selected, classN
                 <td className="num">{formatPrice(e.price, d)}</td>
                 <td className="num">{e.size.toLocaleString()}</td>
                 <td className={e.side === 'BUY' || e.side === 'bid' ? 'ofbid-t' : e.side === 'SELL' || e.side === 'ask' ? 'ofask-t' : ''}>{String(e.side).toUpperCase()}</td>
-                <td className="ofevents__ev">{e.detail}</td>
+                <td><span className={`ofbasis is-${EV_BASIS[e.type].toLowerCase()}`} title={EV_BASIS[e.type] === 'PRINTS' ? 'Measured from executed trades only' : 'Measured from a genuine displayed Level-2 book'}>{EV_BASIS[e.type]}</span></td>
+                <td className="ofevents__ev" title={e.detail}>{e.detail}</td>
               </tr>
             ))}
           </tbody>
@@ -221,24 +225,25 @@ export function EventsPanel({ events, limitations, d, onSelect, selected, classN
         {!rows.length && <p className="srtable__none">No order-flow events. Depth-dependent detectors run only on a valid Level-2 book.</p>}
       </div>
       {limitations.map((l) => <p key={l} className="ofnote ofnote--warn">⚠ {l}</p>)}
-      <p className="ofnote">Measured evidence only — events never assert intent. "Candidate" means the measurement matched, nothing more.</p>
+      <p className="ofnote">Measured evidence only — never intent. PRINTS = from executed trades; BOOK = needs genuine Level-2 depth (none without a depth provider). "Candidate" = the measurement matched, nothing more.</p>
     </Panel>
   );
 }
 
 /* --------------------------------- Settings --------------------------------- */
 
-function Slider({ label, value, min, max, step, onChange, fmt }: { label: string; value: number; min: number; max: number; step: number; onChange: (v: number) => void; fmt?: (v: number) => string }) {
+function Slider({ label, value, min, max, step, onChange, fmt, disabled }: { label: string; value: number; min: number; max: number; step: number; onChange: (v: number) => void; fmt?: (v: number) => string; disabled?: boolean }) {
   return (
-    <label className="ofslider">
+    <label className={`ofslider${disabled ? ' is-off' : ''}`} title={disabled ? 'Needs genuine Level-2 depth (no depth provider connected)' : undefined}>
       <span>{label}</span>
-      <input type="range" min={min} max={max} step={step} value={value} onChange={(e) => onChange(Number(e.target.value))} aria-label={label} />
+      <input type="range" min={min} max={max} step={step} value={value} disabled={disabled} onChange={(e) => onChange(Number(e.target.value))} aria-label={label} />
       <b className="num">{fmt ? fmt(value) : value}</b>
     </label>
   );
 }
 
-export function SettingsPanel({ view, onView, engine, onEngine, className }: { view: HeatmapViewSettings; onView: (v: HeatmapViewSettings) => void; engine: OrderFlowEngineSettings; onEngine: (p: Partial<OrderFlowEngineSettings>) => void; className?: string }) {
+export function SettingsPanel({ view, onView, engine, onEngine, className, depthAvailable = true }: { view: HeatmapViewSettings; onView: (v: HeatmapViewSettings) => void; engine: OrderFlowEngineSettings; onEngine: (p: Partial<OrderFlowEngineSettings>) => void; className?: string; depthAvailable?: boolean }) {
+  const nd = !depthAvailable;
   const set = <K extends keyof HeatmapViewSettings>(k: K, v: HeatmapViewSettings[K]) => onView({ ...view, [k]: v });
   return (
     <Panel
@@ -252,29 +257,32 @@ export function SettingsPanel({ view, onView, engine, onEngine, className }: { v
       className={`ofsettings ${className ?? ''}`}
       testId="of-settings"
     >
-      <Slider label="Lower cut-off" value={view.lowerCutoff} min={0} max={95} step={1} onChange={(v) => set('lowerCutoff', Math.min(v, view.upperCutoff - 1))} fmt={(v) => `${v}%`} />
-      <Slider label="Upper cut-off" value={view.upperCutoff} min={5} max={100} step={1} onChange={(v) => set('upperCutoff', Math.max(v, view.lowerCutoff + 1))} fmt={(v) => `${v}%`} />
-      <Slider label="Contrast" value={view.contrast} min={0.4} max={3} step={0.1} onChange={(v) => set('contrast', v)} fmt={(v) => v.toFixed(1)} />
-      <Slider label="Smoothing" value={view.smoothing} min={0} max={4} step={1} onChange={(v) => set('smoothing', v)} />
-      <Slider label="Price aggregation" value={view.priceAggregation} min={1} max={10} step={1} onChange={(v) => set('priceAggregation', v)} fmt={(v) => `${v} tick${v > 1 ? 's' : ''}`} />
-      <Slider label="Minimum depth" value={view.minDepth} min={1} max={200} step={1} onChange={(v) => set('minDepth', v)} />
+      <div className="ofsettings__grid">
+      <Slider disabled={nd} label="Lower cut-off" value={view.lowerCutoff} min={0} max={95} step={1} onChange={(v) => set('lowerCutoff', Math.min(v, view.upperCutoff - 1))} fmt={(v) => `${v}%`} />
+      <Slider disabled={nd} label="Upper cut-off" value={view.upperCutoff} min={5} max={100} step={1} onChange={(v) => set('upperCutoff', Math.max(v, view.lowerCutoff + 1))} fmt={(v) => `${v}%`} />
+      <Slider disabled={nd} label="Contrast" value={view.contrast} min={0.4} max={3} step={0.1} onChange={(v) => set('contrast', v)} fmt={(v) => v.toFixed(1)} />
+      <Slider disabled={nd} label="Smoothing" value={view.smoothing} min={0} max={4} step={1} onChange={(v) => set('smoothing', v)} />
+      <Slider disabled={nd} label="Price aggregation" value={view.priceAggregation} min={1} max={10} step={1} onChange={(v) => set('priceAggregation', v)} fmt={(v) => `${v} tick${v > 1 ? 's' : ''}`} />
+      <Slider disabled={nd} label="Minimum depth" value={view.minDepth} min={1} max={200} step={1} onChange={(v) => set('minDepth', v)} />
       <Slider label="Time aggregation" value={engine.timeAggregationMs} min={250} max={10_000} step={250} onChange={(v) => onEngine({ timeAggregationMs: v })} fmt={(v) => `${v / 1000}s`} />
       <Slider label="Large trade threshold" value={engine.largeTradeSize} min={5} max={500} step={5} onChange={(v) => onEngine({ largeTradeSize: v })} />
       <Slider label="Sweep threshold" value={engine.sweepLevels} min={2} max={10} step={1} onChange={(v) => onEngine({ sweepLevels: v })} fmt={(v) => `${v} levels`} />
-      <label className="ofslider">
+      <label className={`ofslider${nd ? ' is-off' : ''}`}>
         <span>Color scheme</span>
-        <select value={view.colorScheme} onChange={(e) => set('colorScheme', e.target.value as HeatmapViewSettings['colorScheme'])} aria-label="Color scheme">
+        <select disabled={nd} value={view.colorScheme} onChange={(e) => set('colorScheme', e.target.value as HeatmapViewSettings['colorScheme'])} aria-label="Color scheme">
           <option value="blue-red">Blue → Red</option>
           <option value="thermal">Thermal</option>
           <option value="mono">Mono</option>
         </select>
       </label>
+      </div>
       <div className="ofchecks">
-        <label><input type="checkbox" checked={view.autoNormalize} onChange={(e) => set('autoNormalize', e.target.checked)} /> Auto normalization</label>
+        <label className={nd ? 'is-off' : ''}><input type="checkbox" disabled={nd} checked={view.autoNormalize} onChange={(e) => set('autoNormalize', e.target.checked)} /> Auto normalization</label>
         <label><input type="checkbox" checked={view.showTrades} onChange={(e) => set('showTrades', e.target.checked)} /> Show volume dots</label>
         <label><input type="checkbox" checked={view.showPriceLine} onChange={(e) => set('showPriceLine', e.target.checked)} /> Show price line</label>
       </div>
-      <p className="ofnote">Cut-offs, contrast, smoothing, colours, price aggregation and minimum depth change the picture only. Time aggregation and the detection thresholds rebuild the engine deterministically from the recorded stream.</p>
+      {nd && <p className="ofnote ofnote--warn">Depth controls are disabled: no Level-2 provider is connected, so there is no liquidity picture to tune.</p>}
+      <p className="ofnote">Picture controls change the view only. Time aggregation and thresholds rebuild the engine deterministically from the recorded stream.</p>
     </Panel>
   );
 }

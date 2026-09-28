@@ -15,7 +15,32 @@ export const AXIS_RIGHT = 70;
 export const AXIS_BOTTOM = 22;
 export const DEFAULT_SPAN_COLUMNS = 180;
 export const DEFAULT_PRICE_TICKS = 60;
+/** With little history (e.g. just after connecting) the default window starts at the first real column (min 30). */
+export const MIN_SPAN_COLUMNS = 30;
 const ZOOM = 1.25;
+
+/** A drawn executed-trade bubble (for hover): exact quantities as aggregated by the engine for that column / price. */
+export interface TradeHover {
+  x: number;
+  y: number;
+  time: number;
+  aggMs: number;
+  price: number;
+  buy: number;
+  sell: number;
+  unknown: number;
+}
+
+/**
+ * Trade-bubble radius: area ∝ executed quantity, normalised to the 95th percentile of the visible cells (one outlier
+ * no longer shrinks everything else) and clamped to the row / column size so bubbles never form solid walls.
+ * The quantities themselves are never changed - hover shows them exactly.
+ */
+export function bubbleRadius(vol: number, norm: number, rowPx: number, colPx: number): number {
+  const rMax = Math.max(4, Math.min(14, Math.max(rowPx, colPx) * 0.9));
+  const rMin = Math.min(2, rMax);
+  return rMin + (rMax - rMin) * Math.sqrt(Math.min(1, vol / Math.max(1, norm)));
+}
 
 type Raf = { request: (cb: () => void) => number; cancel: (id: number) => void };
 const defaultRaf = (): Raf =>
@@ -29,6 +54,12 @@ export interface HeatmapViewOptions {
   raf?: Raf;
   decimals: number;
   tickSize: number;
+  /** false = the provider has NO Level-2 at all: no liquidity cells and no gap hatch are drawn (nothing is inferred). */
+  depthAvailable?: () => boolean;
+  /** UI toggle for the liquidity layer (cells + right-edge depth). */
+  showCells?: () => boolean;
+  /** Hovered executed-trade bubble (exact engine quantities) or null. */
+  onHover?: (h: TradeHover | null) => void;
 }
 
 export class HeatmapView implements ChartNavigable {
@@ -51,6 +82,10 @@ export class HeatmapView implements ChartNavigable {
   private pinch: { dist: number; vp: Viewport } | null = null;
   private destroyed = false;
   private lastEmit = 0;
+  /** Default window grows with the available history until DEFAULT_SPAN_COLUMNS (cleared by any manual zoom). */
+  private autoSpan = true;
+  private bubbles: { x: number; y: number; r: number; h: Omit<TradeHover, 'x' | 'y'> }[] = [];
+  private hovered: TradeHover | null = null;
 
   constructor(
     private readonly host: HTMLElement,
@@ -70,6 +105,7 @@ export class HeatmapView implements ChartNavigable {
     this.canvas.addEventListener('pointerup', this.onUp);
     this.canvas.addEventListener('pointercancel', this.onUp);
     this.canvas.addEventListener('dblclick', this.onDbl);
+    this.canvas.addEventListener('pointerleave', this.onLeave);
     if (typeof ResizeObserver !== 'undefined') {
       this.ro = new ResizeObserver(() => this.resize());
       this.ro.observe(host);
@@ -88,6 +124,7 @@ export class HeatmapView implements ChartNavigable {
     this.canvas.removeEventListener('pointerup', this.onUp);
     this.canvas.removeEventListener('pointercancel', this.onUp);
     this.canvas.removeEventListener('dblclick', this.onDbl);
+    this.canvas.removeEventListener('pointerleave', this.onLeave);
     this.canvas.remove();
   }
 
@@ -149,8 +186,16 @@ export class HeatmapView implements ChartNavigable {
     const agg = this.agg();
     const t1 = l.t + 2 * agg;
     const c = l.tick ?? 0;
-    this.set({ t0: t1 - DEFAULT_SPAN_COLUMNS * agg, t1, p0: c - DEFAULT_PRICE_TICKS / 2, p1: c + DEFAULT_PRICE_TICKS / 2 });
+    this.autoSpan = true;
+    this.set({ t0: t1 - this.defaultSpan(t1), t1, p0: c - DEFAULT_PRICE_TICKS / 2, p1: c + DEFAULT_PRICE_TICKS / 2 });
     this.emitViewport(true);
+  }
+  /** Default time span: DEFAULT_SPAN_COLUMNS, or - with less real history - from the first column (never empty space). */
+  private defaultSpan(t1: number): number {
+    const agg = this.agg();
+    const first = this.source()?.allColumns()[0];
+    const have = first ? t1 - first.t + agg : 0;
+    return Math.max(MIN_SPAN_COLUMNS * agg, Math.min(DEFAULT_SPAN_COLUMNS * agg, have));
   }
   /** Fit: all retained history and every price that has liquidity or prints. */
   fitView(): void {
@@ -170,6 +215,7 @@ export class HeatmapView implements ChartNavigable {
     const agg = this.agg();
     this.follow = true;
     this.autoPrice = false;
+    this.autoSpan = false;
     this.set({ t0: cols[0]!.t, t1: cols[cols.length - 1]!.t + 2 * agg, p0: lo - 2, p1: hi + 3 });
     this.emitViewport(true);
   }
@@ -179,6 +225,7 @@ export class HeatmapView implements ChartNavigable {
     const span = v.t1 - v.t0;
     const agg = this.agg();
     const next = Math.min(Math.max(span * f, 10 * agg), 20_000 * agg);
+    this.autoSpan = false;
     const a = anchor ?? (this.follow ? v.t1 : (v.t0 + v.t1) / 2);
     const k = (a - v.t0) / span;
     this.set({ ...v, t0: a - k * next, t1: a - k * next + next });
@@ -212,6 +259,7 @@ export class HeatmapView implements ChartNavigable {
     const ps = v.p1 - v.p0;
     this.follow = false;
     this.autoPrice = false;
+    this.autoSpan = false;
     this.highlight = { t, tick };
     this.set({ t0: t - ts / 2, t1: t + ts / 2, p0: tick - ps / 2, p1: tick + ps / 2 });
     this.emitViewport(true);
@@ -257,7 +305,10 @@ export class HeatmapView implements ChartNavigable {
     this.drag = { ...p, zone: this.zone(p.x, p.y), vp: { ...this.vp } };
   };
   private onMove = (e: PointerEvent) => {
-    if (!this.pointers.has(e.pointerId)) return;
+    if (!this.pointers.has(e.pointerId)) {
+      this.hover(this.local(e));
+      return;
+    }
     const p = this.local(e);
     this.pointers.set(e.pointerId, p);
     if (this.pinch && this.pointers.size === 2) {
@@ -302,6 +353,24 @@ export class HeatmapView implements ChartNavigable {
     this.emitViewport(true);
   };
   private onDbl = () => this.resetView();
+  private onLeave = () => this.setHover(null);
+  private hover(p: { x: number; y: number }): void {
+    let best: (typeof this.bubbles)[number] | null = null;
+    let bd = Infinity;
+    for (const b of this.bubbles) {
+      const d = Math.hypot(b.x - p.x, b.y - p.y);
+      if (d <= Math.max(b.r, 4) + 2 && d < bd) {
+        bd = d;
+        best = b;
+      }
+    }
+    this.setHover(best ? { x: best.x, y: best.y, ...best.h } : null);
+  }
+  private setHover(h: TradeHover | null): void {
+    if (h === this.hovered || (h && this.hovered && h.time === this.hovered.time && h.price === this.hovered.price)) return;
+    this.hovered = h;
+    this.opts.onHover?.(h);
+  }
 
   /* ------------------------------- drawing ------------------------------- */
 
@@ -318,8 +387,9 @@ export class HeatmapView implements ChartNavigable {
       const l = this.latest();
       const agg = this.agg();
       if (this.follow && l) {
-        const span = this.vp.t1 - this.vp.t0;
-        this.vp = { ...this.vp, t1: l.t + 2 * agg, t0: l.t + 2 * agg - span };
+        const t1 = l.t + 2 * agg;
+        const span = this.autoSpan ? this.defaultSpan(t1) : this.vp.t1 - this.vp.t0;
+        this.vp = { ...this.vp, t1, t0: t1 - span };
       }
       if (this.autoPrice && l && l.tick !== null) {
         const half = (this.vp.p1 - this.vp.p0) / 2;
@@ -372,7 +442,9 @@ export class HeatmapView implements ChartNavigable {
     const pAgg = Math.max(1, Math.round(s.priceAggregation), Math.ceil((v.p1 - v.p0) / Math.max(1, ph)));
     const base = Math.floor(v.p0 / pAgg) * pAgg;
     const rows = Math.max(1, Math.ceil((v.p1 - base) / pAgg) + 1);
-    if (vis.length) {
+    const depthOn = this.opts.depthAvailable?.() ?? true;
+    const cellsOn = depthOn && (this.opts.showCells?.() ?? true);
+    if (vis.length && cellsOn) {
       const { lo, hi } = bounds(cols, s, vis);
       if (!this.off) this.off = document.createElement('canvas');
       this.off.width = vis.length;
@@ -386,7 +458,7 @@ export class HeatmapView implements ChartNavigable {
           for (let r = 0; r < rows; r++) {
             const o = ((rows - 1 - r) * vis.length + i) * 4;
             let rgb: [number, number, number];
-            if (!vals) rgb = r % 4 < 2 ? [34, 38, 48] : [26, 29, 38]; // NO DATA hatch — never inferred
+            if (!vals) rgb = r % 4 < 2 ? [34, 38, 48] : [26, 29, 38]; // gap in a REAL book: NO DATA hatch — never inferred
             else {
               const x = intensity(vals[r]!, lo, hi, s.contrast, s.minDepth);
               rgb = x > 0 ? colorAt(x, s.colorScheme) : bg;
@@ -430,25 +502,56 @@ export class HeatmapView implements ChartNavigable {
     step('bestAsk', 'rgba(248,113,113,0.55)', 1, -0.5);
     if (s.showPriceLine) step('lastTick', 'rgba(255,255,255,0.9)', 1.4, 0);
 
-    // 3) Executed trades: bubble area ∝ size; colour only from the provider's aggressor (UNKNOWN grey).
+    // 3) Executed trades: one bubble per column × price, area ∝ executed quantity (robust p95 normalisation, clamped
+    //    to the row / column size); colour only from the provider's aggressor side - UNKNOWN stays grey.
+    this.bubbles = [];
     if (s.showTrades) {
-      let max = 0;
-      for (const c of vis) for (const t of c.trades) max = Math.max(max, t.buy, t.sell, t.unknown);
-      if (max > 0)
+      const totals: number[] = [];
+      for (const c of vis) for (const t of c.trades) totals.push(t.buy + t.sell + t.unknown);
+      if (totals.length) {
+        totals.sort((a, b) => a - b);
+        const norm = totals[Math.min(totals.length - 1, Math.floor(totals.length * 0.95))]!;
+        const rowPx = ph / Math.max(1, v.p1 - v.p0);
         for (const c of vis)
-          for (const t of c.trades)
-            for (const [vol, color] of [
-              [t.buy, 'rgba(34,197,94,0.85)'],
-              [t.sell, 'rgba(239,68,68,0.85)'],
-              [t.unknown, 'rgba(156,163,175,0.8)'],
-            ] as [number, string][]) {
-              if (!vol) continue;
-              const r = 1.5 + 13 * Math.sqrt(vol / max);
-              ctx.fillStyle = color;
-              ctx.beginPath();
-              ctx.arc(X(c.t) + cw / 2, Y(t.tick), r, 0, Math.PI * 2);
-              ctx.fill();
+          for (const t of c.trades) {
+            const vol = t.buy + t.sell + t.unknown;
+            if (!vol) continue;
+            const r = bubbleRadius(vol, norm, rowPx, cw);
+            const x = X(c.t) + cw / 2;
+            const y = Y(t.tick);
+            const known = t.buy + t.sell;
+            ctx.fillStyle = t.unknown >= known ? 'rgba(156,163,175,0.78)' : t.buy >= t.sell ? 'rgba(34,197,94,0.82)' : 'rgba(239,68,68,0.82)';
+            ctx.beginPath();
+            ctx.arc(x, y, r, 0, Math.PI * 2);
+            ctx.fill();
+            if (known && t.unknown && t.unknown < known) {
+              ctx.strokeStyle = 'rgba(156,163,175,0.9)'; // part of this cell's volume has no aggressor side
+              ctx.lineWidth = 1;
+              ctx.stroke();
             }
+            this.bubbles.push({ x, y, r, h: { time: c.t, aggMs: agg, price: t.tick * this.opts.tickSize, buy: t.buy, sell: t.sell, unknown: t.unknown } });
+          }
+      }
+    }
+    // 3b) Current displayed depth at the right edge (latest VALID book only - genuine Level-2 levels, never inferred).
+    const lastCol = vis[vis.length - 1];
+    if (cellsOn && lastCol && lastCol.valid) {
+      let maxSz = 0;
+      for (const z of lastCol.bidSizes) maxSz = Math.max(maxSz, z);
+      for (const z of lastCol.askSizes) maxSz = Math.max(maxSz, z);
+      if (maxSz > 0) {
+        const wMax = Math.min(140, pw * 0.12);
+        const rowH = Math.max(1, ph / Math.max(1, v.p1 - v.p0) - 1);
+        const bar = (ticks: Int32Array, sizes: Float64Array, color: string) => {
+          ctx.fillStyle = color;
+          for (let i = 0; i < ticks.length; i++) {
+            const w = (sizes[i]! / maxSz) * wMax;
+            ctx.fillRect(pw - w, Y(ticks[i]!) - rowH / 2, w, rowH);
+          }
+        };
+        bar(lastCol.bidTicks, lastCol.bidSizes, 'rgba(34,197,94,0.75)');
+        bar(lastCol.askTicks, lastCol.askSizes, 'rgba(239,68,68,0.75)');
+      }
     }
     // 4) Highlighted event.
     if (this.highlight) {
