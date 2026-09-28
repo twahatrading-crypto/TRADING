@@ -51,7 +51,7 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(from_env(prod_env()).allowed_origins, (APP,))
         for bad in ({"ALLOWED_ORIGINS": "*"}, {"ALLOWED_ORIGINS": "http://localhost:5182"}, {"ALLOWED_ORIGINS": "https://*.example.app"},
                     {"ALLOWED_ORIGINS": "http://tluxe.example.app"}, {"PUBLIC_APP_URL": "http://tluxe.example.app"}, {"PUBLIC_APP_URL": ""},
-                    {"DATABASE_URL": ""}, {"TLUXE_OWNER_PASSWORD_HASH": ""}, {"TLUXE_OWNER_PASSWORD_HASH": "plaintextpassword"}):
+                    {"DATABASE_URL": ""}, {"TLUXE_OWNER_PASSWORD_HASH": "plaintextpassword"}):
             with self.assertRaises(ConfigError, msg=str(bad)):
                 from_env(prod_env(**bad))
 
@@ -69,7 +69,7 @@ class TestConfig(unittest.TestCase):
         with self.assertRaises(ConfigError) as cm:
             from_env({"TLUXE_ENV": "production", "PORT": "8080"})
         msg = str(cm.exception)
-        for key in ("PUBLIC_APP_URL", "DATABASE_URL", "TLUXE_OWNER_PASSWORD_HASH"):
+        for key in ("PUBLIC_APP_URL", "DATABASE_URL"):
             self.assertIn(key, msg)
         # Railway shows domains without a scheme; RAILWAY_PUBLIC_DOMAIN is a fallback.
         self.assertEqual(from_env(prod_env(PUBLIC_APP_URL="tluxe.example.app", ALLOWED_ORIGINS="tluxe.example.app")).allowed_origins, (APP,))
@@ -86,9 +86,9 @@ class TestConfig(unittest.TestCase):
         self.assertFalse(bad.configured)
         self.assertIn("TLUXE_AI_URL", bad.problem)
         self.assertNotIn(AI_TOKEN, bad.problem)
-        # Authentication stays mandatory: no hash -> no start, whatever else is set.
-        with self.assertRaises(ConfigError):
-            from_env(prod_env(TLUXE_OWNER_PASSWORD_HASH=""))
+        # No owner hash yet -> public READ-ONLY market-data mode (not an open gateway); a hash switches it off.
+        self.assertTrue(from_env(prod_env(TLUXE_OWNER_PASSWORD_HASH="")).public_market_data)
+        self.assertFalse(from_env(prod_env()).public_market_data)
 
     def test_development_keeps_localhost(self):
         c = from_env(dev_env())
@@ -239,6 +239,7 @@ class GatewayCase(unittest.IsolatedAsyncioTestCase):
 
     prod = False
     workers = False
+    extra_env: dict = {}
     store_factory = staticmethod(lambda cfg: MemoryStore())
 
     async def asyncSetUp(self) -> None:
@@ -261,7 +262,7 @@ class GatewayCase(unittest.IsolatedAsyncioTestCase):
         base = f"http://127.0.0.1:{self.ai_srv.port}"
         env = (prod_env if self.prod else dev_env)(TLUXE_AI_URL=base, TLUXE_AI_TOKEN=AI_TOKEN, TLUXE_DATABENTO_URL=base, TLUXE_DB_BRIDGE_TOKEN=DB_TOKEN,
                                                     TLUXE_NEWS_URL=f"http://127.0.0.1:{self.news_srv.port}", TLUXE_NEWS_TOKEN=NEWS_TOKEN,
-                                                    TLUXE_MT5_BRIDGE_TOKEN_SHA256=BRIDGE_SHA)
+                                                    TLUXE_MT5_BRIDGE_TOKEN_SHA256=BRIDGE_SHA, **self.extra_env)
         self.cfg = from_env(env)
         self.store = self.store_factory(self.cfg)
         self.app = make_app(self.cfg, store=self.store, workers=self.workers)
@@ -460,7 +461,7 @@ class TestGatewayWorkers(GatewayCase):
 
 
 @unittest.skipUnless(PG_ADMIN, "TLUXE_TEST_DATABASE_URL not set - production-mode tests need PostgreSQL (never faked)")
-class TestGatewayProduction(GatewayCase):
+class PgGatewayCase(GatewayCase):
     """Production mode runs only on PostgreSQL: each test gets a fresh temporary database."""
 
     prod = True
@@ -482,6 +483,9 @@ class TestGatewayProduction(GatewayCase):
         async with await psycopg.AsyncConnection.connect(PG_ADMIN, autocommit=True) as c:
             await c.execute(f'DROP DATABASE IF EXISTS "{self.dbname}" WITH (FORCE)')
 
+
+@unittest.skipUnless(PG_ADMIN, "TLUXE_TEST_DATABASE_URL not set - production-mode tests need PostgreSQL (never faked)")
+class TestGatewayProduction(PgGatewayCase):
     async def test_production_refuses_memory_store(self):
         app = make_app(self.cfg, store=MemoryStore(), workers=False)
         with self.assertRaises(RuntimeError):
@@ -502,6 +506,31 @@ class TestGatewayProduction(GatewayCase):
         sid = (await self.client.post("/api/auth/login", json={"password": PASSWORD}, headers={"Origin": APP})).cookies[COOKIE].value
         r = await self.client.post("/api/alerts", json={}, headers={"Cookie": f"{COOKIE}={sid}"})
         self.assertEqual(r.status, 403)
+
+
+@unittest.skipUnless(PG_ADMIN, "TLUXE_TEST_DATABASE_URL not set - production-mode tests need PostgreSQL (never faked)")
+class TestPublicMarketDataMode(PgGatewayCase):
+    """Production with NO owner hash yet: only read-only Databento GETs are public; everything else stays 401."""
+
+    extra_env = {"TLUXE_OWNER_PASSWORD_HASH": ""}
+
+    async def test_only_databento_reads_are_public(self):
+        self.assertTrue(self.cfg.public_market_data)
+        c = await (await self.client.get("/api/config")).json()
+        self.assertEqual((c["authRequired"], c["publicMarketData"]), (False, True))
+        for path in ("/api/databento/v1/health", "/api/databento/v1/feed?cursor=0&roots=GC", "/api/databento/status?root=GC"):
+            r = await self.client.get(path)
+            self.assertEqual(r.status, 200, path)
+            self.assertNotIn(DB_TOKEN, await r.text())
+        for method, path in (("GET", "/api/status"), ("GET", "/api/auth/me"), ("GET", "/api/ai/health"), ("POST", "/api/ai/chat"),
+                             ("GET", "/api/news/v1/health"), ("GET", "/api/mt5/v1/health"), ("POST", "/api/alerts"), ("POST", "/api/snapshots")):
+            r = await self.client.request(method, path, headers={"Origin": APP}, json={} if method == "POST" else None)
+            self.assertEqual(r.status, 401, f"{method} {path}")
+        with self.assertRaises(Exception):
+            await self.client.ws_connect("/api/stream", headers={"Origin": APP})
+        r = await self.client.post("/api/auth/login", json={"password": "anything-at-all"}, headers={"Origin": APP})
+        self.assertEqual((r.status, (await r.json())["error"]["code"]), (503, "AUTH_NOT_CONFIGURED"))
+        self.assertIn("Strict-Transport-Security", (await self.client.get("/api/config")).headers)
 
 
 @unittest.skipUnless(PG_ADMIN, "TLUXE_TEST_DATABASE_URL not set - PostgreSQL tests skipped (never faked)")

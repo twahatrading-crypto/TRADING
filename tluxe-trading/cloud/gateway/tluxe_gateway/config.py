@@ -94,6 +94,9 @@ class GatewayConfig:
     mt5_bridge_keys: tuple[Mt5BridgeKey, ...] = ()
     static_dir: str = ""
     log_format: str = "text"
+    # Production without an owner password hash (login not set up yet): the gateway still starts, but ONLY the
+    # read-only Databento market-data GET routes are served without a session; every other API stays 401.
+    public_market_data: bool = False
 
     @property
     def production(self) -> bool:
@@ -209,8 +212,9 @@ def from_env(env: dict | None = None) -> GatewayConfig:
                 break
         if not (e.get("DATABASE_URL") or "").strip():
             errors.append("DATABASE_URL is required in production (reference the Railway PostgreSQL service: ${{Postgres.DATABASE_URL}})")
-        if not _HASH_RE.match((e.get("TLUXE_OWNER_PASSWORD_HASH") or "").strip()):
-            errors.append("TLUXE_OWNER_PASSWORD_HASH is required in production and must be a scrypt hash (python -m tluxe_gateway.hashpw)")
+        raw_hash = (e.get("TLUXE_OWNER_PASSWORD_HASH") or "").strip()
+        if raw_hash and not _HASH_RE.match(raw_hash):
+            errors.append("TLUXE_OWNER_PASSWORD_HASH must be a scrypt hash (python -m tluxe_gateway.hashpw)")
     else:
         origins = origins or DEV_ORIGINS
         for o in origins:
@@ -255,4 +259,6 @@ def from_env(env: dict | None = None) -> GatewayConfig:
         mt5_bridge_keys=mt5_keys,
         static_dir=(e.get("TLUXE_STATIC_DIR") or "").strip(),
         log_format=log_format,
+        # No owner login configured yet -> read-only public market data only (login returns AUTH_NOT_CONFIGURED).
+        public_market_data=not pw_hash,
     )

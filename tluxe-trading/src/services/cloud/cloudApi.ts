@@ -57,6 +57,24 @@ async function json<T>(res: Response): Promise<T | null> {
   }
 }
 
+export interface RuntimeConfig {
+  authRequired: boolean;
+  /** Owner login not configured yet: only read-only Databento market data is served without a session. */
+  publicMarketData: boolean;
+}
+
+/** Gateway runtime flags (public, no secrets). Unknown / unreachable -> login required (fail closed). */
+export async function fetchRuntimeConfig(fetchImpl: FetchLike = f): Promise<RuntimeConfig> {
+  try {
+    const res = await fetchImpl('/api/config', { credentials: 'same-origin', cache: 'no-store' });
+    const body = res.ok ? await json<{ authRequired?: unknown; publicMarketData?: unknown }>(res) : null;
+    const publicMarketData = body?.publicMarketData === true && body?.authRequired === false;
+    return { authRequired: !publicMarketData, publicMarketData };
+  } catch {
+    return { authRequired: true, publicMarketData: false };
+  }
+}
+
 export async function sessionStatus(fetchImpl: FetchLike = f): Promise<'authenticated' | 'anonymous' | 'unreachable'> {
   try {
     const res = await fetchImpl('/api/auth/me', { credentials: 'same-origin', cache: 'no-store' });

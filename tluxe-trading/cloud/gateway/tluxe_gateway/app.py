@@ -126,6 +126,19 @@ async def security(request: web.Request, handler):
     return resp
 
 
+def market_data_route(fn):
+    """Read-only market data. Needs a session like everything else - EXCEPT while no owner login is configured
+    (cfg.public_market_data), when GET requests are served without one. Nothing else is ever opened this way."""
+    protected = require_session(fn)
+
+    async def wrapped(request: web.Request):
+        if request.app[K_CFG].public_market_data and request.method == "GET":
+            return await fn(request)
+        return await protected(request)
+
+    return wrapped
+
+
 def require_session(fn):
     async def wrapped(request: web.Request):
         sid = await _session(request)
@@ -164,7 +177,8 @@ async def readyz(request: web.Request) -> web.Response:
 
 async def runtime_config(request: web.Request) -> web.Response:
     cfg = request.app[K_CFG]
-    return _json({"mode": "cloud", "env": cfg.env, "version": __version__, "authRequired": True, "streamPath": "/api/stream", "readOnly": True})
+    return _json({"mode": "cloud", "env": cfg.env, "version": __version__, "authRequired": not cfg.public_market_data,
+                  "publicMarketData": cfg.public_market_data, "streamPath": "/api/stream", "readOnly": True})
 
 
 async def login(request: web.Request) -> web.Response:
@@ -224,7 +238,7 @@ async def _proxy_get(request: web.Request, up: Upstream, path: str) -> web.Respo
     return _json(body if body is not None else {}, status)
 
 
-@require_session
+@market_data_route
 async def databento_status(request: web.Request) -> web.Response:
     """Safe COMEX GC Databento status, proven by the latest REAL trade / OHLCV bar the gateway can read back."""
     app, cfg = request.app, request.app[K_CFG]
@@ -253,7 +267,7 @@ async def databento_status(request: web.Request) -> web.Response:
     return _json(body)
 
 
-@require_session
+@market_data_route
 async def databento_proxy(request: web.Request) -> web.Response:
     path = request.match_info["path"]
     if not DATABENTO_PATH.match(path):

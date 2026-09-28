@@ -44,6 +44,9 @@ def main() -> int:
     logging.getLogger("tluxe.gateway").info("TLUXE gateway starting (%s) on [%s]:%s · origins %s · services ai=%s databento=%s news=%s · mt5 keys %d",
                                             cfg.env, cfg.host, cfg.port, ", ".join(cfg.allowed_origins), cfg.ai.configured, cfg.databento.configured,
                                             cfg.news.configured, len(cfg.mt5_bridge_keys))
+    if cfg.public_market_data:
+        logging.getLogger("tluxe.gateway").warning("owner login NOT configured (TLUXE_OWNER_PASSWORD_HASH unset): public read-only market-data mode - "
+                                                   "only /api/databento/* GET is served without a session; every other API requires sign-in")
     web.run_app(make_app(cfg), host=bind_host(cfg.host), port=cfg.port, access_log=None, shutdown_timeout=15, print=None, handle_signals=True)
     return 0
 

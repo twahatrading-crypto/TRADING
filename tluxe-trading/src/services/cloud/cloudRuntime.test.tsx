@@ -186,3 +186,15 @@ describe('cloud status panel - truthful states only', () => {
     expect(panel).toHaveTextContent('UNAVAILABLE'); // e.g. PostgreSQL / OpenAI not reported in this status
   });
 });
+
+describe('gateway runtime config - public market-data mode', () => {
+  it('only an explicit public market-data answer skips sign-in; anything else fails closed', async () => {
+    const { fetchRuntimeConfig } = await import('./cloudApi');
+    const cfg = (body: unknown, status = 200) => fetchRuntimeConfig(async () => new Response(JSON.stringify(body), { status }));
+    expect(await cfg({ authRequired: false, publicMarketData: true })).toEqual({ authRequired: false, publicMarketData: true });
+    expect(await cfg({ authRequired: true, publicMarketData: false })).toEqual({ authRequired: true, publicMarketData: false });
+    expect(await cfg({ publicMarketData: true })).toEqual({ authRequired: true, publicMarketData: false }); // inconsistent -> closed
+    expect(await cfg({}, 500)).toEqual({ authRequired: true, publicMarketData: false });
+    expect(await fetchRuntimeConfig(async () => Promise.reject(new Error('down')))).toEqual({ authRequired: true, publicMarketData: false });
+  });
+});
