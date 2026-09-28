@@ -14,6 +14,7 @@ import { getSessionState } from '../../utils/sessions';
 import { HeaderClock } from './HeaderClock';
 import { SymbolSelector } from './SymbolSelector';
 import './market.css';
+import { IS_CLOUD } from '../../config/deployment';
 
 const CONNECTION_TONE: Record<ConnectionState, 'ok' | 'warn' | 'bad' | 'off' | 'info'> = {
   LIVE: 'ok',
@@ -123,7 +124,7 @@ export function MarketBar({ onMenu, menuOpen }: { onMenu?: () => void; menuOpen?
             compact
           />
           <span className="mbar__provider" data-testid="provider-line">
-            Provider: <strong>{provider?.name ?? 'Not Connected'}</strong>
+            Provider: <strong>{provider ? (IS_CLOUD && provider.id === 'mt5' ? 'MT5 CLOUD' : provider.name) : 'Not Connected'}</strong>
             {feed?.providerSymbol && <> · <strong>{feed.providerSymbol}</strong></>}
             {feed?.code === 'LIVE' && quote.spreadPoints != null && <> · spread {quote.spreadPoints} pts</>}
           </span>

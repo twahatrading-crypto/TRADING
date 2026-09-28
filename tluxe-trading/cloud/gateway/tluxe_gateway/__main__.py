@@ -46,7 +46,7 @@ def main() -> int:
                                             cfg.news.configured, len(cfg.mt5_bridge_keys))
     if cfg.public_market_data:
         logging.getLogger("tluxe.gateway").warning("owner login NOT configured (TLUXE_OWNER_PASSWORD_HASH unset): public read-only market-data mode - "
-                                                   "only /api/databento/* GET is served without a session; every other API requires sign-in")
+                                                   "only /api/databento/* and /api/mt5/* GET (read-only market data, rate-limited) are served without a session; every other API requires sign-in")
     web.run_app(make_app(cfg), host=bind_host(cfg.host), port=cfg.port, access_log=None, shutdown_timeout=15, print=None, handle_signals=True)
     return 0
 

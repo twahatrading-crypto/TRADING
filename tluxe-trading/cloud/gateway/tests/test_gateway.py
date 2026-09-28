@@ -522,8 +522,13 @@ class TestPublicMarketDataMode(PgGatewayCase):
             r = await self.client.get(path)
             self.assertEqual(r.status, 200, path)
             self.assertNotIn(DB_TOKEN, await r.text())
+        # MT5 relay: readable without login, still read-only; no VPS link attached -> honest 503 BRIDGE_OFFLINE, never data.
+        r = await self.client.get("/api/mt5/v1/quote/XAUUSD")
+        self.assertEqual((r.status, (await r.json())["error"]["code"]), (503, "BRIDGE_OFFLINE"))
+        self.assertEqual((await self.client.post("/api/mt5/v1/quote/XAUUSD", headers={"Origin": APP})).status, 401)
+        self.assertEqual((await self.client.get("/api/mt5/v1/order_send")).status, 403)
         for method, path in (("GET", "/api/status"), ("GET", "/api/auth/me"), ("GET", "/api/ai/health"), ("POST", "/api/ai/chat"),
-                             ("GET", "/api/news/v1/health"), ("GET", "/api/mt5/v1/health"), ("POST", "/api/alerts"), ("POST", "/api/snapshots")):
+                             ("GET", "/api/news/v1/health"), ("POST", "/api/alerts"), ("POST", "/api/snapshots")):
             r = await self.client.request(method, path, headers={"Origin": APP}, json={} if method == "POST" else None)
             self.assertEqual(r.status, 401, f"{method} {path}")
         with self.assertRaises(Exception):
@@ -531,6 +536,17 @@ class TestPublicMarketDataMode(PgGatewayCase):
         r = await self.client.post("/api/auth/login", json={"password": "anything-at-all"}, headers={"Origin": APP})
         self.assertEqual((r.status, (await r.json())["error"]["code"]), (503, "AUTH_NOT_CONFIGURED"))
         self.assertIn("Strict-Transport-Security", (await self.client.get("/api/config")).headers)
+
+
+class TestPublicRateLimiter(unittest.TestCase):
+    def test_bucket_limits_then_refills_per_client(self):
+        from tluxe_gateway.app import PublicRateLimiter
+        t = [0.0]
+        lim = PublicRateLimiter(rate_per_s=2, burst=3, clock=lambda: t[0])
+        self.assertEqual([lim.allow("a") for _ in range(4)], [True, True, True, False])
+        self.assertTrue(lim.allow("b"))  # other clients unaffected
+        t[0] += 1.0
+        self.assertEqual([lim.allow("a") for _ in range(3)], [True, True, False])
 
 
 @unittest.skipUnless(PG_ADMIN, "TLUXE_TEST_DATABASE_URL not set - PostgreSQL tests skipped (never faked)")

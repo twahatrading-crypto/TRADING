@@ -78,7 +78,19 @@ jobs:
               apiCalls: [...api], problems: errs,
               gatewayLastTrade: st.lastTrade, gatewayContract: st.activeContract, verifiedByRealData: st.verifiedByRealData,
             }, null, 1));
-            await p.screenshot({ path: 'app.png' }); await b.close();
+            // Settings: two independent provider cards; MT5 relay answer (isolation: MT5 down must not affect GC).
+            await p.goto(base + '/#/settings'); await p.waitForTimeout(12000);
+            const st2 = await p.evaluate(() => document.body.innerText);
+            const card = (t, n) => { const i = st2.indexOf(t); return i < 0 ? null : st2.slice(i, i + n).replace(/\n+/g, ' | '); };
+            const mt5 = await p.request.get(base + '/api/mt5/v1/quote/XAUUSD');
+            const st3 = await (await p.request.get(base + '/api/databento/status?root=GC')).json();
+            console.log(JSON.stringify({
+              mt5CloudCard: card('MT5 CLOUD', 420), databentoCard: card('DATABENTO', 700),
+              mt5RelayQuote: { status: mt5.status(), body: (await mt5.text()).slice(0, 200) },
+              gcWhileMt5Down: { verifiedByRealData: st3.verifiedByRealData, contract: st3.activeContract, lastEventUtc: st3.lastEventUtc, ageMs: st3.lastEventAgeMs },
+              localhostRequests: errs.filter((e) => e.startsWith('LOCALHOST')).length,
+            }, null, 1));
+            await b.close();
           })();
           JS
           node probe.cjs

@@ -126,13 +126,42 @@ async def security(request: web.Request, handler):
     return resp
 
 
+class PublicRateLimiter:
+    """Token bucket per client address for UNAUTHENTICATED market-data requests (public market-data mode only)."""
+
+    def __init__(self, rate_per_s: float = 40.0, burst: float = 200.0, clock=time.monotonic) -> None:
+        self.rate, self.burst, self.clock = rate_per_s, burst, clock
+        self.buckets: dict[str, tuple[float, float]] = {}
+
+    def allow(self, client: str) -> bool:
+        now = self.clock()
+        tokens, at = self.buckets.get(client, (self.burst, now))
+        tokens = min(self.burst, tokens + (now - at) * self.rate)
+        if len(self.buckets) > 10_000:  # bounded memory
+            self.buckets.clear()
+        if tokens < 1:
+            self.buckets[client] = (tokens, now)
+            return False
+        self.buckets[client] = (tokens - 1, now)
+        return True
+
+
+def _client(request: web.Request) -> str:
+    # Behind Railway's proxy the last X-Forwarded-For hop is the address the proxy saw.
+    xff = request.headers.get("X-Forwarded-For", "")
+    return xff.split(",")[-1].strip() if xff else (request.remote or "?")
+
+
 def market_data_route(fn):
-    """Read-only market data. Needs a session like everything else - EXCEPT while no owner login is configured
-    (cfg.public_market_data), when GET requests are served without one. Nothing else is ever opened this way."""
+    """Read-only market data (Databento GC / SI, MT5 relay XAUUSD / XAGUSD). Needs a session like everything else -
+    EXCEPT while no owner login is configured (cfg.public_market_data), when GET requests are served without one,
+    rate-limited per client. Nothing else is ever opened this way."""
     protected = require_session(fn)
 
     async def wrapped(request: web.Request):
         if request.app[K_CFG].public_market_data and request.method == "GET":
+            if not request.app[K_STATE]["publicLimiter"].allow(_client(request)):
+                return _err(429, "RATE_LIMITED", "Too many requests - slow down.")
             return await fn(request)
         return await protected(request)
 
@@ -305,7 +334,7 @@ async def ai_chat(request: web.Request) -> web.Response:
         return _err(502, "UPSTREAM_UNAVAILABLE", "TLUXE AI service not reachable.")
 
 
-@require_session
+@market_data_route
 async def mt5_proxy(request: web.Request) -> web.Response:
     if request.method != "GET":
         return _err(405, "READ_ONLY", "MT5 access is read-only market data.")
@@ -565,7 +594,7 @@ def make_app(cfg: GatewayConfig, store=None, workers: bool = True, http_session_
     app[K_CFG] = cfg
     app[K_STORE] = store or (PgStore(cfg.database_url.reveal()) if cfg.database_url else MemoryStore())
     app[K_HUB] = StreamHub()
-    app[K_STATE] = {"limiter": LoginLimiter(), "tasks": []}
+    app[K_STATE] = {"limiter": LoginLimiter(), "publicLimiter": PublicRateLimiter(), "tasks": []}
 
     async def on_integrity(kind: str, detail: dict) -> None:
         await app[K_STORE].add_integrity("mt5", None, kind, detail)

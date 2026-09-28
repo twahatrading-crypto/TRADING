@@ -16,6 +16,7 @@ import '../databento/databento.css';
 import { DatabentoSettingsPanel } from '../databento/DatabentoSettings';
 import { Panel } from '../ui/Panel';
 import { CloudStatusPanel } from '../cloud/CloudStatusPanel';
+import { DatabentoCloudCard } from '../databento/DatabentoCloudCard';
 import { IS_CLOUD } from '../../config/deployment';
 import { StatusPill } from '../ui/StatusPill';
 import './settings.css';
@@ -76,7 +77,9 @@ export function SettingsPage() {
         <div className="settings__grid">
           {/* Cloud: connections are configured server-side only; the browser just reports the gateway's health. */}
           {IS_CLOUD ? <CloudStatusPanel /> : <Mt5ConfigPanel />}
+          {/* Two independent providers: MT5 (XAUUSD / XAGUSD, cloud Windows VPS) and Databento (GC / SI futures). */}
           {mt5 ? <BridgePanel provider={mt5} /> : <DisabledPanel />}
+          {IS_CLOUD && <DatabentoCloudCard />}
           <FeedPanel />
           {mt5 && <DiscoveryPanel provider={mt5} />}
           {!IS_CLOUD && <DatabentoSettingsPanel />}
@@ -172,8 +175,20 @@ function BridgePanel({ provider }: { provider: Mt5Provider }) {
   const bridgeLabel =
     st.error?.code === 'MT5_BRIDGE_OFFLINE' || (st.heartbeatAt === null && st.attempted) ? 'OFFLINE' : st.heartbeatAt === null ? 'CONNECTING' : 'REACHABLE';
   return (
-    <Panel id="mt5-status" title="Connection" icon={<Radio size={15} />} subtitle="Bridge · terminal · account">
+    <Panel
+      id="mt5-status"
+      title={IS_CLOUD ? 'MT5 CLOUD' : 'Connection'}
+      icon={<Radio size={15} />}
+      subtitle={IS_CLOUD ? 'Broker MT5 terminal on the cloud Windows VPS · XAUUSD / XAGUSD (never used for GC / SI)' : 'Bridge · terminal · account'}
+    >
       <dl className="kv">
+        {IS_CLOUD && (
+          <>
+            <Row k="Status" v={bridgeLabel === 'REACHABLE' && t?.state === 'CONNECTED' ? 'CONNECTED' : 'DISCONNECTED'} testId="mt5-cloud-status" />
+            <Row k="Host" v="CLOUD WINDOWS VPS (outbound authenticated link to the TLUXE gateway)" />
+            <Row k="Symbols" v={['XAUUSD', 'XAGUSD'].map((id) => { const r = st.resolutions.find((x) => x.instrumentId === id); return `${id} → ${r?.providerSymbol ?? r?.status ?? 'not resolved'}`; }).join(' · ')} />
+          </>
+        )}
         <Row k="Bridge" v={`${bridgeLabel}${st.bridgeVersion ? ` · v${st.bridgeVersion}` : ''}`} testId="bridge-state" />
         <Row k="Bridge heartbeat" v={ageText(st.heartbeatAt, now)} />
         <Row k="Terminal" v={t ? [t.state, t.name, t.build ? `build ${t.build}` : null].filter(Boolean).join(' · ') : UNKNOWN} />
