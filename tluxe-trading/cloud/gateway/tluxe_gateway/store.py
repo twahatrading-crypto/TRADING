@@ -123,7 +123,8 @@ class MemoryStore:
     async def depth_stats(self) -> list[dict]:
         acc: dict[tuple, dict] = {}
         for r in self.depth:
-            a = acc.setdefault((r["root"], r["contract"]), {"root": r["root"], "contract": r["contract"], "firstMs": None, "lastMs": None, "rows": 0, "observations": 0})
+            a = acc.setdefault((r["root"], r["contract"]), {"root": r["root"], "contract": r["contract"], "firstMs": None, "lastMs": None, "rows": 0, "observations": 0, "gaps": 0})
+            a["gaps"] += 1 if r["kind"] == "gap" else 0
             if r["kind"] == "snapshot":
                 a["firstMs"] = r["t0"] if a["firstMs"] is None else min(a["firstMs"], r["t0"])
             a["lastMs"] = r["t1"] if a["lastMs"] is None else max(a["lastMs"], r["t1"])
@@ -133,6 +134,10 @@ class MemoryStore:
 
     async def depth_bytes(self) -> int | None:
         return None
+
+    async def depth_gaps(self, root: str, contract: str, limit: int = 10) -> list[dict]:
+        g = [r for r in self.depth if r["root"] == root and r["contract"] == contract and r["kind"] == "gap"]
+        return [{"t": r["t0"], "data": r["data"]} for r in g[-limit:]][::-1]
 
     async def prune_depth(self, before_ms: int) -> int:
         n = len(self.depth)
@@ -306,9 +311,9 @@ class PgStore:
 
     async def depth_stats(self) -> list[dict]:
         async with self.pool.connection() as conn:
-            cur = await conn.execute("""SELECT root, contract, min(t0_ms) FILTER (WHERE kind = 'snapshot'), max(t1_ms), count(*), coalesce(sum(n_obs), 0)
-                FROM ibkr_depth_obs GROUP BY root, contract""")
-            return [{"root": r[0], "contract": r[1], "firstMs": r[2], "lastMs": r[3], "rows": r[4], "observations": int(r[5])} for r in await cur.fetchall()]
+            cur = await conn.execute("""SELECT root, contract, min(t0_ms) FILTER (WHERE kind = 'snapshot'), max(t1_ms), count(*), coalesce(sum(n_obs), 0),
+                count(*) FILTER (WHERE kind = 'gap') FROM ibkr_depth_obs GROUP BY root, contract""")
+            return [{"root": r[0], "contract": r[1], "firstMs": r[2], "lastMs": r[3], "rows": r[4], "observations": int(r[5]), "gaps": r[6]} for r in await cur.fetchall()]
 
     async def depth_bytes(self) -> int | None:
         row = await self._one("SELECT pg_total_relation_size('ibkr_depth_obs')")
@@ -316,3 +321,8 @@ class PgStore:
 
     async def prune_depth(self, before_ms: int) -> int:
         return await self._exec("DELETE FROM ibkr_depth_obs WHERE t1_ms < %s", (before_ms,))
+
+    async def depth_gaps(self, root: str, contract: str, limit: int = 10) -> list[dict]:
+        async with self.pool.connection() as conn:
+            cur = await conn.execute("SELECT t0_ms, data FROM ibkr_depth_obs WHERE root=%s AND contract=%s AND kind='gap' ORDER BY t0_ms DESC, id DESC LIMIT %s", (root, contract, limit))
+            return [{"t": r[0], "data": r[1]} for r in await cur.fetchall()]

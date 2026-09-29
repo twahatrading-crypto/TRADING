@@ -70,6 +70,19 @@ class TestMatrix(unittest.TestCase):
         m = build_matrix(rows, 0, 30_000, 1000)
         self.assertEqual([c[0] for c in m["columns"]], [0, 1000])
 
+    def test_overlapping_deploy_old_process_gap_does_not_blank_the_new_recording(self):
+        def row(kind, t, data):
+            return {"kind": kind, "t0": t, "t1": t, "data": json.dumps(data)}
+        rows = [row("snapshot", 0, {"b": [[1.0, 10, 0]], "a": [], "i": "old"}),
+                row("snapshot", 1000, {"b": [[1.0, 10, 0]], "a": [], "i": "new"}),  # new gateway starts while the old one runs
+                row("gap", 1500, {"reason": "gateway stopped", "i": "old"}),  # the old one shuts down
+                {"kind": "delta", "t0": 2000, "t1": 4000, "data": json.dumps({"c": []})}]
+        m = build_matrix(rows, 0, 4000, 1000)
+        self.assertEqual([c[0] for c in m["columns"]], [0, 1000, 2000, 3000])  # continuous: the new book keeps being confirmed
+        rows[2] = row("gap", 1500, {"reason": "stale", "i": "new"})  # the CURRENT process's own gap still ends the book
+        m = build_matrix(rows, 0, 4000, 1000)
+        self.assertEqual([c[0] for c in m["columns"]], [0])  # nothing confirmed after 1000 -> nothing drawn after it
+
     def test_removed_level_disappears(self):
         rows = [snap(0, [(1.0, 10), (0.9, 5)], [], t1=1000), delta(1000, 2000, [(1000, 0, 0.9, 0)])]
         m = build_matrix(rows, 0, 2000, 1000)
@@ -103,7 +116,7 @@ class TestRecorder(unittest.IsolatedAsyncioTestCase):
         rows = await store.depth_rows("GC", "GCZ6", 0, 10**12)
         key = [r for r in rows if r["kind"] == "snapshot"][-1]
         self.assertEqual(key["t0"], 10_000)  # 2 s before the confirming poll (clock-skew margin)
-        self.assertEqual(json.loads(key["data"]), {"b": [[4150.0, 9.0, 0]], "a": []})
+        self.assertEqual(json.loads(key["data"]), {"b": [[4150.0, 9.0, 0]], "a": [], "i": rec.instance})
         self.assertEqual(rows[-1]["t1"], 12_000)  # liveness confirmed through the poll
         rec.gap("GC", "stale")
         rec.changes("GC", 13_000, [("bid", 4150.0, 1, 0)])  # ignored while invalid

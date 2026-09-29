@@ -614,7 +614,16 @@ export class HeatmapView implements ChartNavigable {
         prevCol = c;
         pix[x] = c;
       }
-      histCols = distinct.filter((c) => histEnd !== null && c.t < histEnd).length;
+      const hv = distinct.filter((c) => histEnd !== null && c.t < histEnd);
+      histCols = hv.length;
+      if (hist && hv.length) {
+        const bw = hist.bucketMs;
+        this.canvas.dataset.histFirstT = String(hv[0]!.t);
+        this.canvas.dataset.histLastT = String(hv[hv.length - 1]!.t);
+        // Buckets inside the drawn history span without a recorded column (gaps: drawn as no data, never bridged).
+        this.canvas.dataset.missingBuckets = String(Math.max(0, Math.round((hv[hv.length - 1]!.t - hv[0]!.t) / bw) + 1 - hv.length));
+        this.canvas.dataset.dupCols = String(hist.columns.length - new Set(hist.columns.map((c) => c.t)).size);
+      }
       const vals: number[] = [];
       // Auto normalization: the visible columns; otherwise everything loaded (recorded history + live columns).
       const normSrc: readonly { valid: boolean; bidSizes: Float64Array; askSizes: Float64Array }[] = s.autoNormalize ? distinct : [...(hist?.columns.map((c) => ({ ...c, valid: true })) ?? []), ...cols];
@@ -681,6 +690,8 @@ export class HeatmapView implements ChartNavigable {
     this.canvas.dataset.firstDepthMs = first === null ? '' : String(first);
     this.canvas.dataset.preFirstPx = String(preFirstPx);
     this.canvas.dataset.histCols = String(histCols);
+    this.canvas.dataset.priceRows = String(rows);
+    this.canvas.dataset.priceRowTicks = String(pAgg);
     this.canvas.dataset.histBucket = String(hist?.bucketMs ?? '');
     this.canvas.dataset.histEnd = histEnd === null ? '' : String(histEnd);
     // 2) Best bid / ask steps - genuine Level-2 only (a trades-only feed has none).

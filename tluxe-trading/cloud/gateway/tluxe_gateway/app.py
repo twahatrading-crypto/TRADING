@@ -489,8 +489,14 @@ async def ibkr_status(request: web.Request) -> web.Response:
     return _json(request.app[K_IBKR].status())
 
 
+def _ibkr_client_seen(request: web.Request) -> None:
+    # Diagnostics only: when a browser last read IBKR depth (proves recording does not depend on a viewer).
+    request.app[K_STATE]["ibkrClientMs"] = int(time.time() * 1000)
+
+
 @market_data_route
 async def ibkr_book(request: web.Request) -> web.Response:
+    _ibkr_client_seen(request)
     root = _ibkr_root(request)
     if root is None:
         return _err(400, "BAD_ROOT", IBKR_ROOT_ERR)
@@ -499,6 +505,7 @@ async def ibkr_book(request: web.Request) -> web.Response:
 
 @market_data_route
 async def ibkr_updates(request: web.Request) -> web.Response:
+    _ibkr_client_seen(request)
     root = _ibkr_root(request)
     if root is None:
         return _err(400, "BAD_ROOT", IBKR_ROOT_ERR)
@@ -524,7 +531,19 @@ async def ibkr_history_status(request: web.Request) -> web.Response:
         size = await store.depth_bytes()
     except Exception:  # noqa: BLE001
         size = None
-    return _json({**rec.status(), "persistence": getattr(store, "kind", "unknown"), "tableBytes": size,
+    relay = request.app[K_IBKR]
+    st = relay.status()
+    gaps = {}
+    for r in ("GC", "SI"):
+        c = _ibkr_contract(request, r)
+        try:
+            gaps[r] = [{"t": g["t"], **{k: v for k, v in json.loads(g["data"]).items() if k in ("reason", "i")}} for g in await store.depth_gaps(r, c or "")]
+        except Exception:  # noqa: BLE001
+            gaps[r] = None
+    feed = {r: {k: st["roots"][r].get(k) for k in ("state", "detail", "lastUpdateMs", "polls", "depthSeq", "bidLevels", "askLevels", "outOfOrder", "malformed")} for r in ("GC", "SI")}
+    return _json({**rec.status(), "persistence": getattr(store, "kind", "unknown"), "tableBytes": size, "serverMs": int(time.time() * 1000),
+                  "lastBrowserDepthReadMs": request.app[K_STATE].get("ibkrClientMs"), "streamClients": len(request.app[K_HUB].clients),
+                  "ibkrFeed": feed, "recentGaps": gaps, "ibkrSession": {k: st["session"].get(k) for k in ("state", "apiConnected", "reconnects")},
                   "retentionDays": request.app[K_CFG].ibkr_depth_retention_days, "provider": "Interactive Brokers", "depthType": "PRICE_LEVEL", "mbo": False,
                   "timestampSource": "IBKR bridge receive time (lastUpdate, UTC) - not an exchange timestamp",
                   "contracts": {r: _ibkr_contract(request, r) for r in ("GC", "SI")}})

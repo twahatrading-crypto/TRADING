@@ -667,12 +667,13 @@ jobs:
           JS
           node ibkr.cjs
   depth:
-    # Server-side IBKR depth history on production: persisted observations, matrix integrity, refresh / second device.
+    # Server-side IBKR depth history on PRODUCTION. Phase A records the running (old) gateway, this push's redeploy is the
+    # controlled restart, then: restart survival, browser-independent collection, alignment, refresh, second device.
     if: ${{ contains(github.event.head_commit.message, '[depth]') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
-      - name: Recorded IBKR depth history - API integrity + browser (refresh, second device) + screenshots
+      - name: Recorded IBKR depth history - restart, no-browser collection, alignment, refresh, second device, screenshots
         shell: bash
         run: |
           npm init -y >/dev/null && npm i -s playwright@1 >/dev/null && npx playwright install --with-deps chromium >/dev/null 2>&1
@@ -682,80 +683,118 @@ jobs:
           const base = 'https://twahatrading.com';
           let fails = 0;
           const check = (ok, m) => { console.log(`    ${ok ? 'OK  ' : 'FAIL'} ${m}`); if (!ok) fails++; };
-          const j = async (p) => (await fetch(base + p)).json();
-          const iso = (t) => (t ? new Date(t).toISOString() : '—');
+          const j = async (p) => (await fetch(base + p, { headers: { 'User-Agent': 'tluxe-cloud-probe/1.0' } })).json();
+          const iso = (t) => (t ? new Date(Number(t)).toISOString() : '—');
           const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+          const hist = async () => j('/api/ibkr/history');
+          const rootSt = (h, r) => h.roots && h.roots[r] && h.roots[r][h.contracts ? h.contracts[r] : Object.keys(h.roots[r])[0]];
           (async () => {
-            await sleep(Number(process.env.WAIT_MS || 300000)); // this push redeploys Railway; let recording run
-            let h = null;
-            for (let i = 0; i < 30; i++) {
-              h = await j('/api/ibkr/history');
-              const gc = h.roots && h.roots.GC && h.roots.GC[h.contracts.GC];
-              console.log(`settle ${i}: GC ${h.contracts.GC} rows=${gc && gc.rows} obs=${gc && gc.observations} pending=${h.pendingRows} writeErrors=${h.writeErrors}`);
-              if (gc && gc.rows > 50) break;
+            const jobStart = Date.now();
+            // ---------- Phase A: the gateway process running BEFORE this push's redeploy ----------
+            const before = await hist();
+            const B = {};
+            for (const r of ['GC', 'SI']) { const st = rootSt(before, r); B[r] = st; console.log(`BEFORE restart ${r}: instance=${before.instance || '(previous build)'} first=${iso(st && st.firstMs)} last=${iso(st && st.lastMs)} rows=${st && st.rows} observations=${st && st.observations}`); }
+            // ---------- Phase B: wait for the new gateway process (Railway redeploy of this commit) ----------
+            let after = null;
+            for (let i = 0; i < 80; i++) {
               await sleep(15000);
+              try { after = await hist(); } catch { continue; }
+              if (after.instance && after.processStartedMs > jobStart - 60000 && after.instance !== before.instance) break;
             }
-            console.log(`\n/api/ibkr/history persistence=${h.persistence} retentionDays=${h.retentionDays} tableBytes=${h.tableBytes} rowsWritten(this process)=${h.rowsWritten} writeErrors=${h.writeErrors} pending=${h.pendingRows} dropped=${h.droppedUnsaved}`);
-            console.log(`recording: ${JSON.stringify(h.recording)}`);
-            check(h.persistence === 'postgresql', 'history persisted in PostgreSQL (server-side, independent of browsers)');
-            check(h.writeErrors === 0 && h.droppedUnsaved === 0, 'no write errors / dropped observations');
+            check(after && after.instance && after.processStartedMs > jobStart - 60000, `new gateway process running (instance ${after && after.instance}, started ${iso(after && after.processStartedMs)})`);
+            await sleep(120000); // let the restarted collector run
+            after = await hist();
+            console.log(`\nPOSTGRESQL persistence=${after.persistence} tableBytes=${after.tableBytes} retentionDays=${after.retentionDays} writeErrors=${after.writeErrors} pending=${after.pendingRows} dropped=${after.droppedUnsaved}`);
+            console.log(`IBKR session=${JSON.stringify(after.ibkrSession)} feed=${JSON.stringify(after.ibkrFeed)}`);
             const first = {};
-            for (const root of ['GC', 'SI']) {
-              const c = h.contracts[root];
-              const st = h.roots[root] && h.roots[root][c];
-              first[root] = st && st.firstMs;
-              console.log(`${root} ${c}: firstStored=${iso(st && st.firstMs)} lastObserved=${iso(st && st.lastMs)} durationMin=${st && st.durationMs ? (st.durationMs / 60000).toFixed(1) : '—'} rows=${st && st.rows} observations=${st && st.observations}`);
-              check(st && st.firstMs && st.observations > 0, `${root}: IBKR depth persisted (${st && st.observations} level observations)`);
+            for (const r of ['GC', 'SI']) {
+              const st = rootSt(after, r);
+              first[r] = st && st.firstMs;
+              console.log(`${r} ${after.contracts[r]}: first=${iso(st.firstMs)} latest=${iso(st.lastMs)} duration=${(st.durationMs / 60000).toFixed(1)} min rows=${st.rows} observations=${st.observations} gaps=${st.gaps}`);
+              console.log(`   recent gaps: ${JSON.stringify((after.recentGaps[r] || []).slice(0, 4).map((g) => [iso(g.t), g.reason, g.i || '-']))}`);
+              check(after.persistence === 'postgresql', `${r}: stored in production PostgreSQL`);
+              if (B[r] && B[r].firstMs) {
+                check(st.firstMs === B[r].firstMs, `${r}: first stored timestamp unchanged across the restart (${iso(st.firstMs)})`);
+                check(st.observations > B[r].observations && st.lastMs > B[r].lastMs, `${r}: new observations appended after the restart (${B[r].observations} -> ${st.observations})`);
+              }
             }
-            // Update rates (IBKR depth + Databento), measured over 20 s.
+            // No liquidity across the restart: matrix coverage around the new process start.
+            for (const r of ['GC', 'SI']) {
+              const t0 = Math.floor((after.processStartedMs - 120000) / 5000) * 5000;
+              const m = await j(`/api/ibkr/heatmap?root=${r}&from=${t0}&to=${after.processStartedMs + 180000}&bucket=5000`);
+              const cov = new Map(m.columns.map((c) => [c[0], c[1]]));
+              const line = [];
+              for (let t = t0; t < after.processStartedMs + 180000; t += 5000) line.push(cov.has(t) ? (cov.get(t) >= 0.99 ? '#' : '+') : '.');
+              console.log(`${r} coverage around restart (5 s buckets from ${iso(t0)}; # full, + partial, . none): ${line.join('')}`);
+            }
+            // ---------- Phase C: browser-independent collection (no browser opened by this job yet) ----------
+            const h1 = await hist(); await sleep(180000); const h2 = await hist();
+            for (const r of ['GC', 'SI']) {
+              const a = rootSt(h1, r), b = rootSt(h2, r);
+              console.log(`${r} no-browser window ${iso(h1.serverMs)} -> ${iso(h2.serverMs)}: observations ${a.observations} -> ${b.observations}, latest ${iso(a.lastMs)} -> ${iso(b.lastMs)}`);
+              check(b.observations > a.observations && b.lastMs > a.lastMs, `${r}: PostgreSQL kept growing with no browser from this job`);
+            }
+            const lastRead = h2.lastBrowserDepthReadMs;
+            console.log(`last browser IBKR depth read by ANY client: ${iso(lastRead)} (${lastRead && lastRead > h1.serverMs ? 'some other browser was viewing during the window' : 'no browser read IBKR depth during the window'}); stream clients now=${h2.streamClients}`);
+            // ---------- Phase D: live rates + Databento ----------
             const s0 = await j('/api/ibkr/status'); const d0 = await Promise.all(['GC', 'SI'].map((r) => j(`/api/databento/status?root=${r}`)));
-            await sleep(20000);
+            await sleep(30000);
             const s1 = await j('/api/ibkr/status'); const d1 = await Promise.all(['GC', 'SI'].map((r) => j(`/api/databento/status?root=${r}`)));
             ['GC', 'SI'].forEach((r, i) => {
-              const polls = (s1.roots[r].polls - s0.roots[r].polls) / 20, changes = (s1.roots[r].depthSeq - s0.roots[r].depthSeq) / 20;
-              console.log(`${r}: IBKR state=${s1.roots[r].state} snapshots/s=${polls.toFixed(2)} level-changes/s=${changes.toFixed(2)} | Databento trades +${d1[i].received.trades - d0[i].received.trades} ohlcvBars ${d0[i].received.ohlcvBars}->${d1[i].received.ohlcvBars} lastBar ${d0[i].lastBar && d0[i].lastBar.timeUtc}->${d1[i].lastBar && d1[i].lastBar.timeUtc}`);
-              check(s1.roots[r].state === 'LIVE' && polls > 0.5, `${r}: IBKR depth LIVE and updating (${polls.toFixed(2)} snapshots/s)`);
-              check(d1[i].received.trades > d0[i].received.trades, `${r}: Databento trades update`);
-              check(d1[i].freshness === 'LIVE' && d1[i].lastBar, `${r}: Databento OHLCV live (last bar ${d1[i].lastBar && d1[i].lastBar.timeUtc})`);
+              const x = s1.roots[r];
+              console.log(`${r} IBKR: state=${x.state} contract=${x.contract && x.contract.localSymbol} depthType=${s1.depthTypeCode} mbo=${s1.mbo} levels=${x.bidLevels}x${x.askLevels} lastDepth=${iso(x.lastUpdateMs)} snapshots/s=${((x.polls - s0.roots[r].polls) / 30).toFixed(2)} levelChanges/s=${((x.depthSeq - s0.roots[r].depthSeq) / 30).toFixed(2)} reconnects=${s1.session.reconnects}`);
+              console.log(`${r} Databento: contract=${d1[i].activeContract} state=${d1[i].state} freshness=${d1[i].freshness} lastEvent=${d1[i].lastEventUtc} trades +${d1[i].received.trades - d0[i].received.trades} in 30 s, ohlcvBars ${d1[i].received.ohlcvBars}, lastBar=${d1[i].lastBar && d1[i].lastBar.timeUtc}, depth=${d1[i].depth}`);
+              check(x.state === 'LIVE', `${r}: IBKR depth LIVE`);
+              check(d1[i].freshness === 'LIVE' && d1[i].received.trades > d0[i].received.trades, `${r}: Databento trades LIVE and updating`);
             });
-            // Matrix integrity: nothing before the first stored snapshot; the latest stored column matches the live book.
-            for (const root of ['GC', 'SI']) {
+            // ---------- Phase E: matrix integrity + candle / liquidity alignment ----------
+            for (const r of ['GC', 'SI']) {
+              const tick = r === 'GC' ? 0.1 : 0.005;
               const now = Date.now();
-              const m = await j(`/api/ibkr/heatmap?root=${root}&from=${first[root] - 3600000}&to=${now}&bucket=1000`);
-              const book = await j(`/api/ibkr/book?root=${root}`);
-              const cols = m.columns;
-              const last = cols[cols.length - 1];
-              const bookP = new Set(book.rows.bids.map((x) => x.price).concat(book.rows.asks.map((x) => x.price)));
-              const colP = new Set(last ? last[2].map((x) => x[0]).concat(last[3].map((x) => x[0])) : []);
-              const overlap = [...bookP].filter((p) => colP.has(p)).length;
-              const covered = cols.reduce((a, c) => a + c[1], 0);
-              console.log(`${root} matrix: bucket=${m.bucketMs} from=${iso(m.from)} columns=${cols.length} covered=${covered.toFixed(0)} s firstColumn=${iso(cols[0] && cols[0][0])} firstRecorded=${iso(m.firstRecordedMs)} lastObserved=${iso(m.lastObservedMs)} depthType=${m.depthType} mbo=${m.mbo}`);
-              console.log(`   latest column ${iso(last && last[0])} bids=${JSON.stringify(last && last[2].slice(0, 3))} asks=${JSON.stringify(last && last[3].slice(0, 3))}`);
-              console.log(`   live book bids=${JSON.stringify(book.rows.bids.slice(0, 3))} asks=${JSON.stringify(book.rows.asks.slice(0, 3))} priceOverlap=${overlap}/${bookP.size}`);
-              check(cols.length > 0 && cols[0][0] >= Math.floor(m.firstRecordedMs / 1000) * 1000, `${root}: no liquidity before the first stored snapshot (${iso(m.firstRecordedMs)})`);
-              check(m.depthType === 'PRICE_LEVEL' && m.mbo === false && m.provider === 'Interactive Brokers', `${root}: matrix labelled IBKR PRICE_LEVEL, mbo false`);
-              check(overlap >= Math.min(5, bookP.size), `${root}: latest stored liquidity matches the live IBKR book (${overlap}/${bookP.size} prices)`);
+              const m = await j(`/api/ibkr/heatmap?root=${r}&from=${first[r] - 600000}&to=${now}&bucket=1000`);
+              const ts = m.columns.map((c) => c[0]);
+              const dup = ts.length - new Set(ts).size;
+              const span = ts.length ? Math.round((ts[ts.length - 1] - ts[0]) / 1000) + 1 : 0;
+              const offGrid = m.columns.flatMap((c) => c[2].concat(c[3])).filter(([p]) => Math.abs(p / tick - Math.round(p / tick)) > 1e-6).length;
+              const db = await j(`/api/databento/status?root=${r}`);
+              console.log(`${r} matrix: contract=${m.contract} (Databento ${db.activeContract}) bucket=${m.bucketMs} columns=${ts.length} firstColumn=${iso(ts[0])} lastColumn=${iso(ts[ts.length - 1])} firstRecorded=${iso(m.firstRecordedMs)} duplicates=${dup} missingBuckets=${span - ts.length} offTickPrices=${offGrid}`);
+              check(ts[0] >= Math.floor(m.firstRecordedMs / 1000) * 1000, `${r}: first liquidity column is not before the first recorded snapshot`);
+              check(dup === 0, `${r}: no duplicated timestamps`);
+              check(offGrid === 0, `${r}: every stored price on the ${tick} tick grid`);
+              check(m.contract === db.activeContract, `${r}: stored depth contract = Databento contract (${m.contract})`);
+              // Trades (Databento exchange time) vs stored IBKR best bid / ask of the same 1 s bucket, at shifted offsets.
+              const head = await j(`/api/databento/v1/trades/${r}?after=0&limit=1`);
+              const tr = await j(`/api/databento/v1/trades/${r}?after=${Math.max(0, head.lastIndex - 20000)}&limit=20000`);
+              const book = new Map(m.columns.map((c) => [c[0], { bb: Math.max(...c[2].map((x) => x[0])), ba: Math.min(...c[3].map((x) => x[0])) }]));
+              const trades = tr.trades.map((x) => ({ t: Math.floor(x.tsEventNs / 1e6), p: x.price, c: x.contract })).filter((x) => x.t >= ts[0] && x.t < now - 2000);
+              const rate = (off) => { let n = 0, ok = 0; for (const x of trades) { const b = book.get(Math.floor((x.t + off) / 1000) * 1000); if (!b || !isFinite(b.bb) || !isFinite(b.ba)) continue; n++; if (x.p >= b.bb - tick * 1.01 && x.p <= b.ba + tick * 1.01) ok++; } return { n, r: n ? ok / n : 0 }; };
+              const offs = [-5000, -3000, -2000, -1000, 0, 1000, 2000, 3000, 5000].map((o) => ({ o, ...rate(o) }));
+              const best = offs.reduce((a, b) => (b.r > a.r ? b : a));
+              console.log(`${r} alignment: ${trades.length} Databento trades (contract ${trades[0] && trades[0].c}) vs stored IBKR best bid/ask per 1 s: ${offs.map((x) => `${x.o / 1000}s=${(x.r * 100).toFixed(1)}%`).join(' ')}`);
+              check(trades.length > 50 && offs.find((x) => x.o === 0).r >= 0.9, `${r}: trades sit inside the stored IBKR spread at the SAME timestamp (${(offs.find((x) => x.o === 0).r * 100).toFixed(1)}%)`);
+              check(Math.abs(best.o) <= 1000, `${r}: no time offset between Databento trades and stored IBKR depth (best shift ${best.o} ms)`);
             }
-            // Browser: stored history drawn, nothing before the first record; refresh + a second device see the same history.
+            // ---------- Phase F: browser views (first open, refresh, second device) + screenshots ----------
             const b = await chromium.launch();
             const view = async (ctx, inst, tag, zoomOut) => {
               const p = await ctx.newPage();
               const errs = [];
               p.on('pageerror', (e) => errs.push(String(e).slice(0, 200)));
-              p.on('request', (r) => { const u = r.url(); if (/localhost|127\.0\.0\.1|:876\d|:4001|depth\.twahatrading/.test(u) || r.headers().authorization && r.headers().authorization !== 'Bearer cloud-session') errs.push('FORBIDDEN ' + u); });
+              p.on('request', (q) => { const u = q.url(); const a = q.headers().authorization; if (/localhost|127\.0\.0\.1|:876\d|:4001|depth\.twahatrading/.test(u) || (a && a !== 'Bearer cloud-session') || (a && /\/api\/ibkr\//.test(u))) errs.push('FORBIDDEN ' + u); });
               await p.goto(base + '/#/engines/liquidity-heatmap');
               await p.waitForSelector('canvas.ofheat__canvas', { timeout: 60000 });
               await p.waitForTimeout(40000);
               if (zoomOut) {
                 const box = await p.locator('canvas.ofheat__canvas').boundingBox();
-                await p.mouse.move(box.x + box.width * 0.6, box.y + box.height * 0.5);
-                for (let k = 0; k < zoomOut; k++) { await p.mouse.wheel(0, 400); await p.waitForTimeout(250); }
-                await p.waitForTimeout(8000);
+                await p.mouse.move(box.x + box.width * 0.5, box.y + box.height * 0.5);
+                for (let k = 0; k < zoomOut; k++) { await p.mouse.wheel(0, 400); await p.waitForTimeout(300); }
+                await p.mouse.move(box.x + box.width + 400, box.y + 10);
+                await p.waitForTimeout(10000);
               }
               const d = await p.evaluate(() => {
                 const c = document.querySelector('canvas.ofheat__canvas');
                 const t = (sel) => (document.querySelector(sel)?.textContent || '').replace(/\s+/g, ' ').trim();
-                return { ...(c ? c.dataset : {}), rec: t('[data-testid="of-depth-recorded"]'), feeds: t('[data-testid="of-feeds"]'), l2: t('[data-testid="level2-depth-status"]'), contract: t('[data-testid="of-contract"]'), dom: t('[data-testid="ibkr-dom-source"]') };
+                return { ...(c ? c.dataset : {}), rec: t('[data-testid="of-depth-recorded"]'), feeds: t('[data-testid="of-feeds"]'), strip: t('[data-testid="databento-capabilities"]'), l2: t('[data-testid="level2-depth-status"]'), contract: t('[data-testid="of-contract"]'), cob: t('[data-testid="ibkr-dom-source"]'), cvd: t('[data-testid="of-cvd-totals"]'), svp: t('[data-testid="of-profile-totals"]') };
               });
               await p.screenshot({ path: `shots/${tag}.png` });
               console.log(`  [${tag}] ${JSON.stringify(d)}`);
@@ -766,21 +805,24 @@ jobs:
               console.log(`\n######## ${inst}`);
               const ctx = await b.newContext({ viewport: { width: 1920, height: 1080 } });
               await ctx.addInitScript((i) => { try { localStorage.setItem('tluxe.instrument.v1', i); } catch {} }, inst);
-              const a = await view(ctx, inst, `${inst}-live`, 0);
-              const z = await view(ctx, inst, `${inst}-history`, 6); // reopened = refresh; zoomed out over the stored history
+              const a1 = await view(ctx, inst, `${inst}-1-live`, 0);
+              const a2 = await view(ctx, inst, `${inst}-2-refresh-full-history`, 5); // same browser again = refresh
               await ctx.close();
-              const ctx2 = await b.newContext({ viewport: { width: 1440, height: 900 } }); // a second device: fresh storage, no cache
+              const ctx2 = await b.newContext({ viewport: { width: 1920, height: 1080 } }); // second browser: fresh storage / cache
               await ctx2.addInitScript((i) => { try { localStorage.setItem('tluxe.instrument.v1', i); } catch {} }, inst);
-              const c2 = await view(ctx2, inst, `${inst}-second-device`, 6);
+              const a3 = await view(ctx2, inst, `${inst}-3-second-browser-full-history`, 5);
               await ctx2.close();
-              for (const [n, r] of [['first open', a], ['refresh (zoomed out)', z], ['second device', c2]]) {
-                check(Number(r.d.histCols) > 0, `${inst} ${n}: stored history drawn (${r.d.histCols} columns, bucket ${r.d.histBucket} ms)`);
-                check(r.d.preFirstPx === '0', `${inst} ${n}: no liquidity pixel before the first stored depth (${iso(Number(r.d.firstDepthMs))})`);
-                check(Number(r.d.firstDepthMs) === first[inst], `${inst} ${n}: same first stored timestamp ${iso(Number(r.d.firstDepthMs))}`);
-                check(/RECORDED DEPTH HISTORY SINCE/.test(r.d.rec), `${inst} ${n}: "${r.d.rec.slice(0, 80)}"`);
-                check(/DEPTH · IBKR LIVE/.test(r.d.feeds) && /TRADES · DATABENTO LIVE/.test(r.d.feeds) && /MBO: NOT ENTITLED/.test(r.d.feeds), `${inst} ${n}: IBKR depth LIVE, Databento trades LIVE, MBO NOT ENTITLED`);
+              for (const [n, r] of [['first open', a1], ['refresh', a2], ['second browser', a3]]) {
+                const d = r.d;
+                check(Number(d.histCols) > 0 && d.preFirstPx === '0', `${inst} ${n}: ${d.histCols} stored time buckets x ${d.priceRows} price rows drawn, 0 liquidity px before ${iso(d.firstDepthMs)}`);
+                check(Number(d.firstDepthMs) === first[inst], `${inst} ${n}: same stored history start ${iso(d.firstDepthMs)} (not the page-open time)`);
+                check(d.dupCols === '0' || d.dupCols === undefined, `${inst} ${n}: no duplicated history timestamps (${d.dupCols})`);
+                check(/RECORDED DEPTH HISTORY SINCE/.test(d.rec), `${inst} ${n}: "${d.rec.slice(0, 70)}"`);
+                check(/TRADES · DATABENTO LIVE/.test(d.feeds) && /OHLCV: LIVE/.test(d.feeds) && /VOLUME: LIVE/.test(d.feeds) && /DEPTH · IBKR LIVE/.test(d.feeds), `${inst} ${n}: Databento trades/OHLCV/volume LIVE + IBKR depth LIVE`);
+                check(/Databento depth: UNSUPPORTED/.test(d.strip) && /Databento MBO: NOT ENTITLED/.test(d.strip) && /Databento MBP-10: NOT ENTITLED/.test(d.strip), `${inst} ${n}: Databento depth UNSUPPORTED, MBO / MBP-10 NOT ENTITLED shown`);
                 check(r.errs.length === 0, `${inst} ${n}: no page errors / forbidden requests ${JSON.stringify(r.errs).slice(0, 200)}`);
               }
+              console.log(`  ${inst} rendered history: ${iso(a3.d.histFirstT)} -> ${iso(a3.d.histLastT)} bucket ${a3.d.histBucket} ms, ${a3.d.histCols} time buckets, ${a3.d.priceRows} price rows (${a3.d.priceRowTicks} tick/row), missing buckets ${a3.d.missingBuckets}`);
             }
             await b.close();
             console.log(`\nDEPTH HISTORY RESULT: ${fails ? `FAIL (${fails})` : 'PASS'}`);

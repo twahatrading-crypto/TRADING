@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import json
 import logging
+import secrets
+import time
 from typing import Callable
 
 log = logging.getLogger("tluxe.gateway.depth")
@@ -61,6 +63,10 @@ class DepthRecorder:
         self.dropped = 0
         self.last_flush_ms: int | None = None
         self.last_error: str | None = None
+        # Recording process id: Railway starts a new gateway before stopping the old one; the old process's shutdown
+        # gap must not invalidate the new process's book (build_matrix ignores another instance's gap rows).
+        self.instance = secrets.token_hex(4)
+        self.started_ms = int(time.time() * 1000)
 
     # ------------------------------------------------------------------ recording (called by the relay)
     def _row(self, r: _Root, kind: str, t0: int, t1: int, data, n_obs: int, seq_from=None, seq_to=None) -> dict:
@@ -79,6 +85,7 @@ class DepthRecorder:
         st["lastMs"] = row["t1"] if st["lastMs"] is None else max(st["lastMs"], row["t1"])
         st["rows"] += 1
         st["observations"] += row["n_obs"]
+        st["gaps"] = st.get("gaps", 0) + (1 if row["kind"] == "gap" else 0)
 
     def _close_open(self, r: _Root) -> None:
         o = r.open
@@ -90,7 +97,7 @@ class DepthRecorder:
     def _snapshot_row(self, r: _Root, ts: int) -> None:
         bids = [[p, s, pos] for p, (s, pos) in sorted(r.book[BID].items(), key=lambda x: -x[0])]
         asks = [[p, s, pos] for p, (s, pos) in sorted(r.book[ASK].items(), key=lambda x: x[0])]
-        self._emit(self._row(r, "snapshot", ts, ts, {"b": bids, "a": asks}, len(bids) + len(asks)))
+        self._emit(self._row(r, "snapshot", ts, ts, {"b": bids, "a": asks, "i": self.instance}, len(bids) + len(asks)))
         r.last_key_ms = ts
 
     def snapshot(self, root: str, contract: str, ts: int, bids, asks, epoch: int | None = None) -> None:
@@ -161,7 +168,7 @@ class DepthRecorder:
             return
         self._close_open(r)
         t = r.last_ms or 0
-        self._emit(self._row(r, "gap", t, t, {"reason": str(reason)[:200]}, 0))
+        self._emit(self._row(r, "gap", t, t, {"reason": str(reason)[:200], "i": self.instance}, 0))
         r.valid = False
         r.book = ({}, {})
 
@@ -212,7 +219,7 @@ class DepthRecorder:
         roots = {}
         for (root, contract), st in sorted(self.stats.items()):
             roots.setdefault(root, {})[contract] = {**st, "durationMs": (st["lastMs"] - st["firstMs"]) if st["firstMs"] and st["lastMs"] else None}
-        return {"roots": roots, "pendingRows": len(self.pending), "rowsWritten": self.rows_written, "writeErrors": self.write_errors,
+        return {"roots": roots, "instance": self.instance, "processStartedMs": self.started_ms, "pendingRows": len(self.pending), "rowsWritten": self.rows_written, "writeErrors": self.write_errors,
                 "lastError": self.last_error, "droppedUnsaved": self.dropped, "lastFlushMs": self.last_flush_ms, "keyframeMs": self.keyframe_ms,
                 "recording": {r: {"valid": x.valid, "contract": x.contract, "lastObservedMs": x.last_ms} for r, x in self.roots.items()}}
 
@@ -226,6 +233,7 @@ def build_matrix(rows: list[dict], from_ms: int, to_ms: int, bucket_ms: int, car
     cov = [0.0] * n
     book: tuple[dict[float, float], dict[float, float]] = ({}, {})
     valid = False
+    inst = None  # recording process of the current base snapshot
     cursor = 0
     alive_to = 0
 
@@ -255,17 +263,19 @@ def build_matrix(rows: list[dict], from_ms: int, to_ms: int, bucket_ms: int, car
         if valid and t0 - alive_to > carry_ms:  # no confirmation for too long (crash / restart): no data in between
             integrate(cursor, alive_to)
             valid = False
+        data = json.loads(row["data"]) if isinstance(row["data"], str) else row["data"]
         if kind == "gap":
+            if inst is not None and data.get("i") not in (None, inst):
+                continue  # another recording process stopped (overlapping deploy) - this book is still being confirmed
             if valid:
                 integrate(cursor, min(max(t0, cursor), alive_to))
             valid = False
             continue
-        data = json.loads(row["data"]) if isinstance(row["data"], str) else row["data"]
         if kind == "snapshot":
             if valid:
                 integrate(cursor, t0)
             book = ({float(p): float(s) for p, s, *_ in data["b"] if s > 0}, {float(p): float(s) for p, s, *_ in data["a"] if s > 0})
-            valid, cursor, alive_to = True, t0, max(row["t1"], t0)
+            valid, cursor, alive_to, inst = True, t0, max(row["t1"], t0), data.get("i")
             continue
         if not valid:
             continue  # a delta without a known base book is never applied
