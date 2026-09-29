@@ -222,7 +222,15 @@ jobs:
                 return { select: sel ? sel.value : null, title: (document.getElementById('vpchart-title') || {}).innerText, stats: kv,
                          empty: (document.querySelector('[data-testid="vp-stats"]') || {}).innerText?.includes('NO PROFILE') || false };
               });
-              const m5 = (await (await p.request.get(base + `/api/databento/v1/candles/${inst}?timeframe=M5&limit=5000`)).json());
+              // Independent reference: only a READY history is complete (seen: an early UNAVAILABLE response held only the
+              // live-session bars, 313 from 09-28 14:35, while the page already used the full history - a probe race).
+              let m5 = {};
+              for (let k = 0; k < 18; k++) {
+                m5 = (await (await p.request.get(base + `/api/databento/v1/candles/${inst}?timeframe=M5&limit=5000`)).json());
+                if (m5.history === 'READY') break;
+                await p.waitForTimeout(10000);
+              }
+              console.log(`    reference M5 ${inst}: history=${m5.history} bars=${(m5.bars || []).length}`);
               const now = Math.floor(Date.now() / 1000);
               const parseWin = (w) => { const m = /(\d\d)-(\d\d) (\d\d):(\d\d) → (\d\d)-(\d\d) (\d\d):(\d\d)/.exec(w || ''); if (!m) return null;
                 const y = new Date().getUTCFullYear(); return { from: Date.UTC(y, m[1] - 1, m[2], m[3], m[4]) / 1000, to: Date.UTC(y, m[5] - 1, m[6], m[7], m[8]) / 1000 }; };
@@ -674,7 +682,7 @@ jobs:
     # controlled restart, then: restart survival, browser-independent collection, alignment, refresh, second device.
     if: ${{ contains(github.event.head_commit.message, '[depth]') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - name: Recorded IBKR depth history - restart, no-browser collection, alignment, refresh, second device, screenshots
         shell: bash
@@ -702,7 +710,7 @@ jobs:
             // Railway may already have switched processes before the BEFORE read (seen: new process up 17 s after the push);
             // then the BEFORE totals are what the new process loaded from PostgreSQL at start-up = the pre-restart history.
             let after = before.instance && before.processStartedMs > jobStart - 120000 ? before : null;
-            for (let i = 0; !after && i < 80; i++) {
+            for (let i = 0; !after && i < 180; i++) { // Railway may wait for every CI check before switching (seen: 22 min)
               await sleep(15000);
               try { const h = await hist(); if (h.instance && h.processStartedMs > jobStart - 120000 && h.instance !== before.instance) after = h; } catch {}
             }
