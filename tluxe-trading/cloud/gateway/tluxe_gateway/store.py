@@ -47,6 +47,8 @@ class MemoryStore:
         self.snapshots: list[dict] = []
         self.integrity: list[dict] = []
         self.auth: list[dict] = []
+        self.depth: list[dict] = []
+        self._depth_id = 0
 
     async def open(self) -> None:
         pass
@@ -104,6 +106,38 @@ class MemoryStore:
 
     async def retention(self) -> None:
         pass
+
+    # ---- IBKR depth history (see migrations/0002_ibkr_depth_history.sql) ----
+    async def add_depth_rows(self, rows: list[dict]) -> None:
+        for r in rows:
+            self._depth_id += 1
+            self.depth.append({**r, "id": self._depth_id})
+
+    async def depth_rows(self, root: str, contract: str, from_ms: int, to_ms: int, limit: int = 200_000) -> list[dict]:
+        rs = [r for r in self.depth if r["root"] == root and r["contract"] == contract]
+        snaps = [r for r in rs if r["kind"] == "snapshot" and r["t0"] <= from_ms]
+        start = max((r["t0"] for r in snaps), default=from_ms)
+        out = [r for r in rs if start <= r["t0"] <= to_ms]
+        return sorted(out, key=lambda r: (r["t0"], r["id"]))[:limit]
+
+    async def depth_stats(self) -> list[dict]:
+        acc: dict[tuple, dict] = {}
+        for r in self.depth:
+            a = acc.setdefault((r["root"], r["contract"]), {"root": r["root"], "contract": r["contract"], "firstMs": None, "lastMs": None, "rows": 0, "observations": 0})
+            if r["kind"] == "snapshot":
+                a["firstMs"] = r["t0"] if a["firstMs"] is None else min(a["firstMs"], r["t0"])
+            a["lastMs"] = r["t1"] if a["lastMs"] is None else max(a["lastMs"], r["t1"])
+            a["rows"] += 1
+            a["observations"] += r["n_obs"]
+        return list(acc.values())
+
+    async def depth_bytes(self) -> int | None:
+        return None
+
+    async def prune_depth(self, before_ms: int) -> int:
+        n = len(self.depth)
+        self.depth = [r for r in self.depth if r["t1"] >= before_ms]
+        return n - len(self.depth)
 
 
 class PgStore:
@@ -248,3 +282,37 @@ class PgStore:
     async def retention(self) -> None:
         async with self.pool.connection() as conn:
             await conn.execute((MIGRATIONS / "retention.sql").read_text(encoding="utf-8"))
+
+    # ---- IBKR depth history (see migrations/0002_ibkr_depth_history.sql) ----
+    async def add_depth_rows(self, rows: list[dict]) -> None:
+        if not rows:
+            return
+        async with self.pool.connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.executemany(
+                    "INSERT INTO ibkr_depth_obs (root, contract, provider, kind, t0_ms, t1_ms, epoch, seq_from, seq_to, n_obs, data) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                    [(r["root"], r["contract"], r["provider"], r["kind"], r["t0"], r["t1"], r.get("epoch"), r.get("seqFrom"), r.get("seqTo"), r["n_obs"], r["data"]) for r in rows])
+
+    async def depth_rows(self, root: str, contract: str, from_ms: int, to_ms: int, limit: int = 200_000) -> list[dict]:
+        """Rows from the last snapshot at or before from_ms (the replay base) up to to_ms, in recorded order."""
+        async with self.pool.connection() as conn:
+            cur = await conn.execute("SELECT max(t0_ms) FROM ibkr_depth_obs WHERE root=%s AND contract=%s AND kind='snapshot' AND t0_ms <= %s", (root, contract, from_ms))
+            start = (await cur.fetchone())[0]
+            cur = await conn.execute(
+                "SELECT id, kind, t0_ms, t1_ms, epoch, seq_from, seq_to, n_obs, data FROM ibkr_depth_obs WHERE root=%s AND contract=%s AND t0_ms >= %s AND t0_ms <= %s ORDER BY t0_ms, id LIMIT %s",
+                (root, contract, start if start is not None else from_ms, to_ms, limit))
+            return [{"id": r[0], "root": root, "contract": contract, "kind": r[1], "t0": r[2], "t1": r[3], "epoch": r[4], "seqFrom": r[5], "seqTo": r[6], "n_obs": r[7], "data": r[8]}
+                    for r in await cur.fetchall()]
+
+    async def depth_stats(self) -> list[dict]:
+        async with self.pool.connection() as conn:
+            cur = await conn.execute("""SELECT root, contract, min(t0_ms) FILTER (WHERE kind = 'snapshot'), max(t1_ms), count(*), coalesce(sum(n_obs), 0)
+                FROM ibkr_depth_obs GROUP BY root, contract""")
+            return [{"root": r[0], "contract": r[1], "firstMs": r[2], "lastMs": r[3], "rows": r[4], "observations": int(r[5])} for r in await cur.fetchall()]
+
+    async def depth_bytes(self) -> int | None:
+        row = await self._one("SELECT pg_total_relation_size('ibkr_depth_obs')")
+        return int(row[0]) if row else None
+
+    async def prune_depth(self, before_ms: int) -> int:
+        return await self._exec("DELETE FROM ibkr_depth_obs WHERE t1_ms < %s", (before_ms,))

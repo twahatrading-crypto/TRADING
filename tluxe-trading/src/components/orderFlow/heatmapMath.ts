@@ -33,13 +33,16 @@ export function intensity(v: number, lo: number, hi: number, contrast: number, m
 
 type Stop = [number, number, number, number];
 const SCHEMES: Record<HeatmapViewSettings['colorScheme'], Stop[]> = {
+  // Professional liquidity ramp: low = dark navy, moderate = blue / cyan, high = yellow / orange, extreme = red → white-hot.
   'blue-red': [
     [0, 8, 14, 32],
-    [0.25, 22, 58, 138],
-    [0.5, 14, 165, 233],
-    [0.72, 250, 204, 21],
-    [0.88, 249, 115, 22],
-    [1, 239, 68, 68],
+    [0.16, 16, 36, 96],
+    [0.34, 24, 88, 196],
+    [0.5, 14, 178, 238],
+    [0.66, 250, 212, 38],
+    [0.8, 249, 128, 22],
+    [0.92, 239, 52, 44],
+    [1, 255, 244, 228],
   ].map((s) => [s[0]!, s[1]!, s[2]!, s[3]!] as Stop),
   mono: [
     [0, 8, 12, 20],

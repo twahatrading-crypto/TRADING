@@ -666,3 +666,131 @@ jobs:
           })();
           JS
           node ibkr.cjs
+  depth:
+    # Server-side IBKR depth history on production: persisted observations, matrix integrity, refresh / second device.
+    if: ${{ contains(github.event.head_commit.message, '[depth]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Recorded IBKR depth history - API integrity + browser (refresh, second device) + screenshots
+        shell: bash
+        run: |
+          npm init -y >/dev/null && npm i -s playwright@1 >/dev/null && npx playwright install --with-deps chromium >/dev/null 2>&1
+          mkdir -p shots
+          cat > depth.cjs <<'JS'
+          const { chromium } = require('playwright');
+          const base = 'https://twahatrading.com';
+          let fails = 0;
+          const check = (ok, m) => { console.log(`    ${ok ? 'OK  ' : 'FAIL'} ${m}`); if (!ok) fails++; };
+          const j = async (p) => (await fetch(base + p)).json();
+          const iso = (t) => (t ? new Date(t).toISOString() : '—');
+          const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+          (async () => {
+            await sleep(Number(process.env.WAIT_MS || 300000)); // this push redeploys Railway; let recording run
+            let h = null;
+            for (let i = 0; i < 30; i++) {
+              h = await j('/api/ibkr/history');
+              const gc = h.roots && h.roots.GC && h.roots.GC[h.contracts.GC];
+              console.log(`settle ${i}: GC ${h.contracts.GC} rows=${gc && gc.rows} obs=${gc && gc.observations} pending=${h.pendingRows} writeErrors=${h.writeErrors}`);
+              if (gc && gc.rows > 50) break;
+              await sleep(15000);
+            }
+            console.log(`\n/api/ibkr/history persistence=${h.persistence} retentionDays=${h.retentionDays} tableBytes=${h.tableBytes} rowsWritten(this process)=${h.rowsWritten} writeErrors=${h.writeErrors} pending=${h.pendingRows} dropped=${h.droppedUnsaved}`);
+            console.log(`recording: ${JSON.stringify(h.recording)}`);
+            check(h.persistence === 'postgresql', 'history persisted in PostgreSQL (server-side, independent of browsers)');
+            check(h.writeErrors === 0 && h.droppedUnsaved === 0, 'no write errors / dropped observations');
+            const first = {};
+            for (const root of ['GC', 'SI']) {
+              const c = h.contracts[root];
+              const st = h.roots[root] && h.roots[root][c];
+              first[root] = st && st.firstMs;
+              console.log(`${root} ${c}: firstStored=${iso(st && st.firstMs)} lastObserved=${iso(st && st.lastMs)} durationMin=${st && st.durationMs ? (st.durationMs / 60000).toFixed(1) : '—'} rows=${st && st.rows} observations=${st && st.observations}`);
+              check(st && st.firstMs && st.observations > 0, `${root}: IBKR depth persisted (${st && st.observations} level observations)`);
+            }
+            // Update rates (IBKR depth + Databento), measured over 20 s.
+            const s0 = await j('/api/ibkr/status'); const d0 = await Promise.all(['GC', 'SI'].map((r) => j(`/api/databento/status?root=${r}`)));
+            await sleep(20000);
+            const s1 = await j('/api/ibkr/status'); const d1 = await Promise.all(['GC', 'SI'].map((r) => j(`/api/databento/status?root=${r}`)));
+            ['GC', 'SI'].forEach((r, i) => {
+              const polls = (s1.roots[r].polls - s0.roots[r].polls) / 20, changes = (s1.roots[r].depthSeq - s0.roots[r].depthSeq) / 20;
+              console.log(`${r}: IBKR state=${s1.roots[r].state} snapshots/s=${polls.toFixed(2)} level-changes/s=${changes.toFixed(2)} | Databento trades +${d1[i].received.trades - d0[i].received.trades} ohlcvBars ${d0[i].received.ohlcvBars}->${d1[i].received.ohlcvBars} lastBar ${d0[i].lastBar && d0[i].lastBar.timeUtc}->${d1[i].lastBar && d1[i].lastBar.timeUtc}`);
+              check(s1.roots[r].state === 'LIVE' && polls > 0.5, `${r}: IBKR depth LIVE and updating (${polls.toFixed(2)} snapshots/s)`);
+              check(d1[i].received.trades > d0[i].received.trades, `${r}: Databento trades update`);
+              check(d1[i].freshness === 'LIVE' && d1[i].lastBar, `${r}: Databento OHLCV live (last bar ${d1[i].lastBar && d1[i].lastBar.timeUtc})`);
+            });
+            // Matrix integrity: nothing before the first stored snapshot; the latest stored column matches the live book.
+            for (const root of ['GC', 'SI']) {
+              const now = Date.now();
+              const m = await j(`/api/ibkr/heatmap?root=${root}&from=${first[root] - 3600000}&to=${now}&bucket=1000`);
+              const book = await j(`/api/ibkr/book?root=${root}`);
+              const cols = m.columns;
+              const last = cols[cols.length - 1];
+              const bookP = new Set(book.rows.bids.map((x) => x.price).concat(book.rows.asks.map((x) => x.price)));
+              const colP = new Set(last ? last[2].map((x) => x[0]).concat(last[3].map((x) => x[0])) : []);
+              const overlap = [...bookP].filter((p) => colP.has(p)).length;
+              const covered = cols.reduce((a, c) => a + c[1], 0);
+              console.log(`${root} matrix: bucket=${m.bucketMs} from=${iso(m.from)} columns=${cols.length} covered=${covered.toFixed(0)} s firstColumn=${iso(cols[0] && cols[0][0])} firstRecorded=${iso(m.firstRecordedMs)} lastObserved=${iso(m.lastObservedMs)} depthType=${m.depthType} mbo=${m.mbo}`);
+              console.log(`   latest column ${iso(last && last[0])} bids=${JSON.stringify(last && last[2].slice(0, 3))} asks=${JSON.stringify(last && last[3].slice(0, 3))}`);
+              console.log(`   live book bids=${JSON.stringify(book.rows.bids.slice(0, 3))} asks=${JSON.stringify(book.rows.asks.slice(0, 3))} priceOverlap=${overlap}/${bookP.size}`);
+              check(cols.length > 0 && cols[0][0] >= Math.floor(m.firstRecordedMs / 1000) * 1000, `${root}: no liquidity before the first stored snapshot (${iso(m.firstRecordedMs)})`);
+              check(m.depthType === 'PRICE_LEVEL' && m.mbo === false && m.provider === 'Interactive Brokers', `${root}: matrix labelled IBKR PRICE_LEVEL, mbo false`);
+              check(overlap >= Math.min(5, bookP.size), `${root}: latest stored liquidity matches the live IBKR book (${overlap}/${bookP.size} prices)`);
+            }
+            // Browser: stored history drawn, nothing before the first record; refresh + a second device see the same history.
+            const b = await chromium.launch();
+            const view = async (ctx, inst, tag, zoomOut) => {
+              const p = await ctx.newPage();
+              const errs = [];
+              p.on('pageerror', (e) => errs.push(String(e).slice(0, 200)));
+              p.on('request', (r) => { const u = r.url(); if (/localhost|127\.0\.0\.1|:876\d|:4001|depth\.twahatrading/.test(u) || r.headers().authorization && r.headers().authorization !== 'Bearer cloud-session') errs.push('FORBIDDEN ' + u); });
+              await p.goto(base + '/#/engines/liquidity-heatmap');
+              await p.waitForSelector('canvas.ofheat__canvas', { timeout: 60000 });
+              await p.waitForTimeout(40000);
+              if (zoomOut) {
+                const box = await p.locator('canvas.ofheat__canvas').boundingBox();
+                await p.mouse.move(box.x + box.width * 0.6, box.y + box.height * 0.5);
+                for (let k = 0; k < zoomOut; k++) { await p.mouse.wheel(0, 400); await p.waitForTimeout(250); }
+                await p.waitForTimeout(8000);
+              }
+              const d = await p.evaluate(() => {
+                const c = document.querySelector('canvas.ofheat__canvas');
+                const t = (sel) => (document.querySelector(sel)?.textContent || '').replace(/\s+/g, ' ').trim();
+                return { ...(c ? c.dataset : {}), rec: t('[data-testid="of-depth-recorded"]'), feeds: t('[data-testid="of-feeds"]'), l2: t('[data-testid="level2-depth-status"]'), contract: t('[data-testid="of-contract"]'), dom: t('[data-testid="ibkr-dom-source"]') };
+              });
+              await p.screenshot({ path: `shots/${tag}.png` });
+              console.log(`  [${tag}] ${JSON.stringify(d)}`);
+              await p.close();
+              return { d, errs };
+            };
+            for (const inst of ['GC', 'SI']) {
+              console.log(`\n######## ${inst}`);
+              const ctx = await b.newContext({ viewport: { width: 1920, height: 1080 } });
+              await ctx.addInitScript((i) => { try { localStorage.setItem('tluxe.instrument.v1', i); } catch {} }, inst);
+              const a = await view(ctx, inst, `${inst}-live`, 0);
+              const z = await view(ctx, inst, `${inst}-history`, 6); // reopened = refresh; zoomed out over the stored history
+              await ctx.close();
+              const ctx2 = await b.newContext({ viewport: { width: 1440, height: 900 } }); // a second device: fresh storage, no cache
+              await ctx2.addInitScript((i) => { try { localStorage.setItem('tluxe.instrument.v1', i); } catch {} }, inst);
+              const c2 = await view(ctx2, inst, `${inst}-second-device`, 6);
+              await ctx2.close();
+              for (const [n, r] of [['first open', a], ['refresh (zoomed out)', z], ['second device', c2]]) {
+                check(Number(r.d.histCols) > 0, `${inst} ${n}: stored history drawn (${r.d.histCols} columns, bucket ${r.d.histBucket} ms)`);
+                check(r.d.preFirstPx === '0', `${inst} ${n}: no liquidity pixel before the first stored depth (${iso(Number(r.d.firstDepthMs))})`);
+                check(Number(r.d.firstDepthMs) === first[inst], `${inst} ${n}: same first stored timestamp ${iso(Number(r.d.firstDepthMs))}`);
+                check(/RECORDED DEPTH HISTORY SINCE/.test(r.d.rec), `${inst} ${n}: "${r.d.rec.slice(0, 80)}"`);
+                check(/DEPTH · IBKR LIVE/.test(r.d.feeds) && /TRADES · DATABENTO LIVE/.test(r.d.feeds) && /MBO: NOT ENTITLED/.test(r.d.feeds), `${inst} ${n}: IBKR depth LIVE, Databento trades LIVE, MBO NOT ENTITLED`);
+                check(r.errs.length === 0, `${inst} ${n}: no page errors / forbidden requests ${JSON.stringify(r.errs).slice(0, 200)}`);
+              }
+            }
+            await b.close();
+            console.log(`\nDEPTH HISTORY RESULT: ${fails ? `FAIL (${fails})` : 'PASS'}`);
+            process.exit(fails ? 1 : 0);
+          })();
+          JS
+          node depth.cjs
+      - name: Screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: heatmap-screenshots
+          path: shots/

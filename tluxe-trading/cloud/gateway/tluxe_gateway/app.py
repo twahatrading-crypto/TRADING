@@ -25,6 +25,7 @@ from .auth import COOKIE, ROTATE_AFTER_S, GlobalFailLimiter, LoginLimiter, new_s
 from .config import GatewayConfig, Upstream
 from .health import ai_states, comp, databento_state, databento_summary, mt5_states, news_state
 from .logs import Redactor
+from .depth_history import DepthRecorder, build_matrix, normalize_request
 from .ibkr_relay import IbkrRelay
 from .mt5_relay import HEARTBEAT_S as MT5_HB_S, Mt5Relay, RelayError, token_ok
 from .store import MemoryStore, PgStore
@@ -41,6 +42,7 @@ K_CFG = web.AppKey("cfg", GatewayConfig)
 K_STORE = web.AppKey("store", object)
 K_RELAY = web.AppKey("relay", Mt5Relay)
 K_IBKR = web.AppKey("ibkr", IbkrRelay)
+K_DEPTH = web.AppKey("depth", DepthRecorder)
 K_HUB = web.AppKey("hub", StreamHub)
 K_STATE = web.AppKey("state", dict)
 K_HTTP = web.AppKey("http", object)
@@ -507,6 +509,78 @@ async def ibkr_updates(request: web.Request) -> web.Response:
     return _json(request.app[K_IBKR].updates(root, epoch, after))
 
 
+def _ibkr_contract(request: web.Request, root: str) -> str | None:
+    relay = request.app[K_IBKR]
+    c = relay.books[root].contract or {}
+    # The heatmap history is the contract Databento is trading (targets) - expiries are never mixed.
+    return relay.targets.get(root) or c.get("localSymbol") or None
+
+
+@market_data_route
+async def ibkr_history_status(request: web.Request) -> web.Response:
+    """Server-side IBKR depth recording: first recorded time, observations, duration, persistence (no data values)."""
+    rec, store = request.app[K_DEPTH], request.app[K_STORE]
+    try:
+        size = await store.depth_bytes()
+    except Exception:  # noqa: BLE001
+        size = None
+    return _json({**rec.status(), "persistence": getattr(store, "kind", "unknown"), "tableBytes": size,
+                  "retentionDays": request.app[K_CFG].ibkr_depth_retention_days, "provider": "Interactive Brokers", "depthType": "PRICE_LEVEL", "mbo": False,
+                  "timestampSource": "IBKR bridge receive time (lastUpdate, UTC) - not an exchange timestamp",
+                  "contracts": {r: _ibkr_contract(request, r) for r in ("GC", "SI")}})
+
+
+@market_data_route
+async def ibkr_heatmap(request: web.Request) -> web.Response:
+    """Recorded IBKR price-level liquidity as a time x price matrix (time-weighted displayed size per bucket).
+    Only time covered by recorded observations appears; nothing before the first recorded snapshot."""
+    root = _ibkr_root(request)
+    if root is None:
+        return _err(400, "BAD_ROOT", IBKR_ROOT_ERR)
+    try:
+        now = int(time.time() * 1000)
+        to_ms = int(request.query.get("to", str(now)))
+        from_ms = int(request.query.get("from", str(to_ms - 15 * 60_000)))
+        bucket = int(request.query.get("bucket", "1000"))
+    except ValueError:
+        return _err(400, "BAD_QUERY", "from, to and bucket must be integers (ms).")
+    rec = request.app[K_DEPTH]
+    contract = _ibkr_contract(request, root)
+    first = rec.first_ms(root, contract) if contract else None
+    base = {"root": root, "contract": contract, "provider": "Interactive Brokers", "depthType": "PRICE_LEVEL", "mbo": False,
+            "firstRecordedMs": first, "timestampSource": "IBKR bridge receive time", "persistence": getattr(request.app[K_STORE], "kind", "unknown")}
+    req = normalize_request(from_ms, to_ms, bucket, first, now)
+    if req is None:
+        return _json({**base, "bucketMs": bucket, "from": from_ms, "to": to_ms, "columns": [], "lastObservedMs": None})
+    f, t, b = req
+    try:
+        rows = await rec.rows(root, contract, f, t)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("IBKR depth history read failed (%s)", type(exc).__name__)
+        return _err(503, "HISTORY_UNAVAILABLE", "Recorded depth history is temporarily unavailable.")
+    m = await asyncio.get_running_loop().run_in_executor(None, build_matrix, rows, f, t, b)
+    return _json({**base, "bucketMs": b, "from": f, "to": t, **m})
+
+
+async def _depth_history_worker(app: web.Application) -> None:
+    """Persist recorded IBKR depth every second (independent of browsers); prune past the retention hourly."""
+    rec, cfg = app[K_DEPTH], app[K_CFG]
+    last_prune = 0.0
+    while True:
+        try:
+            await asyncio.sleep(1)
+            await rec.flush(int(time.time() * 1000))
+            if time.time() - last_prune > 3600:
+                last_prune = time.time()
+                n = await app[K_STORE].prune_depth(int((time.time() - cfg.ibkr_depth_retention_days * 86400) * 1000))
+                if n:
+                    log.info("IBKR depth history: pruned %d rows older than %d days", n, cfg.ibkr_depth_retention_days)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.error("IBKR depth history worker error")
+
+
 async def ibkr_bridge_ws(request: web.Request) -> web.StreamResponse:
     cfg, relay, store = request.app[K_CFG], request.app[K_IBKR], request.app[K_STORE]
     auth = request.headers.get("Authorization", "")
@@ -752,6 +826,9 @@ def make_app(cfg: GatewayConfig, store=None, workers: bool = True, http_session_
     # Pull mode (the VPS depth service) takes precedence over the older inbound VPS link: one depth source per book.
     pull = cfg.ibkr_depth.configured
     app[K_IBKR] = IbkrRelay(() if pull else cfg.ibkr_bridge_keys, pull=pull)
+    app[K_DEPTH] = DepthRecorder(app[K_STORE])
+    if pull:
+        app[K_IBKR].recorder = app[K_DEPTH]
 
     async def startup(app: web.Application) -> None:
         if cfg.production and isinstance(app[K_STORE], MemoryStore):
@@ -767,6 +844,8 @@ def make_app(cfg: GatewayConfig, store=None, workers: bool = True, http_session_
             for w in (_status_worker, _databento_worker, _news_worker, _mt5_heartbeat_worker, _retention_worker, _ibkr_worker):
                 app[K_STATE]["tasks"].append(asyncio.create_task(w(app)))
             if cfg.ibkr_depth.configured:
+                await app[K_DEPTH].load_stats()
+                app[K_STATE]["tasks"].append(asyncio.create_task(_depth_history_worker(app)))
                 for root in ("GC", "SI"):  # IBKR depth is COMEX GC / SI only - XAUUSD / XAGUSD are never routed here
                     app[K_STATE]["tasks"].append(asyncio.create_task(_ibkr_depth_poller(app, root)))
 
@@ -782,6 +861,13 @@ def make_app(cfg: GatewayConfig, store=None, workers: bool = True, http_session_
         for t in app[K_STATE]["tasks"]:
             t.cancel()
         await asyncio.gather(*app[K_STATE]["tasks"], return_exceptions=True)
+        if cfg.ibkr_depth.configured:
+            for r in ("GC", "SI"):
+                app[K_DEPTH].gap(r, "gateway stopped")  # a restart never bridges the book across the downtime
+            try:
+                await app[K_DEPTH].flush(int(time.time() * 1000))
+            except Exception:  # noqa: BLE001
+                log.error("IBKR depth history final flush failed")
         if K_HTTP in app:
             await app[K_HTTP].close()
         await app[K_STORE].close()
@@ -804,6 +890,8 @@ def make_app(cfg: GatewayConfig, store=None, workers: bool = True, http_session_
     r.add_get("/api/ibkr/status", ibkr_status)
     r.add_get("/api/ibkr/book", ibkr_book)
     r.add_get("/api/ibkr/updates", ibkr_updates)
+    r.add_get("/api/ibkr/heatmap", ibkr_heatmap)
+    r.add_get("/api/ibkr/history", ibkr_history_status)
     r.add_get("/api/ai/health", ai_health)
     r.add_post("/api/ai/chat", ai_chat)
     r.add_get("/api/databento/status", databento_status)

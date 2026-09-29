@@ -24,6 +24,7 @@ import { capLabel } from '../components/databento/capabilities';
 import { IbkrDepthPill, IbkrDomPanel, IbkrSessionStrip } from '../components/orderFlow/IbkrSession';
 import { useIbkrRootState } from '../providers/ibkr/ibkrView';
 import { ibkrBook, ibkrLabel } from '../providers/ibkr/IbkrDepthProvider';
+import { DepthHistory } from '../components/orderFlow/depthHistory';
 import '../components/sr/sr.css';
 import '../components/orderFlow/orderFlow.css';
 
@@ -167,6 +168,23 @@ function Workspace() {
   const ibkrDepth = /^IBKR/.test(st.depth.provider ?? '');
   const ibkrState = useIbkrRootState(def.id);
   const ibkrSince = useStore(ibkrBook, (s) => s[def.id]?.since ?? null);
+  // Server-recorded IBKR depth history (GC / SI while IBKR is the depth provider): loaded first, then kept live.
+  const tickRef = useRef(tick);
+  tickRef.current = tick;
+  const aggRef = useRef(st.settings.timeAggregationMs);
+  aggRef.current = st.settings.timeAggregationMs;
+  const history = useMemo(() => (ibkrDepth && (def.id === 'GC' || def.id === 'SI') ? new DepthHistory(def.id, tickRef.current, () => aggRef.current) : null), [ibkrDepth, def.id]);
+  const [histFirst, setHistFirst] = useState<number | null>(null);
+  useEffect(() => {
+    if (!history) return;
+    history.start();
+    const t = setInterval(() => setHistFirst(history.firstRecordedMs), 1000);
+    return () => {
+      clearInterval(t);
+      history.destroy();
+      setHistFirst(null);
+    };
+  }, [history]);
   const dbCaps = (dbFeed?.health?.instruments as Record<string, { capabilities?: Record<string, string> } | undefined> | undefined)?.[def.id]?.capabilities ?? null;
   const futures = instruments.list.filter((x) => x.kind === 'future' && x.exchange === 'COMEX');
   const pickable = futures.some((x) => x.id === def.id) ? futures : [def, ...futures];
@@ -295,7 +313,8 @@ function Workspace() {
           dotAggregation={dotAgg}
           tapeBehind={tapeBehind}
           depthNaSource={ibkrDepth ? `IBKR ${ibkrLabel(ibkrState)}` : null}
-          depthRecordedSince={ibkrDepth ? ibkrSince : null}
+          depthRecordedSince={ibkrDepth ? (histFirst ?? ibkrSince) : null}
+          history={history}
         />
         {ui.cob && ibkrDepth && <IbkrDomPanel className={cls('dom')} root={def.id} d={d} />}
         {ui.cob && !ibkrDepth && <BookPanel className={cls('dom')} data={data} d={d} depthStatus={depthStatus} depthDetail={st.depth.detail} />}

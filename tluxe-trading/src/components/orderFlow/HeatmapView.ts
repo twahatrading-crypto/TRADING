@@ -1,7 +1,8 @@
 import type { HeatmapViewSettings } from '../../engines/orderFlow/config';
 import type { HeatmapColumn, OrderFlowEngine } from '../../engines/orderFlow/engine';
 import type { ChartNavigable } from '../chart/ChartStage';
-import { bounds, colorAt, columnRows, intensity, smooth, type Viewport } from './heatmapMath';
+import { colorAt, columnRows, intensity, percentile, smooth, type Viewport } from './heatmapMath';
+import { columnAt, type DepthHistory, type HistoryColumn } from './depthHistory';
 import {
   aggregateDots,
   autoBucketMs,
@@ -88,7 +89,16 @@ export interface HeatmapViewOptions {
   tape?: () => TradeSource | null;
   /** Display bucket for the executed-volume dots and the price trace (display only; default AUTO). */
   dotAggregation?: () => DotAggregation;
+  /**
+   * Server-recorded IBKR depth history (time × price matrix of OBSERVED displayed size). When present it supplies the
+   * liquidity layer up to its recorded edge; the live engine columns are used only after that edge. Nothing is drawn
+   * before its first recorded snapshot.
+   */
+  history?: () => DepthHistory | null;
 }
+
+/** A liquidity column from either source, as the renderer needs it. */
+type LiqColumn = { t: number; w: number; valid: boolean; bidTicks: Int32Array; bidSizes: Float64Array; askTicks: Int32Array; askSizes: Float64Array };
 
 /** Colours per dominant side. UNKNOWN is never shown as a side. */
 const DOT_FILL: Record<Dominance, string> = {
@@ -132,6 +142,7 @@ export class HeatmapView implements ChartNavigable {
   /** Pixel geometry of the last drawn PRICE layer (trace + candles) - identical whatever the dot settings. */
   private priceGeom: number[] = [];
   private hovered: TradeHover | null = null;
+  private lastHistVersion = -1;
 
   constructor(
     private readonly host: HTMLElement,
@@ -461,6 +472,11 @@ export class HeatmapView implements ChartNavigable {
     if (this.destroyed) return;
     const e = this.source();
     const ver = e?.version ?? -1;
+    const hv = this.opts.history?.()?.version ?? -1;
+    if (hv !== this.lastHistVersion) {
+      this.lastHistVersion = hv;
+      this.dirty = true;
+    }
     if (ver !== this.lastVersion) {
       this.lastVersion = ver;
       this.dirty = true;
@@ -516,6 +532,20 @@ export class HeatmapView implements ChartNavigable {
     return out;
   }
 
+  /** Live engine column covering t (binary search over the visible columns). */
+  private engineColumnAt(vis: readonly HeatmapColumn[], t: number, agg: number): HeatmapColumn | null {
+    let lo = 0;
+    let hi = vis.length - 1;
+    while (lo <= hi) {
+      const m = (lo + hi) >> 1;
+      const c = vis[m]!;
+      if (t < c.t) hi = m - 1;
+      else if (t >= c.t + agg) lo = m + 1;
+      else return c;
+    }
+    return null;
+  }
+
   private draw(): void {
     const ctx = this.ctx;
     if (!ctx || !this.w || !this.h) return;
@@ -538,44 +568,121 @@ export class HeatmapView implements ChartNavigable {
     ctx.rect(0, 0, pw, ph);
     ctx.clip();
 
-    // 1) Liquidity cells (one ImageData pixel per column × price row, scaled up without smoothing).
+    // 1) Liquidity cells: one image pixel per plot x × price row. Each x takes the column that covers its time: the
+    //    server-recorded IBKR history up to its recorded edge, the live engine columns after it (one source per instant,
+    //    so the join has no duplicate and no invented bridge). No column = no data (background); an invalid live column
+    //    = NO DATA hatch. Nothing before the first recorded depth snapshot.
     const pAgg = Math.max(1, Math.round(s.priceAggregation), Math.ceil((v.p1 - v.p0) / Math.max(1, ph)));
     const base = Math.floor(v.p0 / pAgg) * pAgg;
     const rows = Math.max(1, Math.ceil((v.p1 - base) / pAgg) + 1);
     const depthOn = this.opts.depthAvailable?.() ?? true;
     const cellsOn = depthOn && (this.opts.showCells?.() ?? true);
-    if (vis.length && cellsOn) {
-      const { lo, hi } = bounds(cols, s, vis);
+    const hist = this.opts.history?.() ?? null;
+    if (hist && cellsOn) hist.ensure(v.t0, v.t1, pw);
+    const histEnd = hist?.coverEnd() ?? null;
+    const first = hist?.firstRecordedMs ?? null;
+    let preFirstPx = 0;
+    let histCols = 0;
+    const W = Math.max(1, Math.round(pw));
+    if (cellsOn && (vis.length || (hist && hist.columns.length))) {
+      const at = (t: number): LiqColumn | null => {
+        if (hist && histEnd !== null && t < histEnd) {
+          const hc: HistoryColumn | null = columnAt(hist.columns, t);
+          return hc ? { ...hc, valid: true } : null;
+        }
+        const ec = this.engineColumnAt(vis, t, agg);
+        return ec ? { ...ec, w: agg } : null;
+      };
+      // Column per pixel (consecutive pixels usually share one) and the normalization over the distinct visible ones.
+      const pix: (LiqColumn | null)[] = new Array(W);
+      const seen = new Set<LiqColumn | HeatmapColumn | HistoryColumn>();
+      const distinct: LiqColumn[] = [];
+      let prevKey: number | null = null;
+      let prevCol: LiqColumn | null = null;
+      for (let x = 0; x < W; x++) {
+        const t = v.t0 + ((x + 0.5) / W) * (v.t1 - v.t0);
+        let c: LiqColumn | null;
+        if (prevCol && t >= prevCol.t && t < prevCol.t + prevCol.w && prevKey === (histEnd !== null && t < histEnd ? 1 : 0)) c = prevCol;
+        else {
+          c = at(t);
+          prevKey = histEnd !== null && t < histEnd ? 1 : 0;
+          if (c && !seen.has(c)) {
+            seen.add(c);
+            distinct.push(c);
+          }
+        }
+        prevCol = c;
+        pix[x] = c;
+      }
+      histCols = distinct.filter((c) => histEnd !== null && c.t < histEnd).length;
+      const vals: number[] = [];
+      // Auto normalization: the visible columns; otherwise everything loaded (recorded history + live columns).
+      const normSrc: readonly { valid: boolean; bidSizes: Float64Array; askSizes: Float64Array }[] = s.autoNormalize ? distinct : [...(hist?.columns.map((c) => ({ ...c, valid: true })) ?? []), ...cols];
+      for (const c of normSrc) {
+        if (!c.valid) continue;
+        for (const z of c.bidSizes) vals.push(z);
+        for (const z of c.askSizes) vals.push(z);
+      }
+      const lo = percentile(vals, s.lowerCutoff);
+      const hi = percentile(vals, s.upperCutoff);
       if (!this.off) this.off = document.createElement('canvas');
-      this.off.width = vis.length;
+      this.off.width = W;
       this.off.height = rows;
       const octx = this.off.getContext('2d');
       if (octx) {
-        const img = octx.createImageData(vis.length, rows);
+        const img = octx.createImageData(W, rows);
         const bg = colorAt(0, s.colorScheme);
-        vis.forEach((c, i) => {
-          const vals = c.valid ? smooth(columnRows(c, base, rows, pAgg), s.smoothing) : null;
+        const cache = new Map<LiqColumn, Float64Array | null>();
+        const lut: [number, number, number][] = Array.from({ length: 256 }, (_, i) => colorAt(i / 255, s.colorScheme));
+        const firstX = first !== null ? ((first - v.t0) / (v.t1 - v.t0)) * W : null;
+        for (let x = 0; x < W; x++) {
+          const c = pix[x];
+          let colVals: Float64Array | null | undefined = null;
+          if (c) {
+            colVals = cache.get(c);
+            if (colVals === undefined) {
+              colVals = c.valid ? smooth(columnRows(c as unknown as HeatmapColumn, base, rows, pAgg), s.smoothing) : null;
+              cache.set(c, colVals);
+            }
+          }
           for (let r = 0; r < rows; r++) {
-            const o = ((rows - 1 - r) * vis.length + i) * 4;
-            let rgb: [number, number, number];
-            if (!vals) rgb = r % 4 < 2 ? [34, 38, 48] : [26, 29, 38]; // gap in a REAL book: NO DATA hatch — never inferred
-            else {
-              const x = intensity(vals[r]!, lo, hi, s.contrast, s.minDepth);
-              rgb = x > 0 ? colorAt(x, s.colorScheme) : bg;
+            const o = ((rows - 1 - r) * W + x) * 4;
+            let rgb: [number, number, number] = bg;
+            if (c && !c.valid) rgb = r % 4 < 2 ? [34, 38, 48] : [26, 29, 38]; // gap in a REAL book: NO DATA hatch — never inferred
+            else if (colVals) {
+              const k = intensity(colVals[r]!, lo, hi, s.contrast, s.minDepth);
+              if (k > 0) {
+                rgb = lut[Math.min(255, Math.max(1, Math.round(k * 255)))]!;
+                if (firstX !== null && x < firstX) preFirstPx += 1; // must stay 0: no depth before the first record
+              }
             }
             img.data[o] = rgb[0];
             img.data[o + 1] = rgb[1];
             img.data[o + 2] = rgb[2];
             img.data[o + 3] = 255;
           }
-        });
+        }
         octx.putImageData(img, 0, 0);
         ctx.imageSmoothingEnabled = false;
-        const x0 = X(vis[0]!.t);
-        const x1 = X(vis[vis.length - 1]!.t + agg);
-        ctx.drawImage(this.off, 0, 0, vis.length, rows, x0, Y(base + rows * pAgg), x1 - x0, Y(base) - Y(base + rows * pAgg));
+        ctx.drawImage(this.off, 0, 0, W, rows, 0, Y(base + rows * pAgg), pw, Y(base) - Y(base + rows * pAgg));
       }
     }
+    // Recorded-history boundary: depth recording starts here; the heatmap is empty before it (never backfilled).
+    if (cellsOn && first !== null && first > v.t0 && first < v.t1) {
+      const xf = X(first);
+      ctx.strokeStyle = 'rgba(148,163,184,0.55)';
+      ctx.setLineDash([2, 3]);
+      ctx.beginPath();
+      ctx.moveTo(xf, 0);
+      ctx.lineTo(xf, ph);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    this.canvas.dataset.firstDepthMs = first === null ? '' : String(first);
+    this.canvas.dataset.preFirstPx = String(preFirstPx);
+    this.canvas.dataset.histCols = String(histCols);
+    this.canvas.dataset.histBucket = String(hist?.bucketMs ?? '');
+    this.canvas.dataset.histEnd = histEnd === null ? '' : String(histEnd);
     // 2) Best bid / ask steps - genuine Level-2 only (a trades-only feed has none).
     const step = (key: 'bestBid' | 'bestAsk', color: string, off: number) => {
       ctx.strokeStyle = color;
@@ -701,8 +808,8 @@ export class HeatmapView implements ChartNavigable {
       }
     }
     // 3b) Current displayed depth at the right edge (latest VALID book only - genuine Level-2 levels, never inferred).
-    const lastCol = vis[vis.length - 1];
-    if (cellsOn && lastCol && lastCol.valid) {
+    const lastCol = cols[cols.length - 1];
+    if (cellsOn && lastCol && lastCol.valid && lastCol.t + agg >= v.t0) {
       let maxSz = 0;
       for (const z of lastCol.bidSizes) maxSz = Math.max(maxSz, z);
       for (const z of lastCol.askSizes) maxSz = Math.max(maxSz, z);

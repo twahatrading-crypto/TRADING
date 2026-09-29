@@ -217,6 +217,9 @@ BUY/SELL setup states with entry zone / SL / TP / R:R appear ONLY on the High / 
   Production path = PULL mode: the gateway polls `TLUXE_IBKR_DEPTH_URL` (https://depth.twahatrading.com) `/depth/GC|SI`
   with the server-side `TLUXE_IBKR_DEPTH_TOKEN` (never in the browser / logs / responses), PRICE_LEVEL, mbo false,
   `lastUpdate` = bridge receive time. The COB shows the IBKR rows (IbkrDomPanel); imbalance = visible IBKR book only.
+  Depth HISTORY is recorded server-side (cloud/gateway/tluxe_gateway/depth_history.py → PostgreSQL ibkr_depth_obs) and
+  served by /api/ibkr/heatmap; the Liquidity Heatmap draws it via components/orderFlow/depthHistory.ts (stored history up
+  to the recorded edge, live engine columns after it). Never draw depth before the first stored snapshot.
 - Sweep / Reversal is not built yet (disabled SOON in the sidebar).
 
 ## Chart navigation (shared by every strategy chart)

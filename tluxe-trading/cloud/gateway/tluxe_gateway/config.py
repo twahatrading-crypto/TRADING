@@ -97,6 +97,8 @@ class GatewayConfig:
     # IBKR COMEX price-level depth service on the VPS (https://depth.twahatrading.com), polled SERVER-SIDE with
     # `Authorization: Bearer <TLUXE_IBKR_DEPTH_TOKEN>`. The token never reaches a browser, a log or an API response.
     ibkr_depth: Upstream = field(default_factory=lambda: Upstream("ibkr-depth", "", Secret("")))
+    # Server-side IBKR depth history retention (days of recorded observations kept in PostgreSQL).
+    ibkr_depth_retention_days: int = 7
     static_dir: str = ""
     log_format: str = "text"
     # Production without an owner password hash (login not set up yet): the gateway still starts, but ONLY the
@@ -277,6 +279,7 @@ def from_env(env: dict | None = None) -> GatewayConfig:
         databento=upstream("databento", "TLUXE_DATABENTO_URL", "TLUXE_DB_BRIDGE_TOKEN"),
         news=upstream("news", "TLUXE_NEWS_URL", "TLUXE_NEWS_TOKEN"),
         ibkr_depth=_ibkr_depth(e, prod),
+        ibkr_depth_retention_days=_int(e, "TLUXE_IBKR_DEPTH_RETENTION_DAYS", 7, 1, 90),
         mt5_bridge_keys=mt5_keys,
         ibkr_bridge_keys=ibkr_keys,
         static_dir=(e.get("TLUXE_STATIC_DIR") or "").strip(),

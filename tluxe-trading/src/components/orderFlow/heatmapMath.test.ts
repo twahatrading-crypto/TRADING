@@ -43,8 +43,9 @@ describe('heatmap normalisation (render-only maths)', () => {
 
   it('colorAt: 0 is the background, 1 the hottest stop, every scheme in range', () => {
     expect(colorAt(0, 'blue-red')).toEqual([8, 14, 32]);
-    expect(colorAt(1, 'blue-red')).toEqual([239, 68, 68]);
-    expect(colorAt(2, 'blue-red')).toEqual([239, 68, 68]);
+    expect(colorAt(1, 'blue-red')).toEqual([255, 244, 228]); // extreme liquidity: white-hot
+    expect(colorAt(2, 'blue-red')).toEqual([255, 244, 228]);
+    expect(colorAt(0.92, 'blue-red')).toEqual([239, 52, 44]); // red just below it
     for (const s of ['blue-red', 'mono', 'thermal'] as const)
       for (let x = 0; x <= 1; x += 0.05) for (const c of colorAt(x, s)) expect(c >= 0 && c <= 255).toBe(true);
   });

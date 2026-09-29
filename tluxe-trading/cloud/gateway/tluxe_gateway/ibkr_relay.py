@@ -168,6 +168,7 @@ class IbkrRelay:
         self.sent_targets: dict[str, str] = {}
         self.counts = {"rejectedSkew": 0, "rejectedReplay": 0, "linkGaps": 0, "depthGaps": 0, "authRejected": 0, "resets": 0, "snapshots": 0, "changes": 0}
         self.last_detail: str | None = None
+        self.recorder = None  # DepthRecorder (pull mode): every accepted observation is persisted server-side
 
     @property
     def configured(self) -> bool:
@@ -314,6 +315,8 @@ class IbkrRelay:
         p.state = "OFFLINE" if p.errors >= PULL_OFFLINE_AFTER or http_status in (401, 403) else "RECONNECTING"
         p.detail = why
         self.books[root].invalidate(why)
+        if self.recorder:
+            self.recorder.gap(root, why)
 
     async def ingest(self, root: str, body) -> None:
         p, b = self.pulls[root], self.books[root]
@@ -332,6 +335,8 @@ class IbkrRelay:
         c = d["contract"]
         if b.contract and c.get("localSymbol") != b.contract.get("localSymbol"):
             b.invalidate("contract changed")
+            if self.recorder:
+                self.recorder.gap(root, "contract changed")
         b.contract = c or None
         p.rows = {"bids": [{"position": r[0], "price": r[1], "size": r[2], "marketMaker": r[3]} for r in d["bids"]],
                   "asks": [{"position": r[0], "price": r[1], "size": r[2], "marketMaker": r[3]} for r in d["asks"]]}
@@ -341,6 +346,8 @@ class IbkrRelay:
                 p.state = "STALE"
                 p.detail = "IBKR returned an empty book" if not (d["bids"] or d["asks"]) else f"no IBKR depth update for > {int(PULL_STALE_S)} s"
             b.invalidate(p.detail or d["status"])
+            if self.recorder:
+                self.recorder.gap(root, p.detail or d["status"])
             return
         bids = {}
         for _pos, price, size, _mm in d["bids"]:
@@ -355,6 +362,8 @@ class IbkrRelay:
             b.bids, b.asks, b.in_sync, b.reason = bids, asks, True, None
             b.last_depth_ms = d["lastUpdateMs"]
             self.counts["snapshots"] += 1
+            if self.recorder:
+                self.recorder.snapshot(root, str(c.get("localSymbol") or ""), d["lastUpdateMs"], d["bids"], d["asks"], b.epoch)
             return
         # Genuine change between two real consecutive snapshots (net change at poll granularity - never interpolated).
         changes = []
@@ -362,10 +371,17 @@ class IbkrRelay:
             for price in sorted(set(new) | set(old)):
                 if new.get(price) != old.get(price):
                     changes.append([0, side, price, new.get(price, 0.0), "set" if price in new else "delete", 0, d["lastUpdateMs"]])
+        seq_from = b.seq + 1
         for ch in changes:
             ch[0] = b.seq + 1
             await self._apply(b, [ch])
         b.last_depth_ms = d["lastUpdateMs"]
+        if self.recorder:
+            if changes:
+                pos = {("bid", pr): ps for ps, pr, _s, _m in d["bids"]} | {("ask", pr): ps for ps, pr, _s, _m in d["asks"]}
+                self.recorder.changes(root, d["lastUpdateMs"], [(ch[1], ch[2], ch[3], pos.get((ch[1], ch[2]))) for ch in changes], seq_from, b.seq, now=self.now_ms())
+            else:
+                self.recorder.alive(root, max(self.now_ms(), d["lastUpdateMs"]))
 
     # ------------------------------------------------------------------ browser views (read-only, no account data)
     def root_state(self, root: str) -> tuple[str, str | None]:

@@ -223,6 +223,13 @@ Runbook: `bridge/ibkr/README.md`. IBKR is the **depth source only** (Databento k
   An older `lastUpdate` never overwrites a newer book. `lastUpdate` is the bridge receive time, not an exchange time.
   Depth type: **PRICE_LEVEL** (aggregated levels, ~10 per side) — **not MBO**: no order ids, order counts or queue
   positions. The heatmap draws only depth recorded since the page opened (no earlier depth exists or is backfilled).
+* **Recorded depth history (server-side):** the gateway persists every accepted IBKR observation in PostgreSQL
+  (`ibkr_depth_obs`: full-book snapshots on sync and every 60 s, level-change batches ~1 s with IBKR timestamps /
+  position / op, and gap rows when the book stops being trustworthy). Recording runs in the gateway, not the browser.
+  `GET /api/ibkr/heatmap?root=&from=&to=&bucket=` returns the time × price matrix (time-weighted displayed size per
+  bucket, only for recorded-valid time; nothing before the first stored snapshot, no carry across gaps / restarts);
+  `GET /api/ibkr/history` reports first stored time, rows, observations, table size. Retention:
+  `TLUXE_IBKR_DEPTH_RETENTION_DAYS` (default 7). Timestamps are IBKR bridge receive times, not exchange times.
 * Home PC required: **no**. Cloud VPS required: **yes**. Permanent unattended IBKR authentication: **not claimed** —
   a manual IB Gateway login can be required after the weekly reset (TLUXE shows IBKR AUTH REQUIRED; depth stops).
 

@@ -1,3 +1,4 @@
+import type { DepthHistory } from './depthHistory';
 import { Expand, Flame, Pause, Play, RotateCcw, SkipForward, StepForward, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import type { HeatmapViewSettings } from '../../engines/orderFlow/config';
@@ -47,6 +48,8 @@ interface Props {
   depthNaSource?: string | null;
   /** Start of the RECORDED depth history drawn by the heatmap (this session only; no earlier depth exists). */
   depthRecordedSince?: number | null;
+  /** Server-recorded IBKR depth history (persisted; survives refresh / other devices / restarts). */
+  history?: DepthHistory | null;
 }
 
 /** The central heatmap, rendered by HeatmapView on a canvas inside the shared ChartStage. */
@@ -60,12 +63,16 @@ export function HeatmapPanel(p: Props) {
   sourceRef.current = p.source;
   const onVp = useRef(p.onViewport);
   onVp.current = p.onViewport;
+  const replayRef = useRef(!!p.replay);
+  replayRef.current = !!p.replay;
   const depthRef = useRef(p.depthAvailable || !!p.replay);
   depthRef.current = p.depthAvailable || !!p.replay;
   const cellsRef = useRef(p.showHeatmap);
   cellsRef.current = p.showHeatmap;
   const tapeRef = useRef(p.tape);
   tapeRef.current = p.tape;
+  const histRef = useRef(p.history ?? null);
+  histRef.current = p.history ?? null;
   const aggRef = useRef<DotAggregation>(p.dotAggregation ?? 'auto');
   aggRef.current = p.dotAggregation ?? 'auto';
   const [hover, setHover] = useState<TradeHover | null>(null);
@@ -85,6 +92,7 @@ export function HeatmapPanel(p: Props) {
       onHover: setHover,
       tape: () => tapeRef.current?.() ?? null,
       dotAggregation: () => aggRef.current,
+      history: () => (histRef.current && !replayRef.current ? histRef.current : null),
     });
     setView(v);
     onReady(v);
@@ -94,7 +102,7 @@ export function HeatmapPanel(p: Props) {
       onReady(null);
     };
   }, [hasData, decimals, tickSize, onReady]);
-  useEffect(() => view?.invalidate(), [view, p.view, p.version, p.replay, p.depthAvailable, p.showHeatmap, p.dotAggregation]);
+  useEffect(() => view?.invalidate(), [view, p.view, p.version, p.replay, p.depthAvailable, p.showHeatmap, p.dotAggregation, p.history]);
 
   const depthOk = p.depthStatus === 'LIVE' || !!p.replay;
   return (
@@ -124,7 +132,11 @@ export function HeatmapPanel(p: Props) {
       )}
       {p.hasData && depthOk && !p.replay && p.depthRecordedSince != null && (
         <p className="ofheat__depthna ofheat__rec" role="note" data-testid="of-depth-recorded">
-          <b>RECORDED DEPTH HISTORY</b> since {fmtT(p.depthRecordedSince)} (this session) — no earlier depth exists · the COB shows the current live book
+          {p.history && p.history.firstRecordedMs != null ? (
+            <><b>RECORDED DEPTH HISTORY SINCE {fmtDate(p.depthRecordedSince)}</b> · IBKR price levels stored server-side · no depth exists before this time · the COB shows the current live book</>
+          ) : (
+            <><b>RECORDED DEPTH HISTORY</b> since {fmtT(p.depthRecordedSince)} (this session) — no earlier depth exists · the COB shows the current live book</>
+          )}
         </p>
       )}
       {p.hasData && p.tapeBehind != null && (
@@ -166,6 +178,7 @@ export function HeatmapPanel(p: Props) {
 
 /** Tooltip width (px): the tooltip flips to the left of the bubble near the right edge. */
 const TIP_W = 290;
+const fmtDate = (t: number) => `${new Date(t).toISOString().slice(0, 10)} ${fmtT(t)}`;
 const fmtT = (t: number) => {
   const d = new Date(t);
   return `${d.toLocaleTimeString('en-GB', { hour12: false })}.${String(d.getMilliseconds()).padStart(3, '0')}`;
