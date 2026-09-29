@@ -65,7 +65,8 @@ jobs:
           import json, sys, time, urllib.request
           B = "https://twahatrading.com"
           def get(p):
-              with urllib.request.urlopen(B + p, timeout=20) as r:
+              # Cloudflare in front of twahatrading.com refuses Python's default User-Agent (HTTP 403).
+              with urllib.request.urlopen(urllib.request.Request(B + p, headers={"User-Agent": "tluxe-cloud-probe/1.0"}), timeout=20) as r:
                   return json.load(r)
           final = ("READY", "NOT_ENTITLED", "COST_BLOCKED", "AUTH_ERROR", "UNAVAILABLE", "DISABLED")
           for attempt in range(40):
@@ -587,14 +588,19 @@ jobs:
               const ctx = await b.newContext({ viewport: { width: 1920, height: 1080 } });
               await ctx.addInitScript((i) => { try { localStorage.setItem('tluxe.instrument.v1', i); } catch {} }, inst);
               const p = await ctx.newPage();
-              const errs = [], hosts = new Set(), ibkrCalls = [];
+              const errs = [], hosts = new Set(), ibkrCalls = [], authValues = new Set();
               p.on('pageerror', (e) => errs.push(String(e).slice(0, 200)));
               p.on('request', (r) => {
                 const h = r.headers();
                 hosts.add(new URL(r.url()).host);
                 if (/\/api\/ibkr\//.test(r.url())) ibkrCalls.push(r.url().replace(base, ''));
                 if (/localhost|127\.0\.0\.1|:876\d|:4001|depth\.twahatrading/.test(r.url())) errs.push('FORBIDDEN HOST ' + r.url());
-                if (h.authorization || Object.values(h).some((v) => /bearer/i.test(v))) errs.push('AUTH HEADER on ' + r.url());
+                // The existing Databento / MT5 / news clients send the fixed, documented, non-secret placeholder
+                // "Bearer cloud-session" (src/config/deployment.ts CLOUD_SESSION_TOKEN; the gateway ignores it). Any
+                // other Authorization value, or any Authorization header at all on /api/ibkr/*, is a failure.
+                if (h.authorization) authValues.add(`${new URL(r.url()).pathname.split('/').slice(0, 3).join('/')} -> ${h.authorization === 'Bearer cloud-session' ? 'Bearer cloud-session (placeholder)' : 'OTHER VALUE'}`);
+                if (h.authorization && (h.authorization !== 'Bearer cloud-session' || /\/api\/ibkr\//.test(r.url()))) errs.push('AUTH HEADER on ' + r.url());
+                if (Object.entries(h).some(([k, v]) => k !== 'authorization' && /bearer/i.test(v))) errs.push('BEARER in another header on ' + r.url());
               });
               p.on('response', async (r) => { if (/\/api\//.test(r.url()) && !/\/api\/stream/.test(r.url())) { try { if (leak(await r.text())) errs.push('LEAK in ' + r.url()); } catch {} } });
               await p.goto(base + '/#/engines/liquidity-heatmap');
@@ -625,6 +631,7 @@ jobs:
               console.log(`  heatmap toggle disabled=${u.heatDisabled} checked=${u.heatChecked} bandPx=${px && px.bands} depthNa="${u.depthNa}" recorded="${u.rec}"`);
               console.log(`  CVD="${u.cvd}" SVP="${u.prof}"`);
               console.log(`  hosts=${[...hosts].join(',')} ibkrCalls=${ibkrCalls.length} e.g. ${ibkrCalls.slice(0, 3).join(' ')}`);
+              console.log(`  Authorization headers seen: ${[...authValues].join(' | ') || 'none'}`);
               check(/DEPTH · IBKR LIVE/.test(u.feeds), `${inst}: DEPTH · IBKR LIVE`);
               check(/TRADES( · DATABENTO)?:? LIVE/.test(u.feeds) && /OHLCV: LIVE/.test(u.feeds) && /VOLUME: LIVE/.test(u.feeds), `${inst}: Databento trades / OHLCV / volume LIVE`);
               check(/MBO: NOT ENTITLED/.test(u.feeds), `${inst}: Databento MBO stays NOT ENTITLED`);
@@ -635,7 +642,9 @@ jobs:
               check(/RECORDED DEPTH HISTORY/.test(u.rec), `${inst}: recorded-history label shown`);
               check(u.contract === db.activeContract && u.session.includes(db.activeContract), `${inst}: contract ${u.contract} = Databento ${db.activeContract} = IBKR`);
               check(!/XAUUSD|XAGUSD/.test(u.page), `${inst}: no XAUUSD / XAGUSD`);
-              check([...hosts].every((h) => h === 'twahatrading.com' || /fonts\.(googleapis|gstatic)\.com/.test(h)), `${inst}: browser talks only to twahatrading.com`);
+              // static.cloudflareinsights.com = the Cloudflare Web Analytics beacon injected by the Cloudflare edge (not app code).
+              check([...hosts].every((h) => h === 'twahatrading.com' || h === 'static.cloudflareinsights.com' || /fonts\.(googleapis|gstatic)\.com/.test(h)), `${inst}: browser talks only to twahatrading.com (+ Cloudflare's edge beacon)`);
+              check(!/undefined/.test(u.session + u.dom), `${inst}: no "undefined" in the IBKR labels`);
               check(errs.length === 0, `${inst}: no page errors, auth headers, leaks or VPS / localhost requests ${JSON.stringify(errs).slice(0, 300)}`);
               await ctx.close();
             }

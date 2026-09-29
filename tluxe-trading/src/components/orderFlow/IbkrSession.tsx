@@ -55,7 +55,7 @@ export function IbkrSessionStrip({ root, databentoContract }: { root: string; da
       <span>Last heartbeat <b className="num">{t(sess?.lastIbHeartbeatMs)}</b></span>
       <span>Reconnects <b className="num">{sess?.reconnects ?? '—'}</b>{sess?.nextReconnectMs ? <> · next {t(sess.nextReconnectMs)}</> : null}</span>
       <span>
-        IBKR <b>{r?.contract ? `${r.contract.localSymbol} · ${r.contract.conId}` : '—'}</b> / Databento <b>{databentoContract ?? '—'}</b>
+        IBKR <b>{r?.contract ? `${r.contract.localSymbol}${r.contract.conId ? ` · ${r.contract.conId}` : ''}` : '—'}</b> / Databento <b>{databentoContract ?? '—'}</b>
         {mismatch && <em className="ofibkr__auth"> CONTRACT MISMATCH — depth not used</em>}
       </span>
       <span className="ofdim">{r?.bidLevels ?? 0}×{r?.askLevels ?? 0} levels · PRICE_LEVEL (aggregated levels) · MBO false · bridge receive time</span>

@@ -26,12 +26,12 @@ import type { OrderFlowDepthProvider, OrderFlowSink } from '../orderFlow/types';
 export type IbkrState = 'NOT_CONFIGURED' | 'CONNECTING' | 'LIVE' | 'STALE' | 'RECONNECTING' | 'AUTH_REQUIRED' | 'OFFLINE' | 'NOT_ENTITLED' | 'UNSUPPORTED' | 'CONTRACT_UNRESOLVED' | 'CONTRACT_MISMATCH' | 'UNKNOWN';
 
 export interface IbkrContract {
-  conId: number;
+  conId?: number; // absent when the VPS depth service does not supply it
   localSymbol: string;
   exchange: string;
   currency: string;
-  expiry: string;
-  minTick: number;
+  expiry?: string;
+  minTick?: number;
   tradingClass?: string;
   multiplier?: string;
 }
