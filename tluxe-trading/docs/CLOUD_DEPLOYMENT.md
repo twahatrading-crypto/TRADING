@@ -228,7 +228,11 @@ Runbook: `bridge/ibkr/README.md`. IBKR is the **depth source only** (Databento k
   position / op, and gap rows when the book stops being trustworthy). Recording runs in the gateway, not the browser.
   `GET /api/ibkr/heatmap?root=&from=&to=&bucket=` returns the time × price matrix (time-weighted displayed size per
   bucket, only for recorded-valid time; nothing before the first stored snapshot, no carry across gaps / restarts);
-  `GET /api/ibkr/history` reports first stored time, rows, observations, table size. Retention:
+  `GET /api/ibkr/history` reports first stored time, rows, observations, table size. Every row names its gateway
+  process (instance id); coverage is the UNION of what each process confirmed, so during Railway's overlapping deploy
+  the old process's stop row ends only its own coverage (a real outage with no live process stays no data).
+  `GET /api/ibkr/coverage?root=&from=&to=` (≤ 2 h, no depth values) lists per-instance valid intervals, the union and
+  every gap row with its reason. Retention:
   `TLUXE_IBKR_DEPTH_RETENTION_DAYS` (default 7). Timestamps are IBKR bridge receive times, not exchange times.
 * Home PC required: **no**. Cloud VPS required: **yes**. Permanent unattended IBKR authentication: **not claimed** —
   a manual IB Gateway login can be required after the weekly reset (TLUXE shows IBKR AUTH REQUIRED; depth stops).

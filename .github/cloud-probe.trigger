@@ -11,3 +11,4 @@ hm price-layer split 2026-09-28T19:41:39Z
 2026-09-29T11:37:12Z restart #2 (instance-tagged), clock evidence, VP race fix
 depth probe 2026-09-29T17:15:29Z displayLevel
 depth probe 2026-09-29T20:07:45Z poll 250ms experiment
+depth probe 2026-09-29T20:38:54Z instance-aware overlap

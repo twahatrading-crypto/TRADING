@@ -25,7 +25,7 @@ from .auth import COOKIE, ROTATE_AFTER_S, GlobalFailLimiter, LoginLimiter, new_s
 from .config import GatewayConfig, Upstream
 from .health import ai_states, comp, databento_state, databento_summary, mt5_states, news_state
 from .logs import Redactor
-from .depth_history import DepthRecorder, build_matrix, normalize_request
+from .depth_history import DepthRecorder, build_matrix, coverage_timeline, normalize_request
 from .ibkr_relay import IbkrRelay
 from .mt5_relay import HEARTBEAT_S as MT5_HB_S, Mt5Relay, RelayError, token_ok
 from .store import MemoryStore, PgStore
@@ -581,6 +581,38 @@ async def ibkr_heatmap(request: web.Request) -> web.Response:
     return _json({**base, "bucketMs": b, "from": f, "to": t, **m})
 
 
+IBKR_COVERAGE_MAX_SPAN_MS = 2 * 3600 * 1000
+
+
+async def ibkr_coverage(request: web.Request) -> web.Response:
+    """Recorded-coverage diagnostics (no depth values): per recording instance (gateway process) its confirmed-valid
+    intervals, their union and every gap row with its reason, for a window of at most 2 h. Used to verify that an
+    overlapping deploy leaves no false hole and that real outages stay visible."""
+    root = _ibkr_root(request)
+    if root is None:
+        return _err(400, "BAD_ROOT", IBKR_ROOT_ERR)
+    try:
+        now = int(time.time() * 1000)
+        to_ms = int(request.query.get("to", str(now)))
+        from_ms = int(request.query.get("from", str(to_ms - 15 * 60_000)))
+    except ValueError:
+        return _err(400, "BAD_QUERY", "from and to must be integers (ms).")
+    if not 0 < to_ms - from_ms <= IBKR_COVERAGE_MAX_SPAN_MS:
+        return _err(400, "BAD_QUERY", "0 < to - from <= 2 h.")
+    rec = request.app[K_DEPTH]
+    contract = _ibkr_contract(request, root)
+    base = {"root": root, "contract": contract, "from": from_ms, "to": to_ms, "currentInstance": rec.instance, "processStartedMs": rec.started_ms}
+    if not contract:
+        return _json({**base, "instances": {}, "union": [], "gaps": []})
+    try:
+        rows = await rec.rows(root, contract, from_ms, to_ms)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("IBKR depth history read failed (%s)", type(exc).__name__)
+        return _err(503, "HISTORY_UNAVAILABLE", "Recorded depth history is temporarily unavailable.")
+    t = await asyncio.get_running_loop().run_in_executor(None, coverage_timeline, rows, from_ms, to_ms)
+    return _json({**base, **t})
+
+
 async def _depth_history_worker(app: web.Application) -> None:
     """Persist recorded IBKR depth every second (independent of browsers); prune past the retention hourly."""
     rec, cfg = app[K_DEPTH], app[K_CFG]
@@ -910,6 +942,7 @@ def make_app(cfg: GatewayConfig, store=None, workers: bool = True, http_session_
     r.add_get("/api/ibkr/book", ibkr_book)
     r.add_get("/api/ibkr/updates", ibkr_updates)
     r.add_get("/api/ibkr/heatmap", ibkr_heatmap)
+    r.add_get("/api/ibkr/coverage", ibkr_coverage)
     r.add_get("/api/ibkr/history", ibkr_history_status)
     r.add_get("/api/ai/health", ai_health)
     r.add_post("/api/ai/chat", ai_chat)

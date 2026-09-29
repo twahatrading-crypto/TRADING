@@ -778,19 +778,51 @@ jobs:
                 check(st.rows >= B[r].rows, `${r}: stored rows did not decrease (${B[r].rows} -> ${st.rows}; retention 7 days, all rows younger)`);
               }
             }
-            // No liquidity across the restart: matrix coverage around the new process start.
+            // ---------- Phase B2: overlapping deploy - every 1 s bucket from 60 s before to 60 s after the OLD process's stop ----------
+            // (the earlier check looked around the NEW process's start and missed a false hole at the old one's stop)
+            for (let k = 0; k < 40; k++) { // Railway stops the old process up to minutes after the new one is live
+              const h = await hist();
+              const ok = ['GC', 'SI'].every((r) => (h.recentGaps[r] || []).some((g) => g.reason === 'gateway stopped' && g.i && g.i !== h.instance && g.t > h.processStartedMs - 180000 && Date.now() > g.t + 65000));
+              if (ok) { after = h; break; }
+              await sleep(15000);
+            }
             for (const r of ['GC', 'SI']) {
-              const t0 = Math.floor((after.processStartedMs - 120000) / 5000) * 5000;
-              const m = await j(`/api/ibkr/heatmap?root=${r}&from=${t0}&to=${after.processStartedMs + 180000}&bucket=5000`);
+              const stopRow = (after.recentGaps[r] || []).find((g) => g.reason === 'gateway stopped' && g.i && g.i !== after.instance && g.t > after.processStartedMs - 180000);
+              check(!!stopRow, `${r}: the old process's stop row exists`);
+              if (!stopRow) continue;
+              const A = stopRow.i, B = after.instance, S = stopRow.t;
+              const cv = await j(`/api/ibkr/coverage?root=${r}&from=${S - 600000}&to=${Math.min(Date.now(), S + 180000)}`);
+              const ia = cv.instances[A] || {}, ib = cv.instances[B] || {};
+              const overlap = ib.firstSnapshotMs && ia.lastConfirmedMs ? ia.lastConfirmedMs - ib.firstSnapshotMs : null;
+              console.log(`${r} OVERLAP: old instance ${A} (row format ${ia.rowFormat}) | new instance ${B} (row format ${ib.rowFormat}) | new process started ${iso(after.processStartedMs)} | new instance LIVE (first depth snapshot) ${iso(ib.firstSnapshotMs)} | last old-instance depth ${iso(ia.lastConfirmedMs)} | old instance stop ${iso(S)} | overlap ${overlap === null ? '—' : (overlap / 1000).toFixed(1) + ' s'}`);
+              const nextB = (ib.intervals || []).find(([x, y]) => y > S);
+              console.log(`${r}   new-instance coverage continuing past the stop: ${nextB ? `${iso(nextB[0])} -> ${iso(nextB[1])}` : 'NONE'} | gap rows in window: ${JSON.stringify(cv.gaps.map((g) => [iso(g.t), g.reason, g.i]))}`);
+              // Independent LIVE evidence per instance from its raw rows: its own depth snapshot before the bucket and no
+              // gap row of its own since (the relay writes a gap for any non-LIVE state). Not derived from the matrix.
+              const liveBy = (inst, t0, t1) => { const x = cv.instances[inst]; return !!x && x.firstSnapshotMs != null && x.firstSnapshotMs <= t0 && !cv.gaps.some((g) => g.i === inst && g.t >= x.firstSnapshotMs && g.t < t1); };
+              const w0 = Math.floor((S - 60000) / 1000) * 1000, w1 = Math.floor((S + 60000) / 1000) * 1000 + 1000;
+              const m = await j(`/api/ibkr/heatmap?root=${r}&from=${w0}&to=${w1}&bucket=1000`);
               const cov = new Map(m.columns.map((c) => [c[0], c[1]]));
-              const line = [];
-              for (let t = t0; t < after.processStartedMs + 180000; t += 5000) line.push(cov.has(t) ? (cov.get(t) >= 0.99 ? '#' : '+') : '.');
-              console.log(`${r} coverage around restart (5 s buckets from ${iso(t0)}; # full, + partial, . none): ${line.join('')}`);
-              // Railway overlaps the old and new gateway: the book was confirmed LIVE throughout, so there must be no
-              // artificial hole around the restart (a true outage would show '.' and is then correct).
-              const around = [];
-              for (let t = Math.floor((after.processStartedMs - 60000) / 5000) * 5000; t < after.processStartedMs + 60000; t += 5000) around.push(cov.has(t) ? '#' : '.');
-              check(!around.includes('.'), `${r}: continuous confirmed coverage across the overlapping restart (${around.join('')})`);
+              let valid = 0, partial = 0, missing = 0, falseMissing = 0;
+              const notes = [];
+              for (let t = w0; t < w1; t += 1000) {
+                const c = cov.get(t) || 0;
+                if (c >= 0.999) { valid++; continue; }
+                const live = [A, B].filter((i) => liveBy(i, t, t + 1000));
+                const lastGap = cv.gaps.filter((g) => g.t < t + 1000).at(-1);
+                if (c > 0) partial++; else missing++;
+                if (live.length) falseMissing++;
+                notes.push(`${iso(t).slice(11, 19)} ${c > 0 ? `partial ${c}` : 'missing'}: ${live.length ? `FALSE - instance ${live.join(' + ')} had confirmed LIVE depth` : lastGap ? `real - ${lastGap.reason} (${lastGap.i}) at ${iso(lastGap.t)}, no instance confirmed a book until it re-synced` : 'real - no instance had a recorded book'}`);
+              }
+              console.log(`${r}   1 s buckets ${iso(w0)} -> ${iso(w1)}: valid ${valid}, partial ${partial}, missing ${missing}`);
+              for (const n of notes) console.log(`      ${n}`);
+              const holes = [];
+              let cur = w0;
+              for (const [x, y] of cv.union) { if (y <= w0 || x >= w1) continue; if (x > cur) holes.push([cur, x]); cur = Math.max(cur, y); }
+              if (cur < w1) holes.push([cur, w1]);
+              console.log(`${r}   periods with ZERO valid instances in the window: ${holes.length ? holes.map(([x, y]) => `${iso(x)} -> ${iso(y)} (${((y - x) / 1000).toFixed(1)} s)`).join(', ') : 'none'}`);
+              check(!!ib.firstSnapshotMs && ib.firstSnapshotMs <= S, `${r}: the new instance was LIVE (${iso(ib.firstSnapshotMs)}) before the old one stopped (${iso(S)}) - a real overlap was tested`);
+              check(falseMissing === 0, `${r}: 0 false missing buckets while an instance had confirmed valid depth (${falseMissing} false of ${partial + missing} not fully covered)`);
             }
             // ---------- Phase C: browser-independent collection (no browser opened by this job yet) ----------
             const { h1, h2 } = await infra('AFTER', 180000);

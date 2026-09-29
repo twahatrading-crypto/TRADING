@@ -15,6 +15,7 @@ Never drawn: time before the first recorded snapshot, time after a gap, time bey
 """
 from __future__ import annotations
 
+import bisect
 import json
 import logging
 import secrets
@@ -24,6 +25,7 @@ from typing import Callable
 log = logging.getLogger("tluxe.gateway.depth")
 KEYFRAME_MS = 60_000
 KEY_MARGIN_MS = 2_000
+REPLAY_LOOKBACK_MS = KEYFRAME_MS + 15_000
 # The relay treats a book older than 10 s as STALE; a recorded book is never carried longer than that without a new row.
 CARRY_MS = 11_000
 MAX_PENDING = 20_000
@@ -63,8 +65,8 @@ class DepthRecorder:
         self.dropped = 0
         self.last_flush_ms: int | None = None
         self.last_error: str | None = None
-        # Recording process id: Railway starts a new gateway before stopping the old one; the old process's shutdown
-        # gap must not invalidate the new process's book (build_matrix ignores another instance's gap rows).
+        # Recording process id, written into every row: Railway starts a new gateway before stopping the old one, and
+        # coverage is resolved per instance (build_matrix) - one process's stop never ends another process's book.
         self.instance = secrets.token_hex(4)
         self.started_ms = int(time.time() * 1000)
 
@@ -92,12 +94,12 @@ class DepthRecorder:
         r.open = None
         if o is None:
             return
-        self._emit(self._row(r, "delta", o["t0"], o["t1"], {"c": o["c"]}, len(o["c"]), o["seqFrom"], o["seqTo"]))
+        self._emit(self._row(r, "delta", o["t0"], o["t1"], {"c": o["c"], "i": self.instance}, len(o["c"]), o["seqFrom"], o["seqTo"]))
 
     def _snapshot_row(self, r: _Root, ts: int) -> None:
         bids = [[p, s, pos] for p, (s, pos) in sorted(r.book[BID].items(), key=lambda x: -x[0])]
         asks = [[p, s, pos] for p, (s, pos) in sorted(r.book[ASK].items(), key=lambda x: x[0])]
-        self._emit(self._row(r, "snapshot", ts, ts, {"b": bids, "a": asks, "i": self.instance}, len(bids) + len(asks)))
+        self._emit(self._row(r, "snapshot", ts, ts, {"b": bids, "a": asks, "i": self.instance, "v": ROW_FORMAT}, len(bids) + len(asks)))
         r.last_key_ms = ts
 
     def snapshot(self, root: str, contract: str, ts: int, bids, asks, epoch: int | None = None) -> None:
@@ -178,7 +180,7 @@ class DepthRecorder:
         r = self.roots[root]
         if r.open is not None and r.contract == contract:
             o = r.open
-            out.append(self._row(r, "delta", o["t0"], o["t1"], {"c": list(o["c"])}, len(o["c"])))
+            out.append(self._row(r, "delta", o["t0"], o["t1"], {"c": list(o["c"]), "i": self.instance}, len(o["c"]), o["seqFrom"], o["seqTo"]))
         return out
 
     async def flush(self, now_ms: int | None = None) -> int:
@@ -207,7 +209,9 @@ class DepthRecorder:
             log.warning("IBKR depth history stats unavailable (%s)", type(exc).__name__)
 
     async def rows(self, root: str, contract: str, from_ms: int, to_ms: int) -> list[dict]:
-        stored = await self.store.depth_rows(root, contract, from_ms, to_ms)
+        # Start at a snapshot at least REPLAY_LOOKBACK_MS before `from`, so every instance recording at `from` (a keyframe
+        # every KEYFRAME_MS) has its own base snapshot in the rows - never another instance's.
+        stored = await self.store.depth_rows(root, contract, from_ms - REPLAY_LOOKBACK_MS, to_ms)
         extra = [x for x in self.unflushed(root, contract) if x["t0"] <= to_ms]
         return stored + extra
 
@@ -225,22 +229,172 @@ class DepthRecorder:
 
 
 # ------------------------------------------------------------------ matrix
+# Railway starts the new gateway before stopping the old one: during that overlap two recording processes write rows
+# for the same book. Coverage is therefore built PER RECORDING PROCESS (instance) and combined as a union - a stop /
+# gap row of one instance ends only that instance's coverage, and no row of one instance ever extends or ends another
+# instance's book ("last row wins" across processes is never used). Time with no instance confirming a valid book stays
+# no data; nothing is carried, copied or interpolated across it.
+ROW_FORMAT = 2  # snapshots carry "v": 2 when every row of that instance (delta rows too) carries its instance id "i"
+
+
+def _route(rows: list[dict]) -> dict:
+    """Split recorded rows into per-instance streams (in recorded order).
+    Snapshot / gap rows name their instance. Delta rows written before ROW_FORMAT 2 carry no instance: such a row can
+    only come from a valid instance that also writes untagged rows; between several, the relay's own depth sequence
+    decides (each process numbers its changes contiguously), then the most recent base snapshot (a liveness-only row
+    has no sequence - the pre-format-2 behaviour)."""
+    streams: dict = {}
+    st: dict = {}
+    for row in rows:
+        data = json.loads(row["data"]) if isinstance(row["data"], str) else row["data"]
+        kind = row["kind"]
+        if kind == "snapshot":
+            k = data.get("i")
+            s = st.setdefault(k, {"seq": None, "tagged": False})
+            s.update(valid=True, tagged=(data.get("v") or 1) >= ROW_FORMAT, snap=row["t0"])
+        elif kind == "gap":
+            k = data.get("i")
+            if k in st:
+                st[k]["valid"] = False
+        else:
+            if "i" in data:
+                k = data["i"]
+            else:
+                cands = [c for c, x in st.items() if x.get("valid") and not x["tagged"]]
+                if not cands:
+                    continue  # a delta without a known base book is never applied
+                sf = row.get("seqFrom")
+                k = next((c for c in cands if sf is not None and st[c]["seq"] is not None and st[c]["seq"] + 1 == sf), None)
+                if k is None and sf is not None:
+                    k = next((c for c in sorted(cands, key=lambda c: -st[c]["snap"]) if st[c]["seq"] is None), None)
+                if k is None:
+                    k = max(cands, key=lambda c: st[c]["snap"])
+            if k in st and row.get("seqTo") is not None:
+                st[k]["seq"] = row["seqTo"]
+        streams.setdefault(k, []).append((row, data))
+    return streams
+
+
+def _replay(items: list, carry_ms: int, emit, books: bool = True) -> int:
+    """One instance's rows -> emit(a, b, book) for every interval of confirmed valid book. Returns its last confirmation.
+    books=False: validity only (the book is not maintained - interval pass)."""
+    book: tuple[dict[float, float], dict[float, float]] = ({}, {})
+    valid = False
+    cursor = alive_to = last = 0
+    for row, data in items:
+        kind, t0 = row["kind"], row["t0"]
+        if valid and t0 - alive_to > carry_ms:  # no confirmation for too long (crash / hang): no data in between
+            emit(cursor, alive_to, book)
+            valid = False
+        if kind == "gap":
+            if valid:
+                emit(cursor, min(max(t0, cursor), alive_to), book)
+            valid = False
+            continue
+        if kind == "snapshot":
+            if valid:
+                emit(cursor, t0, book)
+            if books:
+                book = ({float(p): float(s) for p, s, *_ in data["b"] if s > 0}, {float(p): float(s) for p, s, *_ in data["a"] if s > 0})
+            valid, cursor, alive_to = True, t0, max(row["t1"], t0)
+            last = max(last, alive_to)
+            continue
+        if not valid:
+            continue
+        if not books:
+            c = data["c"]
+            if c:
+                nc = max(cursor, max(int(x[0]) for x in c))
+                emit(cursor, nc, book)  # the same covered span as the per-change emits of the book pass
+                cursor = nc
+            alive_to = max(alive_to, row["t1"], cursor)
+            last = max(last, alive_to)
+            continue
+        for ts, sd, p, s, _pos, _op in data["c"]:
+            ts = max(int(ts), cursor)
+            emit(cursor, ts, book)
+            cursor = ts
+            if s > 0:
+                book[sd][float(p)] = float(s)
+            else:
+                book[sd].pop(float(p), None)
+        alive_to = max(alive_to, row["t1"], cursor)
+        last = max(last, alive_to)
+    if valid:
+        emit(cursor, alive_to, book)
+    return last
+
+
+def _intervals(items: list, carry_ms: int) -> tuple[list[list[int]], int]:
+    out: list[list[int]] = []
+
+    def emit(a, b, _book):
+        if b <= a:
+            return
+        if out and out[-1][1] >= a:
+            out[-1][1] = max(out[-1][1], b)
+        else:
+            out.append([a, b])
+    last = _replay(items, carry_ms, emit, books=False)
+    return out, last
+
+
+def _assign(ivs: dict) -> dict:
+    """Which instance's recorded book is drawn when: the union of all instances' valid time, each moment given to ONE
+    instance (the current one is kept while it stays valid, so books of two processes are never mixed or summed)."""
+    edges = sorted({x for v in ivs.values() for iv in v for x in iv})
+    out: dict = {k: [] for k in ivs}
+    cur = None
+    for a, b in zip(edges, edges[1:]):
+        live = [k for k, v in ivs.items() if any(x <= a and b <= y for x, y in v)]
+        if not live:
+            cur = None
+            continue
+        if cur not in live:
+            cur = min(live, key=lambda k: min(x for x, y in ivs[k] if x <= a and b <= y))  # the longest-running one
+        seg = out[cur]
+        if seg and seg[-1][1] == a:
+            seg[-1][1] = b
+        else:
+            seg.append([a, b])
+    return out
+
+
+def coverage_timeline(rows: list[dict], from_ms: int, to_ms: int, carry_ms: int = CARRY_MS) -> dict:
+    """Per-instance confirmed-valid intervals, their union and every gap row in [from, to) - no depth values."""
+    streams = _route(rows)
+    ivs, info = {}, {}
+    for k, items in streams.items():
+        iv, last = _intervals(items, carry_ms)
+        ivs[k] = iv
+        snaps = [r["t0"] for r, _ in items if r["kind"] == "snapshot"]
+        info["legacy" if k is None else k] = {
+            "intervals": [[max(a, from_ms), min(b, to_ms)] for a, b in iv if b > from_ms and a < to_ms],
+            "firstSnapshotMs": min(snaps) if snaps else None, "lastConfirmedMs": last or None,
+            "rowFormat": ROW_FORMAT if any((d.get("v") or 1) >= ROW_FORMAT for r, d in items if r["kind"] == "snapshot") else 1}
+    union: list[list[int]] = []
+    for a, b in sorted(x for v in ivs.values() for x in v):
+        if union and union[-1][1] >= a:
+            union[-1][1] = max(union[-1][1], b)
+        else:
+            union.append([a, b])
+    gaps = [{"t": r["t0"], "reason": d.get("reason"), "i": d.get("i")} for items in streams.values() for r, d in items
+            if r["kind"] == "gap" and from_ms <= r["t0"] < to_ms]
+    return {"instances": info, "union": [[max(a, from_ms), min(b, to_ms)] for a, b in union if b > from_ms and a < to_ms],
+            "gaps": sorted(gaps, key=lambda g: g["t"])}
+
+
 def build_matrix(rows: list[dict], from_ms: int, to_ms: int, bucket_ms: int, carry_ms: int = CARRY_MS) -> dict:
     """Time x price liquidity matrix from recorded rows (see module doc). Returns the columns with any valid coverage:
     [t, coverage 0..1, [[price, bid size], ...], [[price, ask size], ...], [[valid from, valid to], ...]] and the last
     confirmed time. The intervals are exact: a renderer paints a bucket only inside them (never before the first
-    record, never across a gap inside a coarse bucket)."""
+    record, never across a gap inside a coarse bucket). Coverage = union of the recording instances (see above)."""
     n = max(0, (to_ms - from_ms + bucket_ms - 1) // bucket_ms)
     acc: list[dict | None] = [None] * n
     cov = [0.0] * n
     segs: list[list[list[int]] | None] = [None] * n  # exact recorded-valid intervals inside each bucket
-    book: tuple[dict[float, float], dict[float, float]] = ({}, {})
-    valid = False
-    inst = None  # recording process of the current base snapshot
-    cursor = 0
-    alive_to = 0
 
-    def integrate(a: int, b: int) -> None:
+    def integrate(a: int, b: int, book) -> None:
         a = max(a, from_ms)
         b = min(b, to_ms)
         if b <= a:
@@ -268,38 +422,27 @@ def build_matrix(rows: list[dict], from_ms: int, to_ms: int, bucket_ms: int, car
             a = end
             i += 1
 
-    for row in rows:
-        kind, t0 = row["kind"], row["t0"]
-        if valid and t0 - alive_to > carry_ms:  # no confirmation for too long (crash / restart): no data in between
-            integrate(cursor, alive_to)
-            valid = False
-        data = json.loads(row["data"]) if isinstance(row["data"], str) else row["data"]
-        if kind == "gap":
-            if inst is not None and data.get("i") not in (None, inst):
-                continue  # another recording process stopped (overlapping deploy) - this book is still being confirmed
-            if valid:
-                integrate(cursor, min(max(t0, cursor), alive_to))
-            valid = False
+    streams = _route(rows)
+    ivs, last = {}, 0
+    for k, items in streams.items():
+        ivs[k], lk = _intervals(items, carry_ms)
+        last = max(last, lk)
+    owned = _assign(ivs)
+    for k, items in streams.items():
+        mine = owned.get(k) or []
+        if not mine:
             continue
-        if kind == "snapshot":
-            if valid:
-                integrate(cursor, t0)
-            book = ({float(p): float(s) for p, s, *_ in data["b"] if s > 0}, {float(p): float(s) for p, s, *_ in data["a"] if s > 0})
-            valid, cursor, alive_to, inst = True, t0, max(row["t1"], t0), data.get("i")
-            continue
-        if not valid:
-            continue  # a delta without a known base book is never applied
-        for ts, sd, p, s, _pos, _op in data["c"]:
-            ts = max(int(ts), cursor)
-            integrate(cursor, ts)
-            cursor = ts
-            if s > 0:
-                book[sd][float(p)] = float(s)
-            else:
-                book[sd].pop(float(p), None)
-        alive_to = max(alive_to, row["t1"], cursor)
-    if valid:
-        integrate(cursor, alive_to)
+
+        starts = [x for x, _ in mine]
+
+        def emit(a, b, book, mine=mine, starts=starts):
+            j = max(0, bisect.bisect_right(starts, a) - 1)
+            while j < len(mine) and mine[j][0] < b:  # only while this instance is the one drawn
+                x, y = mine[j]
+                if y > a:
+                    integrate(max(a, x), min(b, y), book)
+                j += 1
+        _replay(items, carry_ms, emit)
     cols = []
     for i in range(n):
         if cov[i] <= 0 or acc[i] is None:
@@ -308,7 +451,7 @@ def build_matrix(rows: list[dict], from_ms: int, to_ms: int, bucket_ms: int, car
         bids = sorted(([p, round(v / c, 2)] for (sd, p), v in acc[i].items() if sd == BID and v > 0), key=lambda x: -x[0])
         asks = sorted(([p, round(v / c, 2)] for (sd, p), v in acc[i].items() if sd == ASK and v > 0), key=lambda x: x[0])
         cols.append([from_ms + i * bucket_ms, round(min(1.0, c / bucket_ms), 3), bids, asks, segs[i]])
-    return {"columns": cols, "lastObservedMs": alive_to or None}
+    return {"columns": cols, "lastObservedMs": last or None}
 
 
 def normalize_request(from_ms: int, to_ms: int, bucket_ms: int, first_ms: int | None, now_ms: int) -> tuple[int, int, int] | None:

@@ -12,7 +12,7 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from tluxe_gateway.app import K_DEPTH, make_app
 from tluxe_gateway.config import from_env
-from tluxe_gateway.depth_history import CARRY_MS, DepthRecorder, build_matrix, normalize_request
+from tluxe_gateway.depth_history import CARRY_MS, DepthRecorder, build_matrix, coverage_timeline, normalize_request
 from tluxe_gateway.store import MemoryStore, PgStore
 
 from tluxe_gateway.auth import COOKIE
@@ -83,18 +83,65 @@ class TestMatrix(unittest.TestCase):
         m = build_matrix(rows, 0, 30_000, 1000)
         self.assertEqual([c[0] for c in m["columns"]], [0, 1000])
 
-    def test_overlapping_deploy_old_process_gap_does_not_blank_the_new_recording(self):
-        def row(kind, t, data):
-            return {"kind": kind, "t0": t, "t1": t, "data": json.dumps(data)}
-        rows = [row("snapshot", 0, {"b": [[1.0, 10, 0]], "a": [], "i": "old"}),
-                row("snapshot", 1000, {"b": [[1.0, 10, 0]], "a": [], "i": "new"}),  # new gateway starts while the old one runs
-                row("gap", 1500, {"reason": "gateway stopped", "i": "old"}),  # the old one shuts down
-                {"kind": "delta", "t0": 2000, "t1": 4000, "data": json.dumps({"c": []})}]
-        m = build_matrix(rows, 0, 4000, 1000)
-        self.assertEqual([c[0] for c in m["columns"]], [0, 1000, 2000, 3000])  # continuous: the new book keeps being confirmed
-        rows[2] = row("gap", 1500, {"reason": "stale", "i": "new"})  # the CURRENT process's own gap still ends the book
-        m = build_matrix(rows, 0, 4000, 1000)
-        self.assertEqual([c[0] for c in m["columns"]], [0])  # nothing confirmed after 1000 -> nothing drawn after it
+    # ---- Railway overlapping deploy: coverage is the union of the recording instances ----
+    @staticmethod
+    def _deploy(b_first_snapshot=3000, fmt_a=2, fmt_b=2, b_stale_at=None):
+        """A starts, records; B starts and records a valid book; A writes another snapshot (the LATEST row); A stops;
+        B keeps recording. Times in ms; each instance's deltas extend its own liveness (t1)."""
+        def snap_(t, inst, fmt, size):
+            d = {"b": [[4150.0, size, 0]], "a": [[4150.1, 3, 0]], "i": inst}
+            if fmt >= 2:
+                d["v"] = 2
+            return {"kind": "snapshot", "t0": t, "t1": t, "data": json.dumps(d)}
+
+        def delta_(t0, t1, inst, fmt, changes=(), seq=None):
+            d = {"c": [list(c) for c in changes]}
+            if fmt >= 2:
+                d["i"] = inst
+            return {"kind": "delta", "t0": t0, "t1": t1, "data": json.dumps(d), "seqFrom": seq[0] if seq else None, "seqTo": seq[1] if seq else None}
+
+        rows = [snap_(0, "A", fmt_a, 10), delta_(1000, 2500, "A", fmt_a, [(1000, 0, 4150.0, 11, 0, 2)], (5001, 5001)),
+                snap_(b_first_snapshot, "B", fmt_b, 11), delta_(b_first_snapshot, b_first_snapshot + 1500, "B", fmt_b, [(b_first_snapshot, 0, 4150.0, 11, 0, 2)], (1, 1)),
+                delta_(3000, 5500, "A", fmt_a, [(3000, 0, 4150.0, 11, 0, 2)], (5002, 5002)),
+                snap_(6000, "A", fmt_a, 11),  # A's keyframe is the most recent row when A stops
+                delta_(6000, 7000, "A", fmt_a),
+                {"kind": "gap", "t0": 7000, "t1": 7000, "data": json.dumps({"reason": "gateway stopped", "i": "A"})}]
+        rows += [delta_(max(8000, b_first_snapshot + 1500), 15_000, "B", fmt_b, [(9000, 0, 4150.0, 12, 0, 2)], (2, 2))]
+        if b_first_snapshot < 7000:
+            rows.insert(4, delta_(b_first_snapshot + 1500, 7500, "B", fmt_b))
+        if b_stale_at is not None:
+            rows = [r for r in rows if not (r["kind"] == "delta" and r["t0"] >= 8000)]
+            rows.append({"kind": "gap", "t0": b_stale_at, "t1": b_stale_at, "data": json.dumps({"reason": "IBKR depth service timed out", "i": "B"})})
+        return sorted(rows, key=lambda r: r["t0"])
+
+    def _missing(self, m, frm, to, bucket=1000):
+        have = {c[0]: c[1] for c in m["columns"]}
+        return [t for t in range(frm, to, bucket) if have.get(t, 0) < 1.0]
+
+    def test_overlapping_deploy_old_instance_stop_leaves_zero_missing_buckets(self):
+        for fa, fb in ((2, 2), (1, 2), (1, 1)):  # both current format; old build -> new build (the real deploy); two old builds
+            with self.subTest(old_format=fa, new_format=fb):
+                m = build_matrix(self._deploy(fmt_a=fa, fmt_b=fb), 0, 15_000, 1000)
+                self.assertEqual(self._missing(m, 0, 15_000), [])  # zero buckets lost to A stopping
+                self.assertEqual(cell(m, 5000, "bid", 4150.0), 11.0)  # one instance's book drawn - never summed (not 22)
+                self.assertEqual(cell(m, 10_000, "bid", 4150.0), 12.0)  # after A stops: B's own recorded change
+                self.assertEqual(m["lastObservedMs"], 15_000)
+
+    def test_real_gap_between_instances_stays_missing(self):
+        # A stops at 7000; B only becomes valid at 12 000 -> 7000..12 000 is a genuine outage: no data, nothing carried
+        m = build_matrix(self._deploy(b_first_snapshot=12_000), 0, 15_000, 1000)
+        self.assertEqual(self._missing(m, 0, 15_000), [7000, 8000, 9000, 10_000, 11_000])
+        t = coverage_timeline(self._deploy(b_first_snapshot=12_000), 0, 15_000)
+        self.assertEqual(t["union"], [[0, 7000], [12_000, 15_000]])
+        self.assertEqual(t["instances"]["B"]["firstSnapshotMs"], 12_000)
+        self.assertEqual([(g["t"], g["reason"], g["i"]) for g in t["gaps"]], [(7000, "gateway stopped", "A")])
+
+    def test_each_instance_gap_ends_only_its_own_coverage(self):
+        # B's OWN outage still ends B: after A stopped and B went stale at 7500, nothing confirms the book
+        rows = self._deploy(b_stale_at=7500)
+        m = build_matrix(rows, 0, 15_000, 1000)
+        self.assertEqual(self._missing(m, 0, 15_000), [7000] + list(range(8000, 15_000, 1000)))  # 7000..7500 by B only
+        self.assertEqual(coverage_timeline(rows, 0, 15_000)["union"], [[0, 7500]])
 
     def test_removed_level_disappears(self):
         rows = [snap(0, [(1.0, 10), (0.9, 5)], [], t1=1000), delta(1000, 2000, [(1000, 0, 0.9, 0)])]
@@ -129,7 +176,7 @@ class TestRecorder(unittest.IsolatedAsyncioTestCase):
         rows = await store.depth_rows("GC", "GCZ6", 0, 10**12)
         key = [r for r in rows if r["kind"] == "snapshot"][-1]
         self.assertEqual(key["t0"], 10_000)  # 2 s before the confirming poll (clock-skew margin)
-        self.assertEqual(json.loads(key["data"]), {"b": [[4150.0, 9.0, 0]], "a": [], "i": rec.instance})
+        self.assertEqual(json.loads(key["data"]), {"b": [[4150.0, 9.0, 0]], "a": [], "i": rec.instance, "v": 2})
         self.assertEqual(rows[-1]["t1"], 12_000)  # liveness confirmed through the poll
         rec.gap("GC", "stale")
         rec.changes("GC", 13_000, [("bid", 4150.0, 1, 0)])  # ignored while invalid
@@ -234,6 +281,37 @@ class TestHistoryEndToEnd(unittest.IsolatedAsyncioTestCase):
             self.assertGreaterEqual(m["columns"][0][0], (first // 1000) * 1000)
         finally:
             await c2.close()
+
+
+    async def test_overlapping_deploy_two_live_processes_leave_no_false_hole(self):
+        """Railway overlap with real gateway apps on one store: B starts while A records, A stops, B continues ->
+        every 1 s bucket around A's stop is covered, and the coverage endpoint attributes it to the instances."""
+        a = await self.start()
+        try:
+            await self.wait_rows(a.app)
+            b = await self.start()  # the replacement process starts while A still records
+            await asyncio.sleep(2.5)
+            ida, idb = a.app[K_DEPTH].instance, b.app[K_DEPTH].instance
+        finally:
+            await a.close()  # A stops: its "gateway stopped" gap row is written
+        try:
+            await asyncio.sleep(3.0)
+            stop = max(r["t0"] for r in self.store.depth if r["kind"] == "gap" and json.loads(r["data"]).get("i") == ida)
+            now = int(time.time() * 1000)
+            frm = (stop // 1000 - 2) * 1000
+            m = await (await b.get(f"/api/ibkr/heatmap?root=GC&from={frm}&to={now - 1000}&bucket=1000")).json()
+            have = {c[0]: c[1] for c in m["columns"]}
+            full = [t for t in range(frm, (now - 1000) // 1000 * 1000, 1000)]
+            self.assertEqual([t for t in full if have.get(t, 0) < 0.999], [])  # A stopping removed nothing: B was LIVE
+            cv = await (await b.get(f"/api/ibkr/coverage?root=GC&from={frm - 10_000}&to={now}")).json()
+            self.assertEqual(cv["currentInstance"], idb)
+            self.assertEqual(set(cv["instances"]), {ida, idb})
+            self.assertEqual([(g["reason"], g["i"]) for g in cv["gaps"]], [("gateway stopped", ida)])
+            self.assertLessEqual(cv["instances"][idb]["firstSnapshotMs"], stop)  # B was recording before A stopped
+            self.assertEqual(len(cv["union"]), 1)
+            self.assertEqual((await b.get("/api/ibkr/coverage?root=GC&from=0&to=99999999999")).status, 400)  # bounded
+        finally:
+            await b.close()
 
 
 @unittest.skipUnless(PG_ADMIN, "TLUXE_TEST_DATABASE_URL not set - PostgreSQL tests are skipped (never faked)")
