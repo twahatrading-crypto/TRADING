@@ -547,7 +547,10 @@ jobs:
           let fails = 0;
           const check = (ok, m) => { console.log(`    ${ok ? 'OK  ' : 'FAIL'} ${m}`); if (!ok) fails++; };
           const j = async (p) => (await fetch(base + p)).json();
-          const leak = (s) => /bearer|authorization|depth\.twahatrading|TLUXE_IBKR_DEPTH|:8766|:4001/i.test(s);
+          // Ports only as host:port (market-data numbers such as "low":4001.2 are not addresses); returns the matched text.
+          const LEAK = /bearer|authorization|depth\.twahatrading|TLUXE_IBKR_DEPTH|(?:localhost|127\.0\.0\.1|[a-z0-9-]+\.[a-z0-9.-]+):(?:8766|4001)\b/i;
+          const leakOf = (s) => { const m = LEAK.exec(s); return m ? s.slice(Math.max(0, m.index - 40), m.index + m[0].length + 40) : null; };
+          const leak = (s) => leakOf(s) !== null;
           (async () => {
             await new Promise((r) => setTimeout(r, 240000)); // this push redeploys Railway
             let st = null;
@@ -598,11 +601,11 @@ jobs:
                 // The existing Databento / MT5 / news clients send the fixed, documented, non-secret placeholder
                 // "Bearer cloud-session" (src/config/deployment.ts CLOUD_SESSION_TOKEN; the gateway ignores it). Any
                 // other Authorization value, or any Authorization header at all on /api/ibkr/*, is a failure.
-                if (h.authorization) authValues.add(`${new URL(r.url()).pathname.split('/').slice(0, 3).join('/')} -> ${h.authorization === 'Bearer cloud-session' ? 'Bearer cloud-session (placeholder)' : 'OTHER VALUE'}`);
+                if (h.authorization) authValues.add(`${new URL(r.url()).pathname.split('/').slice(0, 3).join('/')} -> ${h.authorization === 'Bearer cloud-session' ? 'fixed cloud-session placeholder' : 'OTHER VALUE'}`);
                 if (h.authorization && (h.authorization !== 'Bearer cloud-session' || /\/api\/ibkr\//.test(r.url()))) errs.push('AUTH HEADER on ' + r.url());
                 if (Object.entries(h).some(([k, v]) => k !== 'authorization' && /bearer/i.test(v))) errs.push('BEARER in another header on ' + r.url());
               });
-              p.on('response', async (r) => { if (/\/api\//.test(r.url()) && !/\/api\/stream/.test(r.url())) { try { if (leak(await r.text())) errs.push('LEAK in ' + r.url()); } catch {} } });
+              p.on('response', async (r) => { if (/\/api\//.test(r.url()) && !/\/api\/stream/.test(r.url())) { try { const m = leakOf(await r.text()); if (m) errs.push(`LEAK in ${r.url()} :: ${m}`); } catch {} } });
               await p.goto(base + '/#/engines/liquidity-heatmap');
               await p.waitForSelector('.ofmain', { timeout: 30000 });
               await p.waitForTimeout(45000);
