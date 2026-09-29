@@ -44,6 +44,13 @@ CONTRACT_KEYS = {"conId": ("conId", "con_id", "conid"), "localSymbol": ("localSy
                  "multiplier": ("multiplier",), "minTick": ("minTick", "min_tick"), "tradingClass": ("tradingClass", "trading_class"), "secType": ("secType", "sec_type")}
 
 
+def _lag_stats(v) -> dict | None:
+    if not v:
+        return None
+    x = sorted(v)
+    return {"n": len(x), "min": x[0], "p50": x[len(x) // 2], "p90": x[int(len(x) * 0.9)], "max": x[-1]}
+
+
 class Malformed(ValueError):
     pass
 
@@ -116,6 +123,9 @@ class PullState:
         self.out_of_order = 0
         self.malformed = 0
         self.rows: dict = {"bids": [], "asks": []}
+        # Clock / latency evidence: gateway receive time - IBKR lastUpdate for every NEW update (ms). Its minimum is
+        # the VPS-to-gateway clock offset plus the smallest network + poll delay (never negative if clocks agree).
+        self.recv_lag: collections.deque = collections.deque(maxlen=600)
 
 
 ACCOUNT_ID = re.compile(r"\b(?:DU|DF|DI|U|F|I)\d{5,10}\b")
@@ -333,6 +343,8 @@ class IbkrRelay:
         if p.last_update_ms is not None and d["lastUpdateMs"] < p.last_update_ms:
             p.out_of_order += 1  # an older snapshot never overwrites a newer book
             return
+        if p.last_update_ms is None or d["lastUpdateMs"] != p.last_update_ms:
+            p.recv_lag.append(self.now_ms() - d["lastUpdateMs"])
         p.errors, p.last_ok_s, p.last_update_ms = 0, self.clock(), d["lastUpdateMs"]
         p.state, p.detail = d["status"], None
         c = d["contract"]
@@ -444,6 +456,7 @@ class IbkrRelay:
             pl = self.pulls[root]
             out["roots"][root] = {"state": st, "detail": detail, "valid": self.valid(root), "contract": b.contract, "target": self.targets.get(root),
                                   "lastUpdateMs": pl.last_update_ms, "polls": pl.polls, "outOfOrder": pl.out_of_order, "malformed": pl.malformed,
+                                  "receiveLagMs": _lag_stats(pl.recv_lag),
                                   "bidLevels": len(b.bids), "askLevels": len(b.asks), "depthSeq": b.seq, "epoch": b.epoch, "lastDepthMs": b.last_depth_ms,
                                   "rowsRequested": r.get("rowsRequested"), "ops": r.get("ops"), "marketMakerField": r.get("marketMakerField"), "resetReason": b.reason}
         return out

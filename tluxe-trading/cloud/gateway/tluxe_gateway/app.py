@@ -540,7 +540,7 @@ async def ibkr_history_status(request: web.Request) -> web.Response:
             gaps[r] = [{"t": g["t"], **{k: v for k, v in json.loads(g["data"]).items() if k in ("reason", "i")}} for g in await store.depth_gaps(r, c or "")]
         except Exception:  # noqa: BLE001
             gaps[r] = None
-    feed = {r: {k: st["roots"][r].get(k) for k in ("state", "detail", "lastUpdateMs", "polls", "depthSeq", "bidLevels", "askLevels", "outOfOrder", "malformed")} for r in ("GC", "SI")}
+    feed = {r: {k: st["roots"][r].get(k) for k in ("state", "detail", "lastUpdateMs", "polls", "depthSeq", "bidLevels", "askLevels", "outOfOrder", "malformed", "receiveLagMs")} for r in ("GC", "SI")}
     return _json({**rec.status(), "persistence": getattr(store, "kind", "unknown"), "tableBytes": size, "serverMs": int(time.time() * 1000),
                   "lastBrowserDepthReadMs": request.app[K_STATE].get("ibkrClientMs"), "streamClients": len(request.app[K_HUB].clients),
                   "ibkrFeed": feed, "recentGaps": gaps, "ibkrSession": {k: st["session"].get(k) for k in ("state", "apiConnected", "reconnects")},
