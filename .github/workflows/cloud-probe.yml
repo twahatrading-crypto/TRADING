@@ -502,7 +502,7 @@ jobs:
               console.log(`  layout: grid=${JSON.stringify(u.grid)} chart=${JSON.stringify(u.chart)} bottom=${JSON.stringify(u.bottom)} overflowX=${u.overflowX}`);
               check(u.contract === st.activeContract, `${inst}: resolved contract ${u.contract} = Databento ${st.activeContract}`);
               check(/DATABENTO/.test(u.header) && /GLBX\.MDP3/.test(u.header) && u.header.includes(st.activeContract), `${inst}: header DATABENTO · GLBX.MDP3 · ${st.activeContract}`);
-              check(/TRADES: LIVE/.test(u.feeds), `${inst}: TRADES LIVE (real CME/COMEX executed trades)`);
+              check(/TRADES( · DATABENTO)?:? LIVE/.test(u.feeds), `${inst}: TRADES · DATABENTO LIVE (real CME/COMEX executed trades)`);
               check(/VOLUME: LIVE/.test(u.feeds) && /OHLCV: LIVE/.test(u.feeds), `${inst}: OHLCV + VOLUME LIVE`);
               check(!/DEPTH: LIVE/.test(u.feeds) && /DEPTH DATA UNAVAILABLE/.test(u.depthNa), `${inst}: depth honestly unavailable`);
               check(/MBO: NOT ENTITLED/.test(u.feeds), `${inst}: MBO NOT ENTITLED`);

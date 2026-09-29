@@ -1,0 +1,4 @@
+# Outbound link to the TLUXE cloud gateway.
+websockets==17.1
+# IBKR's OFFICIAL Python API (`ibapi`) is not taken from PyPI: install it from the TWS API download on the VPS
+#   (IBJts\source\pythonclient -> `pip install .`). The unit tests do not need it.

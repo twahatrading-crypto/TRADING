@@ -75,13 +75,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        bridge: [ai, news, databento, mt5]
+        bridge: [ai, news, databento, mt5, ibkr]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
       # MT5: the MetaTrader5 package is Windows-only; its tests use a test double and need no install.
+      # IBKR: IBKR's official ibapi is installed on the VPS from the TWS API download; its tests use a fake API.
       - if: matrix.bridge != 'mt5'
         run: pip install -r bridge/${{ matrix.bridge }}/requirements.txt
       - run: python -m unittest discover -s tests -v

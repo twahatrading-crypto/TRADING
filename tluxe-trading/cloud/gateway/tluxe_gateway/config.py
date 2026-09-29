@@ -92,6 +92,8 @@ class GatewayConfig:
     databento: Upstream = field(default_factory=lambda: Upstream("databento", "", Secret("")))
     news: Upstream = field(default_factory=lambda: Upstream("news", "", Secret("")))
     mt5_bridge_keys: tuple[Mt5BridgeKey, ...] = ()
+    # IBKR COMEX Level-2 depth link from the cloud Windows VPS (/bridge/ibkr). Same hash format as the MT5 link key.
+    ibkr_bridge_keys: tuple[Mt5BridgeKey, ...] = ()
     static_dir: str = ""
     log_format: str = "text"
     # Production without an owner password hash (login not set up yet): the gateway still starts, but ONLY the
@@ -161,8 +163,8 @@ def _internal_url(raw: str, key: str) -> tuple[str, str]:
     return u, ""
 
 
-def _mt5_keys(raw: str) -> tuple[Mt5BridgeKey, ...]:
-    """TLUXE_MT5_BRIDGE_TOKEN_SHA256 = comma list of sha256(token) hex, optionally `hash@expiryEpochSeconds`.
+def _mt5_keys(raw: str, name: str = "TLUXE_MT5_BRIDGE_TOKEN_SHA256") -> tuple[Mt5BridgeKey, ...]:
+    """<NAME> = comma list of sha256(token) hex, optionally `hash@expiryEpochSeconds`.
     Two entries allow rotation without downtime; only hashes are stored in the cloud."""
     out = []
     for part in (raw or "").split(","):
@@ -171,11 +173,11 @@ def _mt5_keys(raw: str) -> tuple[Mt5BridgeKey, ...]:
             continue
         h, _, exp = part.partition("@")
         if not _SHA256_RE.match(h):
-            raise ConfigError("TLUXE_MT5_BRIDGE_TOKEN_SHA256 must be sha256 hex digests (optionally @expiryEpochSeconds)")
+            raise ConfigError(f"{name} must be sha256 hex digests (optionally @expiryEpochSeconds)")
         try:
             out.append(Mt5BridgeKey(h, int(exp) if exp else None))
         except ValueError:
-            raise ConfigError("TLUXE_MT5_BRIDGE_TOKEN_SHA256 expiry must be epoch seconds") from None
+            raise ConfigError(f"{name} expiry must be epoch seconds") from None
     return tuple(out)
 
 
@@ -236,6 +238,7 @@ def from_env(env: dict | None = None) -> GatewayConfig:
         errors.append("LOG_FORMAT must be json or text")
     ttl_h = check(_int, e, "TLUXE_SESSION_TTL_HOURS", 12, 1, 24 * 30, default=12)
     mt5_keys = check(_mt5_keys, e.get("TLUXE_MT5_BRIDGE_TOKEN_SHA256") or "", default=())
+    ibkr_keys = check(_mt5_keys, e.get("TLUXE_IBKR_BRIDGE_TOKEN_SHA256") or "", "TLUXE_IBKR_BRIDGE_TOKEN_SHA256", default=())
     if errors:
         raise ConfigError("; ".join(dict.fromkeys(errors)))
 
@@ -257,6 +260,7 @@ def from_env(env: dict | None = None) -> GatewayConfig:
         databento=upstream("databento", "TLUXE_DATABENTO_URL", "TLUXE_DB_BRIDGE_TOKEN"),
         news=upstream("news", "TLUXE_NEWS_URL", "TLUXE_NEWS_TOKEN"),
         mt5_bridge_keys=mt5_keys,
+        ibkr_bridge_keys=ibkr_keys,
         static_dir=(e.get("TLUXE_STATIC_DIR") or "").strip(),
         log_format=log_format,
         # No owner login configured yet -> read-only public market data only (login returns AUTH_NOT_CONFIGURED).

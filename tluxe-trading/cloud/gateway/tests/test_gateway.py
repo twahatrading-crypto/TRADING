@@ -34,6 +34,8 @@ PW_HASH = hash_password(PASSWORD, n=2**12)
 AI_TOKEN, DB_TOKEN, NEWS_TOKEN = "a" * 40, "d" * 40, "n" * 40
 BRIDGE_TOKEN = "mt5-bridge-token-" + "x" * 40
 BRIDGE_SHA = hashlib.sha256(BRIDGE_TOKEN.encode()).hexdigest()
+IBKR_TOKEN = "ibkr-bridge-token-" + "y" * 40
+IBKR_SHA = hashlib.sha256(IBKR_TOKEN.encode()).hexdigest()
 APP = "https://tluxe.example.app"
 
 
@@ -456,6 +458,105 @@ class TestGatewayDev(GatewayCase):
         self.assertEqual(relay.counts["rejectedReplay"], before["rejectedReplay"] + 1)
         self.assertEqual(relay.counts["rejectedSkew"], before["rejectedSkew"] + 1)
         self.assertEqual(relay.status()["bridgeId"], "vps-test")
+        await link.close()
+
+
+class TestIbkrDepth(GatewayCase):
+    """IBKR COMEX Level-2 depth relay. TEST DATA ONLY: a scripted VPS bridge speaks the link protocol."""
+
+    extra_env = {"TLUXE_IBKR_BRIDGE_TOKEN_SHA256": IBKR_SHA}
+
+    async def _link(self):
+        link = await self.client.ws_connect("/bridge/ibkr", headers={"Authorization": f"Bearer {IBKR_TOKEN}", "X-TLUXE-Bridge-Id": "ibkr-vps-test"})
+        seq = 0
+
+        async def send(**kw):
+            nonlocal seq
+            seq += 1
+            await link.send_str(json.dumps({"seq": seq, "ts": int(time.time() * 1000), **kw}))
+            await asyncio.sleep(0.05)
+
+        return link, send
+
+    async def test_auth_config_flag_and_offline_state(self):
+        with self.assertRaises(Exception):
+            await self.client.ws_connect("/bridge/ibkr", headers={"Authorization": "Bearer wrong"})
+        self.assertTrue((await (await self.client.get("/api/config")).json())["ibkrDepth"])
+        self.assertEqual((await self.client.get("/api/ibkr/status")).status, 401)  # owner login active: session required
+        sid = await self.login()
+        st = await (await self.client.get("/api/ibkr/status", headers=self.ck(sid))).json()
+        self.assertEqual((st["configured"], st["roots"]["GC"]["state"], st["roots"]["GC"]["valid"]), (True, "OFFLINE", False))
+        b = await (await self.client.get("/api/ibkr/book?root=GC", headers=self.ck(sid))).json()
+        self.assertEqual((b["valid"], b["bids"], b["asks"]), (False, [], []))  # no depth is ever served while offline
+        self.assertEqual((await self.client.get("/api/ibkr/book?root=XAUUSD", headers=self.ck(sid))).status, 400)
+
+    async def test_book_updates_gap_reset_and_link_loss(self):
+        from tluxe_gateway.app import K_IBKR
+        relay = self.app[K_IBKR]
+        sid = await self.login()
+        link, send = await self._link()
+        await send(type="hello", bridgeId="ibkr-vps-test")
+        contract = {"conId": 462941472, "localSymbol": "GCZ6", "exchange": "COMEX", "currency": "USD", "expiry": "20261229", "minTick": 0.1}
+        await send(type="health", session={"state": "LIVE", "apiConnected": True, "detail": None, "lastError": {"code": 10090, "message": "acct U1234567"}},
+                   roots={"GC": {"state": "LIVE", "rowsRequested": 10}})
+        await send(type="book", root="GC", depthSeq=10, valid=True, contract=contract, bids=[[4150.0, 5], [4149.9, 7]], asks=[[4150.1, 3]])
+        b = await (await self.client.get("/api/ibkr/book?root=GC", headers=self.ck(sid))).json()
+        self.assertEqual((b["valid"], b["depthSeq"], b["bids"][0], b["asks"][0], b["contract"]["localSymbol"]), (True, 10, [4150.0, 5.0], [4150.1, 3.0], "GCZ6"))
+        now = int(time.time() * 1000)
+        await send(type="depth", root="GC", changes=[[11, "bid", 4150.0, 9, "update", 0, now], [12, "ask", 4150.1, 0, "delete", 0, now]])
+        u = await (await self.client.get(f"/api/ibkr/updates?root=GC&epoch={b['epoch']}&after=10", headers=self.ck(sid))).json()
+        self.assertEqual((u["resync"], [c[:4] for c in u["changes"]]), (False, [[11, "bid", 4150.0, 9.0], [12, "ask", 4150.1, 0.0]]))
+        # A depth sequence gap invalidates the book and asks the bridge for a fresh snapshot.
+        await send(type="depth", root="GC", changes=[[20, "bid", 4149.0, 1, "insert", 3, now]])
+        req = json.loads((await link.receive(timeout=5)).data)
+        while req.get("type") != "snapshot":
+            req = json.loads((await link.receive(timeout=5)).data)
+        self.assertEqual(req["root"], "GC")
+        g = await (await self.client.get("/api/ibkr/book?root=GC", headers=self.ck(sid))).json()
+        self.assertEqual((g["valid"], g["bids"]), (False, []))
+        u2 = await (await self.client.get(f"/api/ibkr/updates?root=GC&epoch={b['epoch']}&after=12", headers=self.ck(sid))).json()
+        self.assertTrue(u2["resync"])
+        # Reset = known empty baseline; IBKR rebuilds with fresh rows.
+        await send(type="reset", root="GC", depthSeq=30, reason="IBKR 317: Market depth data has been RESET")
+        await send(type="depth", root="GC", changes=[[31, "bid", 4151.0, 2, "insert", 0, now]])
+        r = await (await self.client.get("/api/ibkr/book?root=GC", headers=self.ck(sid))).json()
+        self.assertEqual((r["valid"], r["bids"]), (True, [[4151.0, 2.0]]))
+        st = await (await self.client.get("/api/ibkr/status", headers=self.ck(sid))).json()
+        self.assertNotIn("U1234567", json.dumps(st))  # account ids never leave the gateway
+        self.assertEqual(st["roots"]["GC"]["state"], "LIVE")
+        self.assertIn("MBO", st["depthType"])
+        # AUTH REQUIRED stops depth immediately.
+        await send(type="health", session={"state": "AUTH_REQUIRED", "detail": "IBKR login / 2FA required"}, roots={"GC": {"state": "OFFLINE"}})
+        a = await (await self.client.get("/api/ibkr/book?root=GC", headers=self.ck(sid))).json()
+        self.assertEqual((a["state"], a["valid"], a["bids"]), ("AUTH_REQUIRED", False, []))
+        # Link loss clears every book.
+        await link.close()
+        await asyncio.sleep(0.2)
+        o = await (await self.client.get("/api/ibkr/book?root=GC", headers=self.ck(sid))).json()
+        self.assertEqual((o["state"], o["valid"], o["bids"]), ("OFFLINE", False, []))
+        self.assertEqual(relay.books["GC"].bids, {})
+
+    async def test_targets_follow_the_databento_contract_and_replay_is_rejected(self):
+        from tluxe_gateway.app import K_IBKR
+        relay = self.app[K_IBKR]
+        link, send = await self._link()
+        await send(type="hello")
+        await relay.tick({"GC": "GCZ6", "SI": "SIZ6", "ES": "ESZ6"})
+        m = json.loads((await link.receive(timeout=5)).data)
+        self.assertEqual((m["type"], m["roots"]), ("targets", {"GC": "GCZ6", "SI": "SIZ6"}))
+        before = dict(relay.counts)
+        await link.send_str(json.dumps({"type": "heartbeat", "seq": 1, "ts": int(time.time() * 1000)}))  # replay
+        await link.send_str(json.dumps({"type": "heartbeat", "seq": 99, "ts": int(time.time() * 1000) - 120_000}))  # skew
+        await asyncio.sleep(0.2)
+        self.assertEqual(relay.counts["rejectedReplay"], before["rejectedReplay"] + 1)
+        self.assertEqual(relay.counts["rejectedSkew"], before["rejectedSkew"] + 1)
+        # A LIVE IBKR book of a different expiry than Databento's is withheld (never mixed across a roll).
+        await link.send_str(json.dumps({"seq": 100, "ts": int(time.time() * 1000), "type": "health", "session": {"state": "LIVE", "apiConnected": True}, "roots": {"GC": {"state": "LIVE"}}}))
+        await link.send_str(json.dumps({"seq": 101, "ts": int(time.time() * 1000), "type": "book", "root": "GC", "depthSeq": 5, "valid": True,
+                                        "contract": {"conId": 760200541, "localSymbol": "GCX6"}, "bids": [[4150.0, 1]], "asks": [[4150.1, 1]]}))
+        await asyncio.sleep(0.2)
+        bk = relay.book("GC")
+        self.assertEqual((bk["state"], bk["valid"], bk["bids"]), ("CONTRACT_MISMATCH", False, []))
         await link.close()
 
 

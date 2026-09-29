@@ -6,10 +6,10 @@ import type { OrderFlowPanelsData } from '../../services/orderFlow/view';
 import { EV_BASIS, STATUS_TONE, statusText } from './status';
 import { formatPrice } from '../../utils/format';
 
-export const Pill = ({ status, label }: { status: FeedStatus; label?: string }) => (
+export const Pill = ({ status, label, sep = ': ' }: { status: FeedStatus; label?: string; sep?: string }) => (
   <span className={`ofpill ofpill--${STATUS_TONE[status]}`}>
     <i aria-hidden="true" />
-    {label ? `${label}: ` : ''}
+    {label ? `${label}${sep}` : ''}
     {statusText(status)}
   </span>
 );

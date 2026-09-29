@@ -179,3 +179,12 @@
 }
 /* The heatmap card sizes its stage to the row (the shared stage minimum would overflow the card at 1080p). */
 .ofheat .srchart__stage, .ofheat .chart-stage { min-height: 0; }
+
+/* IBKR COMEX Level-2 session health (only when the IBKR depth provider is active) */
+.ofibkr { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; padding: 5px 12px; font-size: 11px; color: var(--text-3); background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.ofibkr b { color: var(--text); font-weight: 600; }
+.ofibkr__state { font-weight: 700; letter-spacing: 0.04em; }
+.ofibkr--ok .ofibkr__state { color: var(--green, #22c55e); }
+.ofibkr--warn .ofibkr__state { color: var(--amber, #e5a33b); }
+.ofibkr--bad .ofibkr__state, .ofibkr__auth { color: var(--red, #ef4444); font-weight: 600; }
+.ofmain.has-ibkr .ofgrid { height: max(440px, calc(100vh - 537px)); }

@@ -17,6 +17,7 @@ import { InstrumentSelection } from './instruments/InstrumentSelection';
 import type { DepthProvider } from './market/DepthProvider';
 import { NO_ORDER_FLOW_PROVIDERS, type OrderFlowDepthProvider, type OrderFlowProviders } from '../providers/orderFlow/types';
 import { composeOrderFlowProviders } from '../providers/level2/composeOrderFlow';
+import { IbkrDepthProvider } from '../providers/ibkr/IbkrDepthProvider';
 import { OrderFlowService } from './orderFlow/OrderFlowService';
 import { SmcService } from './smc/SmcService';
 import { NewsAnalysisService } from './newsAnalysis/NewsAnalysisService';
@@ -37,7 +38,7 @@ import { loadDatabentoConfig } from '../providers/databento/config';
 import { DatabentoFeed } from '../providers/databento/DatabentoFeed';
 import { DatabentoFootprintProvider, DatabentoMarketProvider, DatabentoMboOrderFlowProvider, DatabentoOrderFlowProvider } from '../providers/databento/adapters';
 import { Mt5Provider } from './mt5/Mt5Provider';
-import { resolveBackendConfig } from '../config/deployment';
+import { IS_CLOUD, resolveBackendConfig } from '../config/deployment';
 
 export interface Services {
   instruments: InstrumentSelection;
@@ -102,7 +103,7 @@ export interface ServiceOptions {
  * so every instrument reports DATA UNAVAILABLE / Provider: Not Connected.
  * Connecting MT5 or Bookmap later = implement the interface and add it here.
  */
-export function defaultProviders(storage: Pick<Storage, 'getItem' | 'setItem'> | null = null): ProviderSet {
+export function defaultProviders(storage: Pick<Storage, 'getItem' | 'setItem'> | null = null, opts: { ibkrDepth?: boolean } = {}): ProviderSet {
   // Real MT5 data only when the user has configured and enabled the private bridge (local), or through the gateway's
   // read-only MT5 relay (cloud: the Windows VPS link; NOT CONNECTED when no link is attached).
   const mt5 = resolveBackendConfig(loadMt5Config(storage), 'mt5', 'bridgeUrl');
@@ -113,8 +114,10 @@ export function defaultProviders(storage: Pick<Storage, 'getItem' | 'setItem'> |
   // Databento Standard (default): trades only - depth is never taken from it. With a MBO plan it is also the depth source.
   const dbMbo = feed && db.mboDepth ? new DatabentoMboOrderFlowProvider(feed) : null;
   const dbFlow = dbMbo ?? (feed ? new DatabentoOrderFlowProvider(feed) : null);
-  // Level-2 depth adapter slot (IBKR / T4 / …): none is connected yet -> the heatmap reports LEVEL-2 PROVIDER NOT CONNECTED.
-  const level2Depth: OrderFlowDepthProvider | null = dbMbo;
+  // Level-2 depth adapter slot. IBKR COMEX Level-2 only in the cloud build AND only when the gateway reports its VPS
+  // depth link configured (/api/config ibkrDepth) - depth then comes from the cloud VPS through the gateway, never from
+  // localhost or a home PC. Otherwise nothing: the heatmap reports LEVEL-2 PROVIDER NOT CONNECTED (never inferred).
+  const level2Depth: OrderFlowDepthProvider | null = dbMbo ?? (IS_CLOUD && opts.ibkrDepth && feed ? new IbkrDepthProvider() : null);
   // Real news only through the local news backend (bridge/news) when the user enabled it. Provider keys stay server-side.
   const nb = resolveBackendConfig(loadNewsBridgeConfig(storage), 'news', 'url');
   const newsFeed = nb.enabled && nb.token ? new NewsBridgeFeed(nb) : null;

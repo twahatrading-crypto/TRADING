@@ -63,6 +63,7 @@ per-process.
 ## 3. Environment variables (names only — values go in Railway Variables, never in Git)
 
 **tluxe-web (gateway)** — see `cloud/gateway/.env.example`
+* Optional — IBKR depth: `TLUXE_IBKR_BRIDGE_TOKEN_SHA256` (see §5b; only a hash, never the token).
 * Required:
   * `TLUXE_ENV=production`
   * `PUBLIC_APP_URL` and `API_PUBLIC_URL` — the same https origin
@@ -200,6 +201,19 @@ The link runs `bridge/mt5/remote_link/` next to the unchanged local bridge.
 * MT5 feed is LIVE only with a quote fresher than 60 s while the market is open.
 * Outside market hours it shows STALE with `expected: true`, displayed as MARKET CLOSED. Market hours are
   Sun 18:00 ET to Fri 17:00 ET, with a daily break from 17:00 to 18:00 ET.
+
+## 5b. IBKR COMEX Level-2 depth bridge (cloud Windows VPS)
+
+Runbook: `bridge/ibkr/README.md`. IBKR is the **depth source only** (Databento keeps trades / history / volume).
+* VPS: IB Gateway (logged in by the owner; Read-Only API; auto-restart daily) → `bridge/ibkr` → outbound **WSS** to
+  `/bridge/ibkr` with `Authorization: Bearer <TLUXE_IBKR_BRIDGE_TOKEN>` (VPS `.env` only).
+* Railway variable: `TLUXE_IBKR_BRIDGE_TOKEN_SHA256` (sha256 of that token; `hash@expiry` and comma lists for rotation).
+  Only when it is set does `/api/config` report `ibkrDepth: true` and the web app register the IBKR depth provider.
+* Browsers read `/api/ibkr/status | book | updates` (same origin; public read-only while owner login is not configured,
+  session-protected once it is). No browser request ever goes to localhost, the VPS or a home PC.
+* Target contracts = the ACTIVE Databento contract per root; a mismatching IBKR book is withheld (CONTRACT_MISMATCH).
+* Home PC required: **no**. Cloud VPS required: **yes**. Permanent unattended IBKR authentication: **not claimed** —
+  a manual IB Gateway login can be required after the weekly reset (TLUXE shows IBKR AUTH REQUIRED; depth stops).
 
 ## 6. Security controls
 

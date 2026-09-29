@@ -61,17 +61,19 @@ export interface RuntimeConfig {
   authRequired: boolean;
   /** Owner login not configured yet: only read-only Databento market data is served without a session. */
   publicMarketData: boolean;
+  /** The gateway has an IBKR COMEX Level-2 depth link configured (cloud VPS bridge). A flag only - never a key. */
+  ibkrDepth: boolean;
 }
 
 /** Gateway runtime flags (public, no secrets). Unknown / unreachable -> login required (fail closed). */
 export async function fetchRuntimeConfig(fetchImpl: FetchLike = f): Promise<RuntimeConfig> {
   try {
     const res = await fetchImpl('/api/config', { credentials: 'same-origin', cache: 'no-store' });
-    const body = res.ok ? await json<{ authRequired?: unknown; publicMarketData?: unknown }>(res) : null;
+    const body = res.ok ? await json<{ authRequired?: unknown; publicMarketData?: unknown; ibkrDepth?: unknown }>(res) : null;
     const publicMarketData = body?.publicMarketData === true && body?.authRequired === false;
-    return { authRequired: !publicMarketData, publicMarketData };
+    return { authRequired: !publicMarketData, publicMarketData, ibkrDepth: body?.ibkrDepth === true };
   } catch {
-    return { authRequired: true, publicMarketData: false };
+    return { authRequired: true, publicMarketData: false, ibkrDepth: false };
   }
 }
 

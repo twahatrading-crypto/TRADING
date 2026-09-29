@@ -23,8 +23,8 @@ const storage = (() => {
 })();
 const root = createRoot(document.getElementById('root')!);
 
-function startApp(publicMarketData = false) {
-  const services = createServices(defaultProviders(storage));
+function startApp(publicMarketData = false, ibkrDepth = false) {
+  const services = createServices(defaultProviders(storage, { ibkrDepth }));
   // Providers live outside React: component HMR and StrictMode never reconnect them.
   const disconnect = connectServices(services);
   // Cloud only: gateway status stream, news notifications, alert persistence, session expiry -> sign-in again.
@@ -53,9 +53,9 @@ if (!IS_CLOUD) {
   // Cloud: nothing connects (and no provider is polled) until the owner is signed in - unless the gateway reports
   // public market-data mode (login not configured yet), where only read-only market data is available.
   void fetchRuntimeConfig().then(async (rc) => {
-    if (rc.publicMarketData) return startApp(true);
+    if (rc.publicMarketData) return startApp(true, rc.ibkrDepth);
     const s = await sessionStatus();
-    if (s === 'authenticated') startApp();
-    else root.render(<CloudSignIn gatewayDown={s === 'unreachable'} onSignedIn={() => startApp()} />);
+    if (s === 'authenticated') startApp(false, rc.ibkrDepth);
+    else root.render(<CloudSignIn gatewayDown={s === 'unreachable'} onSignedIn={() => startApp(false, rc.ibkrDepth)} />);
   });
 }

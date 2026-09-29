@@ -21,6 +21,7 @@ import type { Viewport } from '../components/orderFlow/heatmapMath';
 import { DOT_AGGREGATIONS, catchUpFrom, latestTrade, type DotAggregation, type TradeSource } from '../components/orderFlow/tradeDots';
 import { BookPanel, CvdPanel, EventsPanel, Pill, ProfilePanel, SettingsPanel } from '../components/orderFlow/OrderFlowPanels';
 import { capLabel } from '../components/databento/capabilities';
+import { IbkrDepthPill, IbkrSessionStrip } from '../components/orderFlow/IbkrSession';
 import '../components/sr/sr.css';
 import '../components/orderFlow/orderFlow.css';
 
@@ -160,6 +161,8 @@ function Workspace() {
   const cls = (t: Tab) => (tab === t ? '' : 'ofhide-narrow');
 
   const depthAvailable = st.capabilities.depth !== 'NONE' || !!replay;
+  // IBKR COMEX Level-2 is the depth source (cloud VPS link): its own labels and session health strip.
+  const ibkrDepth = /^IBKR/.test(st.depth.provider ?? '');
   const dbCaps = (dbFeed?.health?.instruments as Record<string, { capabilities?: Record<string, string> } | undefined> | undefined)?.[def.id]?.capabilities ?? null;
   const futures = instruments.list.filter((x) => x.kind === 'future' && x.exchange === 'COMEX');
   const pickable = futures.some((x) => x.id === def.id) ? futures : [def, ...futures];
@@ -175,7 +178,7 @@ function Workspace() {
   const gridCls = `ofgrid${ui.cob ? '' : ' no-cob'}${ui.svp ? '' : ' no-svp'}`;
 
   return (
-    <main className="srmain ofmain">
+    <main className={`srmain ofmain${ibkrDepth ? ' has-ibkr' : ''}`}>
       <div className="ofbar" data-testid="of-bar">
         <div className="ofbar__brand">
           <span className="hlehead__icon" aria-hidden="true"><Flame size={18} /></span>
@@ -195,10 +198,10 @@ function Workspace() {
         <div className="ofbar__cell"><span>Exchange time</span><strong className="num">{st.exchTime ? new Date(st.exchTime).toLocaleTimeString('en-GB', { hour12: false }) : '—'}</strong></div>
         <div className="ofbar__feeds" data-testid="of-feeds">
           <Pill status={priceStatus} label="PRICE" />
-          <Pill status={tradeStatus} label="TRADES" />
+          {/databento/i.test(st.trade.provider ?? '') ? <Pill status={tradeStatus} label="TRADES · DATABENTO" sep=" " /> : <Pill status={tradeStatus} label="TRADES" />}
           {dbCaps && <CapPill label="OHLCV" v={dbCaps.ohlcv} />}
           {dbCaps && <CapPill label="VOLUME" v={dbCaps.volume} />}
-          <Pill status={depthStatus} label="DEPTH" />
+          {ibkrDepth ? <IbkrDepthPill root={def.id} /> : <Pill status={depthStatus} label="DEPTH" />}
           {dbCaps && <CapPill label="MBO" v={dbCaps.mbo} />}
           <button type="button" className="ofbtn ofbtn--ghost" aria-expanded={diag} onClick={() => setDiag(!diag)} data-testid="of-diag-toggle">
             Diagnostics {diag ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
@@ -251,6 +254,8 @@ function Workspace() {
           <span>Capabilities: depth <b>{st.capabilities.depth}</b> · aggressor side <b>{st.capabilities.aggressorSide ? 'exchange' : 'none'}</b> · sequenced <b>{st.capabilities.sequenced ? 'yes' : 'no'}</b></span>
         </div>
       )}
+
+      {ibkrDepth && <IbkrSessionStrip root={def.id} databentoContract={st.contract} />}
 
       <nav className="oftabs" role="tablist" aria-label="Order-flow panels">
         {TABS.map(([k, label]) => (

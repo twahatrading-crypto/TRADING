@@ -25,6 +25,7 @@ from .auth import COOKIE, ROTATE_AFTER_S, GlobalFailLimiter, LoginLimiter, new_s
 from .config import GatewayConfig, Upstream
 from .health import ai_states, comp, databento_state, databento_summary, mt5_states, news_state
 from .logs import Redactor
+from .ibkr_relay import IbkrRelay
 from .mt5_relay import HEARTBEAT_S as MT5_HB_S, Mt5Relay, RelayError, token_ok
 from .store import MemoryStore, PgStore
 from .stream import StreamHub
@@ -39,6 +40,7 @@ SAFE_QUERY = re.compile(r"^[A-Za-z0-9_=&.,%-]{0,300}$")
 K_CFG = web.AppKey("cfg", GatewayConfig)
 K_STORE = web.AppKey("store", object)
 K_RELAY = web.AppKey("relay", Mt5Relay)
+K_IBKR = web.AppKey("ibkr", IbkrRelay)
 K_HUB = web.AppKey("hub", StreamHub)
 K_STATE = web.AppKey("state", dict)
 K_HTTP = web.AppKey("http", object)
@@ -211,7 +213,9 @@ async def readyz(request: web.Request) -> web.Response:
 async def runtime_config(request: web.Request) -> web.Response:
     cfg = request.app[K_CFG]
     return _json({"mode": "cloud", "env": cfg.env, "version": __version__, "authRequired": not cfg.public_market_data,
-                  "publicMarketData": cfg.public_market_data, "streamPath": "/api/stream", "readOnly": True})
+                  "publicMarketData": cfg.public_market_data, "streamPath": "/api/stream", "readOnly": True,
+                  # IBKR COMEX Level-2 depth link configured (the key hash is set) - a flag only, never the key.
+                  "ibkrDepth": bool(cfg.ibkr_bridge_keys)})
 
 
 async def login(request: web.Request) -> web.Response:
@@ -469,6 +473,91 @@ async def bridge_ws(request: web.Request) -> web.StreamResponse:
     return ws
 
 
+# ------------------------------------------------------------------ IBKR COMEX Level-2 depth (cloud VPS link)
+IBKR_ROOT_ERR = "root must be GC or SI."
+
+
+def _ibkr_root(request: web.Request) -> str | None:
+    root = (request.query.get("root") or "GC").upper()
+    return root if root in ("GC", "SI") else None
+
+
+@market_data_route
+async def ibkr_status(request: web.Request) -> web.Response:
+    return _json(request.app[K_IBKR].status())
+
+
+@market_data_route
+async def ibkr_book(request: web.Request) -> web.Response:
+    root = _ibkr_root(request)
+    if root is None:
+        return _err(400, "BAD_ROOT", IBKR_ROOT_ERR)
+    return _json(request.app[K_IBKR].book(root))
+
+
+@market_data_route
+async def ibkr_updates(request: web.Request) -> web.Response:
+    root = _ibkr_root(request)
+    if root is None:
+        return _err(400, "BAD_ROOT", IBKR_ROOT_ERR)
+    try:
+        epoch, after = int(request.query.get("epoch", "-1")), int(request.query.get("after", "-1"))
+    except ValueError:
+        return _err(400, "BAD_QUERY", "epoch and after must be integers.")
+    return _json(request.app[K_IBKR].updates(root, epoch, after))
+
+
+async def ibkr_bridge_ws(request: web.Request) -> web.StreamResponse:
+    cfg, relay, store = request.app[K_CFG], request.app[K_IBKR], request.app[K_STORE]
+    auth = request.headers.get("Authorization", "")
+    token = auth[7:] if auth.startswith("Bearer ") else ""
+    bridge_id = (request.headers.get("X-TLUXE-Bridge-Id") or "ibkr-vps")[:64]
+    if not token_ok(token, cfg.ibkr_bridge_keys):
+        relay.counts["authRejected"] += 1
+        await store.auth_event("IBKR_BRIDGE_REJECTED", bridge_id)
+        return _err(401, "UNAUTHORIZED", "Invalid IBKR bridge credential.")
+    ws = web.WebSocketResponse(heartbeat=None, max_msg_size=4_000_000)
+    await ws.prepare(request)
+    await relay.attach(ws, bridge_id)
+    await store.auth_event("IBKR_BRIDGE_OK", bridge_id)
+    log.info("IBKR depth bridge link %s connected", bridge_id)
+    why = "closed"
+    try:
+        async for msg in ws:
+            if msg.type == WSMsgType.TEXT:
+                await relay.on_message(msg.data)
+            elif msg.type in (WSMsgType.ERROR, WSMsgType.CLOSE):
+                why = "error"
+                break
+    finally:
+        relay.detach(ws, why)
+        log.info("IBKR depth bridge link %s disconnected (%s)", bridge_id, why)
+    return ws
+
+
+async def _ibkr_worker(app: web.Application) -> None:
+    """Every 5 s: link heartbeat / stale check, and the target contracts = the ACTIVE Databento contract per root, so
+    IBKR depth and Databento trades are always the same expiry (never mixed across a roll)."""
+    cfg, relay = app[K_CFG], app[K_IBKR]
+    while True:
+        try:
+            await asyncio.sleep(5)
+            if relay.ws is None:
+                continue
+            targets: dict[str, str] = {}
+            if cfg.databento.configured:
+                s, h, _ = await _upstream_get(app, cfg.databento, "/v1/health", 5)
+                for root in ("GC", "SI"):
+                    c = (((h or {}).get("instruments") or {}).get(root) or {}).get("contract") if s == 200 else None
+                    if isinstance(c, str) and c:
+                        targets[root] = c
+            await relay.tick(targets)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("ibkr worker")
+
+
 # ------------------------------------------------------------------ background workers
 async def _status_worker(app: web.Application) -> None:
     last_states: dict[str, str] = {}
@@ -606,6 +695,7 @@ def make_app(cfg: GatewayConfig, store=None, workers: bool = True, http_session_
         await app[K_STORE].add_integrity("mt5", None, kind, detail)
 
     app[K_RELAY] = Mt5Relay(cfg.mt5_bridge_keys, on_integrity)
+    app[K_IBKR] = IbkrRelay(cfg.ibkr_bridge_keys)
 
     async def startup(app: web.Application) -> None:
         if cfg.production and isinstance(app[K_STORE], MemoryStore):
@@ -618,7 +708,7 @@ def make_app(cfg: GatewayConfig, store=None, workers: bool = True, http_session_
         app[K_STATE]["previousStatus"] = {"restoredFromDatabase": True, "components": await app[K_STORE].last_statuses()}
         app[K_HTTP] = (http_session_factory or ClientSession)()
         if workers:
-            for w in (_status_worker, _databento_worker, _news_worker, _mt5_heartbeat_worker, _retention_worker):
+            for w in (_status_worker, _databento_worker, _news_worker, _mt5_heartbeat_worker, _retention_worker, _ibkr_worker):
                 app[K_STATE]["tasks"].append(asyncio.create_task(w(app)))
 
     async def shutdown(app: web.Application) -> None:
@@ -626,6 +716,8 @@ def make_app(cfg: GatewayConfig, store=None, workers: bool = True, http_session_
         await app[K_HUB].close_all()
         if app[K_RELAY].ws is not None:
             await app[K_RELAY].ws.close(code=1001, message=b"server shutting down")
+        if app[K_IBKR].ws is not None:
+            await app[K_IBKR].ws.close(code=1001, message=b"server shutting down")
 
     async def cleanup(app: web.Application) -> None:
         for t in app[K_STATE]["tasks"]:
@@ -649,6 +741,10 @@ def make_app(cfg: GatewayConfig, store=None, workers: bool = True, http_session_
     r.add_get("/api/status", status_route)
     r.add_get("/api/stream", stream_ws)
     r.add_get("/bridge/mt5", bridge_ws)
+    r.add_get("/bridge/ibkr", ibkr_bridge_ws)
+    r.add_get("/api/ibkr/status", ibkr_status)
+    r.add_get("/api/ibkr/book", ibkr_book)
+    r.add_get("/api/ibkr/updates", ibkr_updates)
     r.add_get("/api/ai/health", ai_health)
     r.add_post("/api/ai/chat", ai_chat)
     r.add_get("/api/databento/status", databento_status)

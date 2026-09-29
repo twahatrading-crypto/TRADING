@@ -204,6 +204,16 @@ BUY/SELL setup states with entry zone / SL / TP / R:R appear ONLY on the High / 
   when LIVE / DELAYED / STALE — CONNECTING / NOT_CONNECTED / DISCONNECTED / ERROR = DATA UNAVAILABLE, and News Risk
   never shows NORMAL without a usable calendar. TLUXE AI gets a bounded `ctx.news` (OBSERVED PROVIDER DATA with
   evidence keys, filtered by the engine's `affected` mapping). Start: `bridge\news\start_news.cmd`.
+- IBKR COMEX Level-2 depth (`bridge/ibkr` on the cloud Windows VPS, `cloud/gateway/tluxe_gateway/ibkr_relay.py`,
+  `src/providers/ibkr`): DEPTH ONLY (Databento stays the trade / history / volume source). IB Gateway (owner logs in; Read-Only
+  API) → `bridge/ibkr` (official `ibapi`, `reqMktDepth` direct COMEX, isSmartDepth=false) → outbound wss `/bridge/ibkr`
+  (`TLUXE_IBKR_BRIDGE_TOKEN`, cloud stores only `TLUXE_IBKR_BRIDGE_TOKEN_SHA256`) → gateway `/api/ibkr/status|book|updates`
+  → `IbkrDepthProvider` in the `level2Depth` slot of `composeOrderFlowProviders` (cloud + `/api/config` ibkrDepth only).
+  Contracts resolved by `reqContractDetails` to the ACTIVE Databento contract (never guessed; mismatch = withheld).
+  MBP aggregated levels, VPS receive time, never MBO. Any continuity doubt clears the book (never stale depth); IBKR outages
+  invalidate the engine book via a local sequence break so the Databento trade history is never reset. States CONNECTING /
+  LIVE / STALE / RECONNECTING / AUTH_REQUIRED / OFFLINE / NOT_ENTITLED. Home PC not required; weekly IBKR re-login may be.
+  No IBKR credentials anywhere in TLUXE (typed only into IB Gateway). Runbook: `bridge/ibkr/README.md`.
 - Sweep / Reversal is not built yet (disabled SOON in the sidebar).
 
 ## Chart navigation (shared by every strategy chart)
