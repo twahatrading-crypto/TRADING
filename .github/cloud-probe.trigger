@@ -9,3 +9,4 @@ hm price-layer split 2026-09-28T19:41:39Z
 2026-09-29T11:02:55Z depth history production verification (restart / no-browser / alignment)
 2026-09-29T11:12:59Z restart test + interval fix
 2026-09-29T11:37:12Z restart #2 (instance-tagged), clock evidence, VP race fix
+depth probe 2026-09-29T17:15:29Z displayLevel

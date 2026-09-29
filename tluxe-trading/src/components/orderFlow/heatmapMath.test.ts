@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_HEATMAP_VIEW } from '../../engines/orderFlow/config';
 import type { HeatmapColumn } from '../../engines/orderFlow/engine';
-import { bounds, colorAt, columnRows, intensity, percentile, smooth } from './heatmapMath';
+import { bounds, colorAt, columnRows, displayLevel, intensity, LOW_BAND, percentile, smooth } from './heatmapMath';
 
 const col = (bid: [number, number][], ask: [number, number][], valid = true): HeatmapColumn => ({
   t: 0,
@@ -79,5 +79,18 @@ describe('heatmap normalisation (render-only maths)', () => {
     columnRows(c, 0, 5, 1);
     bounds([c], DEFAULT_HEATMAP_VIEW, [c]);
     expect(JSON.stringify([...c.bidSizes, ...c.askSizes])).toBe(before);
+  });
+
+  it('displayLevel: recorded liquidity below the lower cut-off stays visible as dark navy, no data stays background', () => {
+    expect(displayLevel(0, 5, 20, 1.4, 1)).toBe(0); // nothing recorded -> background
+    expect(displayLevel(0.5, 5, 20, 1.4, 1)).toBe(0); // below minimum depth -> hidden
+    const low = displayLevel(2, 5, 20, 1.4, 1);
+    expect(low).toBeGreaterThan(LOW_BAND[0]);
+    expect(low).toBeLessThan(LOW_BAND[1]); // low, graded, never promoted into the visible ramp
+    expect(displayLevel(1, 5, 20, 1.4, 1)).toBeLessThan(low); // smaller size -> darker
+    expect(displayLevel(5, 5, 20, 1.4, 1)).toBeCloseTo(LOW_BAND[1]); // continuous at the cut-off
+    expect(displayLevel(20, 5, 20, 1.4, 1)).toBe(1); // extreme -> hottest (white-hot)
+    const c = colorAt(low, 'blue-red');
+    expect(c).not.toEqual(colorAt(0, 'blue-red')); // distinguishable from the no-data background
   });
 });

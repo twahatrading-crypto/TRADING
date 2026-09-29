@@ -1,7 +1,7 @@
 import type { HeatmapViewSettings } from '../../engines/orderFlow/config';
 import type { HeatmapColumn, OrderFlowEngine } from '../../engines/orderFlow/engine';
 import type { ChartNavigable } from '../chart/ChartStage';
-import { colorAt, columnRows, intensity, percentile, smooth, type Viewport } from './heatmapMath';
+import { colorAt, columnRows, displayLevel, percentile, smooth, type Viewport } from './heatmapMath';
 import { columnAt, validAt, type DepthHistory, type HistoryColumn } from './depthHistory';
 import {
   aggregateDots,
@@ -661,7 +661,7 @@ export class HeatmapView implements ChartNavigable {
             let rgb: [number, number, number] = bg;
             if (c && !c.valid) rgb = r % 4 < 2 ? [34, 38, 48] : [26, 29, 38]; // gap in a REAL book: NO DATA hatch — never inferred
             else if (colVals) {
-              const k = intensity(colVals[r]!, lo, hi, s.contrast, s.minDepth);
+              const k = displayLevel(colVals[r]!, lo, hi, s.contrast, s.minDepth);
               if (k > 0) {
                 rgb = lut[Math.min(255, Math.max(1, Math.round(k * 255)))]!;
                 if (firstX !== null && x + 0.5 < firstX) preFirstPx += 1; // pixel centre before the first record: must stay 0

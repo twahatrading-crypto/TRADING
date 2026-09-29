@@ -31,6 +31,20 @@ export function intensity(v: number, lo: number, hi: number, contrast: number, m
   return Math.pow(x, Math.max(0.1, contrast));
 }
 
+/** Dark-navy band for recorded liquidity BELOW the lower cut-off (visible as "low", never as "no data"). */
+export const LOW_BAND: readonly [number, number] = [0.05, 0.14];
+
+/**
+ * Colour position 0..1 for a recorded displayed size: 0 = no recorded liquidity (background); below the lower cut-off a
+ * dark-navy band graded by size (low liquidity stays visible and distinct from missing data); from the cut-off upward
+ * the contrast curve over the rest of the ramp. Nothing is raised above what the size ranks at in the visible window.
+ */
+export function displayLevel(v: number, lo: number, hi: number, contrast: number, minDepth: number): number {
+  if (!(v > 0) || v < minDepth) return 0;
+  if (v < lo) return LOW_BAND[0] + (LOW_BAND[1] - LOW_BAND[0]) * Math.min(1, v / lo);
+  return LOW_BAND[1] + (1 - LOW_BAND[1]) * intensity(v, lo, hi, contrast, minDepth);
+}
+
 type Stop = [number, number, number, number];
 const SCHEMES: Record<HeatmapViewSettings['colorScheme'], Stop[]> = {
   // Professional liquidity ramp: low = dark navy, moderate = blue / cyan, high = yellow / orange, extreme = red → white-hot.

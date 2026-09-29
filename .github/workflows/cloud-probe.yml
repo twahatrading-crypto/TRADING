@@ -699,13 +699,15 @@ jobs:
             console.log(`BEFORE restart: gateway instance=${before.instance || '(bde061b build: no instance id yet)'} tableBytes=${before.tableBytes} persistence=${before.persistence}`);
             for (const r of ['GC', 'SI']) { const st = rootSt(before, r); B[r] = st; console.log(`BEFORE restart ${r}: first=${iso(st && st.firstMs)} latest=${iso(st && st.lastMs)} rows=${st && st.rows} observations=${st && st.observations}`); }
             // ---------- Phase B: wait for the new gateway process (Railway redeploy of this commit) ----------
-            let after = null;
-            for (let i = 0; i < 80; i++) {
+            // Railway may already have switched processes before the BEFORE read (seen: new process up 17 s after the push);
+            // then the BEFORE totals are what the new process loaded from PostgreSQL at start-up = the pre-restart history.
+            let after = before.instance && before.processStartedMs > jobStart - 120000 ? before : null;
+            for (let i = 0; !after && i < 80; i++) {
               await sleep(15000);
-              try { after = await hist(); } catch { continue; }
-              if (after.instance && after.processStartedMs > jobStart - 60000 && after.instance !== before.instance) break;
+              try { const h = await hist(); if (h.instance && h.processStartedMs > jobStart - 120000 && h.instance !== before.instance) after = h; } catch {}
             }
-            check(after && after.instance && after.processStartedMs > jobStart - 60000, `new gateway process running (instance ${after && after.instance}, started ${iso(after && after.processStartedMs)})`);
+            check(after && after.instance && after.processStartedMs > jobStart - 120000, `new gateway process running (instance ${after && after.instance}, started ${iso(after && after.processStartedMs)}; BEFORE read ${after === before ? 'after the switch = totals loaded from PostgreSQL at start-up' : 'from the old process'})`);
+            after = after || before;
             await sleep(120000); // let the restarted collector run
             after = await hist();
             console.log(`\nPOSTGRESQL persistence=${after.persistence} tableBytes=${after.tableBytes} retentionDays=${after.retentionDays} writeErrors=${after.writeErrors} pending=${after.pendingRows} dropped=${after.droppedUnsaved}`);
@@ -716,6 +718,8 @@ jobs:
               first[r] = st && st.firstMs;
               console.log(`${r} ${after.contracts[r]}: first=${iso(st.firstMs)} latest=${iso(st.lastMs)} duration=${(st.durationMs / 60000).toFixed(1)} min rows=${st.rows} observations=${st.observations} gaps=${st.gaps}`);
               console.log(`   recent gaps: ${JSON.stringify((after.recentGaps[r] || []).slice(0, 4).map((g) => [iso(g.t), g.reason, g.i || '-']))}`);
+              const stop = (after.recentGaps[r] || []).find((g) => g.reason === 'gateway stopped' && g.i && g.i !== after.instance && Math.abs(g.t - after.processStartedMs) < 180000);
+              check(!!stop, `${r}: previous gateway process ${stop && stop.i} recorded its stop at ${iso(stop && stop.t)} (a real restart of the collector)`);
               check(after.persistence === 'postgresql', `${r}: stored in production PostgreSQL`);
               if (B[r] && B[r].firstMs) {
                 check(st.firstMs === B[r].firstMs, `${r}: first stored timestamp unchanged across the restart (${iso(st.firstMs)})`);
@@ -794,9 +798,12 @@ jobs:
               console.log(`${r} fine alignment DIAGNOSTIC (250 ms buckets, last 5 min, ${tr2.length} trades): ${fine.map((x) => `${x.o}ms=${(x.r * 100).toFixed(1)}%`).join(' ')} | best ${bestFine.o} ms`);
               check(lag && Math.abs(lag.min) < 250, `${r}: VPS and Railway clocks agree (smallest IBKR receive lag ${lag && lag.min} ms) - no clock / timezone offset`);
               check(best.o >= 0 && best.o <= 1000 && bestFine.o >= -250, `${r}: recorded IBKR depth is never EARLIER than Databento trades (best shift ${best.o} ms / ${bestFine.o} ms: IBKR receive + 0.5 s poll latency, not corrected)`);
+              check(tr2.length > 20 && Math.max(...fine.filter((x) => x.o >= 0 && x.o <= 750).map((x) => x.r)) >= 0.9, `${r}: price alignment at 250 ms resolution - ${(Math.max(...fine.filter((x) => x.o >= 0 && x.o <= 750).map((x) => x.r)) * 100).toFixed(1)}% of trades inside the stored IBKR best bid/ask ±1 tick within the measured 0-750 ms observation latency`);
               console.log(`${r} timestamp semantics: Databento trade = tsEventNs (CME matching-engine event time, UTC ns since epoch); IBKR depth = lastUpdate (VPS bridge receive time of the IBKR update, UTC ms since epoch). Both absolute UTC - no timezone conversion anywhere; expected skew = IBKR network + bridge latency (tens of ms).`);
               console.log(`${r} alignment DIAGNOSTIC (never used to shift data): ${trades.length} Databento trades (contract ${trades[0] && trades[0].c}) inside stored IBKR best bid/ask ±1 tick of the same 1 s bucket at shift: ${offs.map((x) => `${x.o / 1000}s=${(x.r * 100).toFixed(1)}%`).join(' ')} | best shift ${best.o} ms`);
-              check(trades.length > 50 && offs.find((x) => x.o === 0).r >= 0.7, `${r}: trades sit inside the stored IBKR spread at the same second (${(offs.find((x) => x.o === 0).r * 100).toFixed(1)}%; misses = depth observed up to ~1 s after the print)`);
+              // 1 s buckets span price moves: their highest bid / lowest ask can cross (an inverted window) -> diagnostic only.
+              const inverted = m.columns.filter((c) => c[2].length && c[3].length && Math.max(...c[2].map((x) => x[0])) >= Math.min(...c[3].map((x) => x[0]))).length;
+              console.log(`${r} 1 s alignment metric caveat: ${inverted} of ${m.columns.length} one-second columns have highest bid >= lowest ask (price moved inside the second)`);
             }
             // ---------- Phase F: browser views (first open, refresh, second device) + screenshots ----------
             const b = await chromium.launch();
