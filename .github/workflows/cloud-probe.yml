@@ -711,7 +711,7 @@ jobs:
             const tr2 = tr.trades.map((x) => ({ t: Math.floor(x.tsEventNs / 1e6), p: x.price })).filter((x) => x.t >= from && x.t < Math.min(to, Date.now() - 2000));
             const rate2 = (off) => { let n = 0, ok = 0; for (const x of tr2) { const b = book2.get(Math.floor((x.t + off) / 250) * 250); if (!b || !isFinite(b.bb) || !isFinite(b.ba)) continue; n++; if (x.p >= b.bb - tick * 1.01 && x.p <= b.ba + tick * 1.01) ok++; } return n ? ok / n : 0; };
             const fine = [-1000, -500, -250, 0, 250, 500, 750, 1000, 1500].map((o) => ({ o, r: rate2(o) }));
-            const bestFine = fine.reduce((a, b) => (b.r > a.r ? b : a));
+            const bestFine = fine.reduce((a, b) => (b.r > a.r || (b.r === a.r && Math.abs(b.o) < Math.abs(a.o)) ? b : a));
             const win = Math.max(...fine.filter((x) => x.o >= 0 && x.o <= 750).map((x) => x.r));
             const oldest = tr.trades.length ? Math.floor(tr.trades[0].tsEventNs / 1e6) : null;
             return { n: tr2.length, fine, bestFine, win, complete: oldest !== null && oldest <= from };
@@ -866,14 +866,14 @@ jobs:
               const trades = tr.trades.map((x) => ({ t: Math.floor(x.tsEventNs / 1e6), p: x.price, c: x.contract })).filter((x) => x.t >= ts[0] && x.t < now - 2000);
               const rate = (off) => { let n = 0, ok = 0; for (const x of trades) { const b = book.get(Math.floor((x.t + off) / 1000) * 1000); if (!b || !isFinite(b.bb) || !isFinite(b.ba)) continue; n++; if (x.p >= b.bb - tick * 1.01 && x.p <= b.ba + tick * 1.01) ok++; } return { n, r: n ? ok / n : 0 }; };
               const offs = [-5000, -3000, -2000, -1000, 0, 1000, 2000, 3000, 5000].map((o) => ({ o, ...rate(o) }));
-              const best = offs.reduce((a, b) => (b.r > a.r ? b : a));
+              const best = offs.reduce((a, b) => (b.r > a.r || (b.r === a.r && Math.abs(b.o) < Math.abs(a.o)) ? b : a));
               // Finer view (250 ms buckets, last 5 min) and the clock evidence from both providers.
               const m2 = await j(`/api/ibkr/heatmap?root=${r}&from=${now - 300000}&to=${now}&bucket=250`);
               const book2 = new Map(m2.columns.map((c) => [c[0], { bb: Math.max(...c[2].map((x) => x[0])), ba: Math.min(...c[3].map((x) => x[0])) }]));
               const tr2 = trades.filter((x) => x.t >= now - 300000);
               const rate2 = (off) => { let n = 0, ok = 0; for (const x of tr2) { const b = book2.get(Math.floor((x.t + off) / 250) * 250); if (!b || !isFinite(b.bb) || !isFinite(b.ba)) continue; n++; if (x.p >= b.bb - tick * 1.01 && x.p <= b.ba + tick * 1.01) ok++; } return n ? ok / n : 0; };
               const fine = [-1000, -500, -250, 0, 250, 500, 750, 1000, 1500].map((o) => ({ o, r: rate2(o) }));
-              const bestFine = fine.reduce((a, b) => (b.r > a.r ? b : a));
+              const bestFine = fine.reduce((a, b) => (b.r > a.r || (b.r === a.r && Math.abs(b.o) < Math.abs(a.o)) ? b : a));
               const dbLag = tr.trades.slice(-2000).map((x) => (x.tsRecvNs - x.tsEventNs) / 1e6).sort((a, b) => a - b);
               const hs = await hist();
               const lag = hs.ibkrFeed[r].receiveLagMs;
@@ -936,6 +936,9 @@ jobs:
                 check(/TRADES · DATABENTO LIVE/.test(d.feeds) && /OHLCV: LIVE/.test(d.feeds) && /VOLUME: LIVE/.test(d.feeds) && /DEPTH · IBKR LIVE/.test(d.feeds), `${inst} ${n}: Databento trades/OHLCV/volume LIVE + IBKR depth LIVE`);
                 check(/Databento depth: UNSUPPORTED/.test(d.strip) && /Databento MBO: NOT ENTITLED/.test(d.strip) && /Databento MBP-10: NOT ENTITLED/.test(d.strip), `${inst} ${n}: Databento depth UNSUPPORTED, MBO / MBP-10 NOT ENTITLED shown`);
                 check(r.errs.length === 0, `${inst} ${n}: no page errors / forbidden requests ${JSON.stringify(r.errs).slice(0, 200)}`);
+                // Databento trade history loaded in THIS browser (a live batch once raced ahead of it: CVD 36 trades)
+                const tot = (x) => Number(((x.cvd || '').match(/Total executed([\d,]+)/) || [])[1]?.replace(/,/g, '') || 0);
+                check(tot(d) >= 0.98 * tot(a1.d) && tot(d) > 0, `${inst} ${n}: Databento session trades loaded - CVD total executed ${tot(d)} (first open ${tot(a1.d)})`);
               }
               console.log(`  ${inst} rendered history: ${iso(a3.d.histFirstT)} -> ${iso(a3.d.histLastT)} bucket ${a3.d.histBucket} ms, ${a3.d.histCols} time buckets, ${a3.d.priceRows} price rows (${a3.d.priceRowTicks} tick/row), missing buckets ${a3.d.missingBuckets}`);
             }

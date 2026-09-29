@@ -252,6 +252,34 @@ describe('Databento — footprint (exchange trades)', () => {
     expect(r.services.volumeFootprint.engine()!.candles('M1')[0]!.volume).toBe(1); // the closed candle did not change
   });
 
+  it('heatmap trades: a live frame arriving before the history response never drops the history', async () => {
+    // Production (GC, fresh browser): a live trade batch was emitted first, advanced the transport index, and the
+    // slower 20 000-trade history response was then discarded as already seen (CVD 36 trades instead of ~136 000).
+    let release!: () => void;
+    const gate = new Promise<void>((res) => (release = res));
+    const r = rig({
+      before: (b) => {
+        for (let k = 0; k < 5; k++) b.trade('GC', 2400 + k, 1, k % 2 ? 'SELL' : 'BUY', T + k * 1000);
+        const real = b.trades;
+        b.trades = async (...a) => {
+          await gate;
+          return real(...a);
+        };
+      },
+    });
+    withBook(r.bridge);
+    const live = r.bridge.trade('GC', 2405, 2, 'BUY', T + 10_000);
+    r.bridge.frame({ GC: { trades: [live] } }); // the live frame wins the race against the in-flight history
+    await r.pump();
+    release();
+    await tick();
+    await r.pump();
+    await r.pump();
+    const t = of(r.services).totals!;
+    expect(t.trades).toBe(6); // every real trade once: 5 from history + the live one - none dropped, none twice
+    expect(t.total).toBe(7);
+  });
+
   it('contract roll: new contract history, never merged (footprint + heatmap)', async () => {
     const r = rig();
     withBook(r.bridge);

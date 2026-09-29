@@ -232,6 +232,8 @@ interface FlowSub {
   depthStatus: string;
   tradeStatus: string;
   fetching: boolean;
+  /** Not yet caught up with the bridge's trade history: live batches are fetched by index, never emitted ahead of it. */
+  behind: boolean;
 }
 
 export type DatabentoFlowMode = 'trades' | 'mbo';
@@ -270,7 +272,7 @@ export class DatabentoOrderFlowProvider implements OrderFlowTradeProvider {
   subscribe(def: InstrumentDefinition): void {
     const sink = this.sink;
     if (!sink || this.subs.has(def.id) || !isRoot(def.id)) return;
-    const s: FlowSub = { root: def.id, off: () => {}, epoch: -1, bookCursor: -1, lastI: 0, contract: null, depthStatus: '', tradeStatus: '', fetching: false };
+    const s: FlowSub = { root: def.id, off: () => {}, epoch: -1, bookCursor: -1, lastI: 0, contract: null, depthStatus: '', tradeStatus: '', fetching: false, behind: true };
     this.subs.set(def.id, s);
     sink.capabilities(def.id, this.caps);
     if (this.mbo) this.setStatus(def.id, s, 'depth', 'CONNECTING', 'Connecting to the Databento bridge.');
@@ -306,6 +308,7 @@ export class DatabentoOrderFlowProvider implements OrderFlowTradeProvider {
       // Never merge two contracts' books / tapes: the consumer rebuilds from the new contract's snapshot.
       s.epoch = -1;
       s.lastI = 0;
+      s.behind = true; // the new contract's tape is loaded by index before live batches are applied
       if (this.mbo) this.setStatus(id, s, 'depth', 'DISCONNECTED', `Contract roll -> ${contract}: rebuilding the book.`);
       this.setStatus(id, s, 'trade', 'DISCONNECTED', `Contract roll -> ${contract}.`);
       this.sink?.capabilities(id, this.caps);
@@ -332,13 +335,19 @@ export class DatabentoOrderFlowProvider implements OrderFlowTradeProvider {
     if (s.fetching) return;
     s.fetching = true;
     try {
-      const r = await this.feed.api.trades(s.root, s.lastI, 20000);
-      if (this.subs.get(id) !== s) return;
-      this.setContract(id, s, r.contract);
-      if (!r.complete && !initial) this.setStatus(id, s, 'trade', 'SEQUENCE_GAP', 'Trades missed while the browser was behind the bridge buffer - never invented.');
-      this.emitTrades(id, s, r.trades);
+      for (let page = 0; page < 20; page++) {
+        const r = await this.feed.api.trades(s.root, s.lastI, 20000);
+        if (this.subs.get(id) !== s) return;
+        this.setContract(id, s, r.contract);
+        if (!r.complete && !initial && s.lastI > 0) this.setStatus(id, s, 'trade', 'SEQUENCE_GAP', 'Trades missed while the browser was behind the bridge buffer - never invented.');
+        this.emitTrades(id, s, r.trades);
+        if (r.trades.length < 20000) {
+          s.behind = false; // caught up with everything the bridge held at this request
+          break;
+        }
+      }
     } catch {
-      /* reported through status */
+      /* reported through status; still behind -> the next live frame retries the catch-up */
     } finally {
       s.fetching = false;
     }
@@ -405,8 +414,12 @@ export class DatabentoOrderFlowProvider implements OrderFlowTradeProvider {
         for (const [side, price, size] of d.levels) sink.message({ type: 'depth', instrumentId: id, seq: null, exchTime: exch, recvTime: recv, side: side === 'B' ? 'bid' : 'ask', price, size, action: size > 0 ? 'set' : 'delete' });
     }
     if (d.trades?.length) {
-      if (d.trades[0]!.i > s.lastI + 1 && s.lastI > 0) void this.loadTrades(id, s, false);
-      else this.emitTrades(id, s, d.trades);
+      if ((d.trades[0]!.i > s.lastI + 1 && s.lastI > 0) || s.behind) {
+        // Not contiguous with what the engine has, or the history is still loading: fetch by index first (a live batch
+        // emitted ahead of the history would advance lastI and make the history look already seen).
+        s.behind = true;
+        void this.loadTrades(id, s, false);
+      } else this.emitTrades(id, s, d.trades);
     }
     if (st.freshness === 'LIVE' || st.freshness === 'DELAYED') {
       if (this.mbo) sink.message({ type: 'heartbeat', instrumentId: id, seq: null, exchTime: exch, recvTime: recv, stream: 'depth' });

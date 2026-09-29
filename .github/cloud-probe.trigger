@@ -12,3 +12,4 @@ hm price-layer split 2026-09-28T19:41:39Z
 depth probe 2026-09-29T17:15:29Z displayLevel
 depth probe 2026-09-29T20:07:45Z poll 250ms experiment
 depth probe 2026-09-29T20:38:54Z instance-aware overlap
+depth probe 2026-09-29T20:59:55Z heatmap trade-history race
