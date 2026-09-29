@@ -16,3 +16,17 @@ export function visibleImbalance(bids: IbkrRow[], asks: IbkrRow[]) {
   const ask = sum(asks);
   return { bid, ask, ratio: ask > 0 ? bid / ask : null, imbalance: bid + ask > 0 ? (bid - ask) / (bid + ask) : null };
 }
+
+/** IBKR depth state for a GC / SI root when IBKR is the configured depth provider; null otherwise (no IBKR provider
+ *  registered, IBKR not configured on the gateway, or an instrument IBKR does not cover). Display only. */
+export function useIbkrDepthState(root: string): IbkrState | null {
+  const h = useStore(ibkrHealth, (s) => s);
+  const state = useIbkrRootState(root);
+  const active = h.fetchedAt !== null && (h.status ? h.status.configured : true);
+  return active && (root === 'GC' || root === 'SI') ? state : null;
+}
+
+/** Headline for the Level-2 depth system (IBKR price levels) - never worded as MBO. */
+export function level2Headline(state: IbkrState): string {
+  return `LEVEL-2 DEPTH ${state.replace(/_/g, ' ')}`;
+}

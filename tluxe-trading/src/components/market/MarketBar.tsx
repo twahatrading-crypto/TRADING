@@ -1,3 +1,5 @@
+import { useIbkrDepthState } from '../../providers/ibkr/ibkrView';
+import { ibkrLabel } from '../../providers/ibkr/IbkrDepthProvider';
 import { Menu } from 'lucide-react';
 import { QUOTE_STALE_AFTER_MS } from '../../config/instrument';
 import { UPCOMING_WINDOW_MS } from '../../config/sessions';
@@ -87,6 +89,7 @@ export function MarketBar({ onMenu, menuOpen }: { onMenu?: () => void; menuOpen?
   const now = useNow('second');
   const mode = getQuoteDisplayMode(state, now, QUOTE_STALE_AFTER_MS);
   const { quote, instrument, provider, connection, depth, feed } = state;
+  const ibkrDepth = useIbkrDepthState(instrument.id); // IBKR COMEX price-level depth (GC / SI) when configured
   const d = instrument.priceDecimals;
 
   return (
@@ -129,7 +132,7 @@ export function MarketBar({ onMenu, menuOpen }: { onMenu?: () => void; menuOpen?
             {feed?.code === 'LIVE' && quote.spreadPoints != null && <> · spread {quote.spreadPoints} pts</>}
           </span>
           <span className="mbar__provider mbar__depth" data-testid="depth-status">
-            Depth: <strong>{depth.supported ? DEPTH_LABEL[depth.connection] : 'Unsupported'}</strong>
+            {ibkrDepth ? <>IBKR DEPTH: <strong>{ibkrLabel(ibkrDepth)}</strong></> : <>Depth: <strong>{depth.supported ? DEPTH_LABEL[depth.connection] : 'Unsupported'}</strong></>}
           </span>
           <MarketHours now={now} />
         </div>

@@ -28,3 +28,6 @@
 .dbset__cap--yes { color: #86e3c6; }
 .dbset__cap--no { color: #f3a0a0; }
 .dbset__why { color: var(--text-3); }
+.dbstrip__l2.is-ok { border-left-color: #3cc9a0; background: rgba(60, 201, 160, 0.08); }
+.dbstrip__l2.is-ok strong { color: #86e3c6; }
+.dbstrip__l2db { color: var(--text-3); }

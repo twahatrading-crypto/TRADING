@@ -616,7 +616,9 @@ jobs:
                          heatDisabled: heat ? heat.disabled : null, heatChecked: heat ? heat.checked : null, session: t('[data-testid="ibkr-session"]'),
                          src: t('[data-testid="ibkr-dom-source"]'), imb: t('[data-testid="ibkr-imbalance"]'), rows: document.querySelectorAll('[data-testid="ibkr-dom"] tbody tr').length,
                          dom: t('[data-testid="of-book"]'), header: (document.querySelector('header')?.innerText || '').replace(/\s+/g, ' ').slice(0, 300), page: document.querySelector('.ofmain').innerText,
-                         cvd: t('[data-testid="of-cvd-totals"]'), prof: t('[data-testid="of-profile-totals"]') };
+                         cvd: t('[data-testid="of-cvd-totals"]'), prof: t('[data-testid="of-profile-totals"]'),
+                         strip: t('[data-testid="databento-strip"]'), l2: t('[data-testid="level2-depth-status"]'), hdrDepth: t('[data-testid="depth-status"]'),
+                         dbNa: !!document.querySelector('[data-testid="databento-depth-unavailable"]') };
               });
               const px = await p.evaluate(() => {
                 const c = document.querySelector('canvas.ofheat__canvas');
@@ -633,6 +635,9 @@ jobs:
               console.log(`  DOM="${u.dom.slice(0, 260)}"`);
               console.log(`  heatmap toggle disabled=${u.heatDisabled} checked=${u.heatChecked} bandPx=${px && px.bands} depthNa="${u.depthNa}" recorded="${u.rec}"`);
               console.log(`  CVD="${u.cvd}" SVP="${u.prof}"`);
+              console.log(`  header depth="${u.hdrDepth}"`);
+              console.log(`  level-2 banner="${u.l2}"`);
+              console.log(`  databento strip="${u.strip.slice(0, 400)}"`);
               console.log(`  hosts=${[...hosts].join(',')} ibkrCalls=${ibkrCalls.length} e.g. ${ibkrCalls.slice(0, 3).join(' ')}`);
               console.log(`  Authorization headers seen: ${[...authValues].join(' | ') || 'none'}`);
               check(/DEPTH · IBKR LIVE/.test(u.feeds), `${inst}: DEPTH · IBKR LIVE`);
@@ -648,6 +653,10 @@ jobs:
               // static.cloudflareinsights.com = the Cloudflare Web Analytics beacon injected by the Cloudflare edge (not app code).
               check([...hosts].every((h) => h === 'twahatrading.com' || h === 'static.cloudflareinsights.com' || /fonts\.(googleapis|gstatic)\.com/.test(h)), `${inst}: browser talks only to twahatrading.com (+ Cloudflare's edge beacon)`);
               check(!/undefined/.test(u.session + u.dom), `${inst}: no "undefined" in the IBKR labels`);
+              check(/^LEVEL-2 DEPTH LIVE — Interactive Brokers · PRICE_LEVEL · MBO false/.test(u.l2) && !/MBO true|MBO LIVE/.test(u.l2), `${inst}: banner LEVEL-2 DEPTH LIVE — Interactive Brokers · PRICE_LEVEL · MBO false`);
+              check(!u.dbNa && !/DEPTH DATA UNAVAILABLE/.test(u.strip + u.l2), `${inst}: no generic DEPTH DATA UNAVAILABLE while IBKR depth is LIVE`);
+              check(u.hdrDepth === 'IBKR DEPTH: LIVE', `${inst}: header "${u.hdrDepth}"`);
+              check(/IBKR DEPTH: LIVE/.test(u.strip) && /Databento MBO: NOT ENTITLED/.test(u.strip), `${inst}: strip IBKR DEPTH: LIVE + Databento MBO: NOT ENTITLED`);
               check(errs.length === 0, `${inst}: no page errors, auth headers, leaks or VPS / localhost requests ${JSON.stringify(errs).slice(0, 300)}`);
               await ctx.close();
             }

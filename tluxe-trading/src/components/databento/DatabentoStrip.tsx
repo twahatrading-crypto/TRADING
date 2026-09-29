@@ -6,6 +6,9 @@ import { useOptionalStore } from '../../hooks/useOptionalStore';
 import { DB_ROOTS, type DbInstrumentStatus, type DbRoot } from '../../providers/databento/protocol';
 import { capLabel, depthNotice, planLabel } from './capabilities';
 import { useNow } from '../../store/clock';
+import { level2Headline, useIbkrDepthState } from '../../providers/ibkr/ibkrView';
+import { useStore } from '../../store/createStore';
+import { ibkrHealth, ibkrLabel } from '../../providers/ibkr/IbkrDepthProvider';
 import './databento.css';
 
 const isRoot = (id: string): id is DbRoot => (DB_ROOTS as readonly string[]).includes(id);
@@ -27,6 +30,10 @@ export function DatabentoStrip() {
   const feed = useOptionalStore(databento?.state, (s) => s, null);
   const [open, setOpen] = useState(false);
   const now = useNow('second');
+  // IBKR COMEX price-level depth is the Level-2 source when configured; Databento's missing MBO / MBP-10 entitlement
+  // is then shown as Databento's own capability, never as the status of the whole depth system.
+  const ibkr = useIbkrDepthState(def.id);
+  const ibkrDetail = useStore(ibkrHealth, (s) => s.status?.roots[def.id]?.detail ?? null);
   if (!isRoot(def.id)) return null;
   const st: DbInstrumentStatus | null = feed?.health?.instruments[def.id] ?? null;
   const bridgeDown = !databento ? 'NOT CONFIGURED' : feed?.bridge === 'OFFLINE' ? 'OFFLINE' : feed?.bridge === 'UNAUTHORIZED' ? 'UNAVAILABLE' : null;
@@ -52,14 +59,19 @@ export function DatabentoStrip() {
         {databento && feed?.error && <span className="dbstrip__note">{feed.error}</span>}
         {databento && caps && (
           <span className="dbstrip__caps" data-testid="databento-capabilities">
+            {ibkr && (
+              <span className={`dbcap is-${ibkr === 'LIVE' ? 'ok' : ibkr === 'STALE' || ibkr === 'RECONNECTING' || ibkr === 'CONNECTING' ? 'warn' : 'bad'}`} data-testid="ibkr-depth-cap">
+                IBKR DEPTH: {ibkrLabel(ibkr)}
+              </span>
+            )}
             {(
               [
                 ['Trades', caps.trades],
                 ['OHLCV', caps.ohlcv],
                 ['Volume', caps.volume],
-                ['Depth', caps.depth],
-                ['MBO', caps.mbo],
-                ['MBP-10', caps.mbp10],
+                [ibkr ? 'Databento depth' : 'Depth', caps.depth],
+                [ibkr ? 'Databento MBO' : 'MBO', caps.mbo],
+                [ibkr ? 'Databento MBP-10' : 'MBP-10', caps.mbp10],
               ] as const
             ).map(([k, v]) => (
               <span key={k} className={`dbcap is-${capTone(v)}`}>
@@ -74,7 +86,14 @@ export function DatabentoStrip() {
           </button>
         )}
       </div>
-      {depth && (
+      {ibkr && (
+        <p className={`dbstrip__depth dbstrip__l2 is-${ibkr === 'LIVE' ? 'ok' : 'warn'}`} role="status" data-testid="level2-depth-status">
+          <strong>{level2Headline(ibkr)}</strong> — Interactive Brokers · PRICE_LEVEL · MBO false
+          {ibkr !== 'LIVE' && ibkrDetail ? ` · ${ibkrDetail}` : ''}
+          {caps && caps.mbo !== 'ENTITLED' ? <span className="dbstrip__l2db"> · Databento MBO/MBP-10: {capLabel(caps.mbo)} (Databento supplies trades / OHLCV / volume)</span> : null}
+        </p>
+      )}
+      {!ibkr && depth && (
         <p className="dbstrip__depth" role="status" data-testid="databento-depth-unavailable">
           <strong>DEPTH DATA UNAVAILABLE</strong> — {depth.reason}. {depth.required}
         </p>
@@ -93,7 +112,7 @@ export function DatabentoStrip() {
               ['Instrument ID', st?.instrumentId != null ? String(st.instrumentId) : '—'],
               ['Connection', `${sessions?.tape.state ?? status} · bridge ${feed?.bridge ?? '—'} · trades/OHLCV session ${sessions?.tape.state ?? '—'}${plan === 'standard' ? '' : ` · MBO book session ${sessions?.book.state ?? '—'}`}`],
               ['Capabilities', caps ? `Trades ${capLabel(caps.trades)} · OHLCV ${capLabel(caps.ohlcv)} · Volume ${capLabel(caps.volume)} · Depth ${capLabel(caps.depth)} · MBO ${capLabel(caps.mbo)} · MBP-10 ${capLabel(caps.mbp10)}` : '—'],
-              ['Level-2 provider', caps?.level2Provider === 'DATABENTO_MBO' ? 'Databento MBO' : 'Not Connected'],
+              ['Level-2 provider', caps?.level2Provider === 'DATABENTO_MBO' ? 'Databento MBO' : ibkr ? `Interactive Brokers · PRICE_LEVEL · ${ibkrLabel(ibkr)}` : 'Not Connected'],
               ['Book status', plan === 'standard' ? 'No order book (Standard plan: MBO / MBP-10 not included)' : book ? `${book.state}${book.reason ? ` — ${book.reason}` : ''} · ${book.orders} orders · ${book.bidLevels}/${book.askLevels} levels` : '—'],
               ['Last event time', utc(st?.lastEventNs)],
               ['Last receive time', utc(st?.lastRecvNs)],
