@@ -57,6 +57,19 @@ class TestConfig(unittest.TestCase):
             with self.assertRaises(ConfigError, msg=str(bad)):
                 from_env(prod_env(**bad))
 
+    def test_ibkr_depth_service_config(self):
+        tok = "depth-token-" + "q" * 30
+        ok = from_env(prod_env(TLUXE_IBKR_DEPTH_URL="https://depth.example.com", TLUXE_IBKR_DEPTH_TOKEN=tok))
+        self.assertTrue(ok.ibkr_depth.configured)
+        self.assertNotIn(tok, repr(ok.ibkr_depth))
+        self.assertIn(tok, ok.secrets())  # redacted from every log line
+        self.assertFalse(from_env(prod_env()).ibkr_depth.configured)  # not set: IBKR depth NOT_CONFIGURED, gateway starts
+        missing = from_env(prod_env(TLUXE_IBKR_DEPTH_URL="https://depth.example.com")).ibkr_depth
+        self.assertEqual((missing.configured, missing.problem), (False, "TLUXE_IBKR_DEPTH_TOKEN is not set"))
+        for url in ("http://depth.example.com", "http://127.0.0.1:8766"):  # HTTPS only in production (no direct :8766)
+            self.assertFalse(from_env(prod_env(TLUXE_IBKR_DEPTH_URL=url, TLUXE_IBKR_DEPTH_TOKEN=tok)).ibkr_depth.configured, url)
+        self.assertFalse(from_env(dev_env(TLUXE_IBKR_DEPTH_URL="http://depth.example.com", TLUXE_IBKR_DEPTH_TOKEN=tok)).ibkr_depth.configured)
+
     def test_production_has_no_localhost_dependency(self):
         c = from_env(prod_env(TLUXE_AI_URL="http://tluxe-ai.railway.internal:8767", TLUXE_AI_TOKEN=AI_TOKEN))
         self.assertEqual(c.host, "0.0.0.0")  # Railway public networking: 0.0.0.0 on $PORT
@@ -558,6 +571,248 @@ class TestIbkrDepth(GatewayCase):
         bk = relay.book("GC")
         self.assertEqual((bk["state"], bk["valid"], bk["bids"]), ("CONTRACT_MISMATCH", False, []))
         await link.close()
+
+
+DEPTH_TOKEN = "ibkr-depth-token-" + "z" * 40
+
+
+def depth_body(root: str, *, age_s: float = 0.2, status: str = "LIVE", bids=None, asks=None, local: str | None = None, **over) -> dict:
+    """TEST DATA ONLY: the documented shape of the VPS depth service response (price levels, mbo false)."""
+    px = 4150.0 if root == "GC" else 48.5
+    tick = 0.1 if root == "GC" else 0.005
+    ts = datetime.fromtimestamp(time.time() - age_s, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+    body = {"symbol": root, "source": "Interactive Brokers", "depthType": "PRICE_LEVEL", "mbo": False, "status": status, "lastUpdate": ts,
+            "contract": {"conId": 462941472 if root == "GC" else 535526329, "localSymbol": local or f"{root}Z6", "exchange": "COMEX", "currency": "USD",
+                         "expiry": "20261229", "accountId": "U1234567"},
+            "bids": bids if bids is not None else [{"position": i, "price": round(px - i * tick, 3), "size": 5 + i, "marketMaker": None} for i in range(10)],
+            "asks": asks if asks is not None else [{"position": i, "price": round(px + (i + 1) * tick, 3), "size": 3 + i, "marketMaker": None} for i in range(10)]}
+    body.update(over)
+    return body
+
+
+class TestIbkrPullDepth(GatewayCase):
+    """IBKR price-level depth pulled SERVER-SIDE from the VPS depth service (TLUXE_IBKR_DEPTH_URL / TOKEN).
+    TEST DATA ONLY: a local stand-in depth service; no external network."""
+
+    workers = True
+
+    async def asyncSetUp(self) -> None:
+        self.depth: dict = {"auth": [], "paths": [], "GC": depth_body("GC"), "SI": depth_body("SI"), "status": 200, "delay": 0.0}
+        dapp = web.Application()
+
+        async def depth(request):
+            root = request.match_info["root"]
+            self.depth["paths"].append(request.path)
+            self.depth["auth"].append(request.headers.get("Authorization"))
+            if request.headers.get("Authorization") != f"Bearer {DEPTH_TOKEN}":
+                return web.json_response({"error": "unauthorized"}, status=401)
+            if self.depth["delay"]:
+                await asyncio.sleep(self.depth["delay"])
+            if self.depth["status"] != 200:
+                return web.json_response({"error": f"upstream says {DEPTH_TOKEN}"}, status=self.depth["status"])
+            b = self.depth.get(root)
+            if callable(b):
+                b = b()
+            return web.Response(text=b, content_type="application/json") if isinstance(b, str) else web.json_response(b)
+
+        async def health(request):
+            return web.json_response({"ok": True})
+
+        dapp.router.add_get("/depth/{root}", depth)
+        dapp.router.add_get("/health", health)
+        self.depth_srv = TestServer(dapp)
+        await self.depth_srv.start_server()
+        self.extra_env = {"TLUXE_IBKR_DEPTH_URL": f"http://127.0.0.1:{self.depth_srv.port}", "TLUXE_IBKR_DEPTH_TOKEN": DEPTH_TOKEN}
+        self.log_buf = io.StringIO()
+        self.log_handler = logging.StreamHandler(self.log_buf)
+        logging.getLogger("tluxe").addHandler(self.log_handler)
+        logging.getLogger("tluxe").setLevel(logging.DEBUG)
+        await super().asyncSetUp()
+
+    async def asyncTearDown(self) -> None:
+        await super().asyncTearDown()
+        await self.depth_srv.close()
+        logging.getLogger("tluxe").removeHandler(self.log_handler)
+
+    async def get(self, sid, path):
+        r = await self.client.get(path, headers=self.ck(sid))
+        text = await r.text()
+        self.assertNotIn(DEPTH_TOKEN, text)  # the server-side token never reaches a client payload
+        self.assertNotIn("Bearer", text)
+        return r.status, (json.loads(text) if text.startswith("{") else text)
+
+    async def wait_state(self, sid, root, want, timeout=6.0):
+        t0 = time.monotonic()
+        st = None
+        while time.monotonic() - t0 < timeout:
+            _, s = await self.get(sid, "/api/ibkr/status")
+            st = s["roots"][root]["state"]
+            if st == want:
+                return s
+            await asyncio.sleep(0.1)
+        self.fail(f"{root} state {st} != {want}")
+
+    async def test_gc_and_si_price_level_depth_is_served_without_the_token(self):
+        sid = await self.login()
+        _, cfgj = await self.get(sid, "/api/config")
+        self.assertTrue(cfgj["ibkrDepth"])
+        st = await self.wait_state(sid, "GC", "LIVE")
+        await self.wait_state(sid, "SI", "LIVE")
+        self.assertEqual((st["mode"], st["depthTypeCode"], st["mbo"]), ("pull", "PRICE_LEVEL", False))
+        for root, best_bid, best_ask, local in (("GC", 4150.0, 4150.1, "GCZ6"), ("SI", 48.5, 48.505, "SIZ6")):
+            _, b = await self.get(sid, f"/api/ibkr/book?root={root}")
+            self.assertEqual((b["root"], b["valid"], b["source"], b["depthType"], b["mbo"]), (root, True, "Interactive Brokers", "PRICE_LEVEL", False))
+            self.assertEqual((b["bids"][0], b["asks"][0]), ([best_bid, 5.0], [best_ask, 3.0]))
+            self.assertEqual((len(b["bids"]), len(b["asks"])), (10, 10))
+            self.assertEqual([x[0] for x in b["bids"]], sorted((x[0] for x in b["bids"]), reverse=True))
+            self.assertEqual([x[0] for x in b["asks"]], sorted(x[0] for x in b["asks"]))
+            self.assertEqual(b["contract"]["localSymbol"], local)
+            self.assertNotIn("accountId", b["contract"])  # only known contract fields survive
+            self.assertEqual(b["rows"]["bids"][0], {"position": 0, "price": best_bid, "size": 5.0, "marketMaker": None})  # null stays null
+            _, u = await self.get(sid, f"/api/ibkr/updates?root={root}&epoch={b['epoch']}&after={b['depthSeq']}")
+            self.assertEqual((u["resync"], u["changes"]), (False, []))
+        # The upstream received the bearer header server-side, only for GC / SI.
+        self.assertTrue(self.depth["auth"] and all(a == f"Bearer {DEPTH_TOKEN}" for a in self.depth["auth"]))
+        self.assertEqual(set(self.depth["paths"]), {"/depth/GC", "/depth/SI"})
+        # Symbol isolation: XAUUSD / XAGUSD are never routed through IBKR.
+        for bad in ("XAUUSD", "XAGUSD", "ES"):
+            self.assertEqual((await self.get(sid, f"/api/ibkr/book?root={bad}"))[0], 400)
+            self.assertEqual((await self.get(sid, f"/api/ibkr/updates?root={bad}&epoch=0&after=0"))[0], 400)
+        self.assertNotIn(DEPTH_TOKEN, self.log_buf.getvalue())
+
+    async def test_changes_between_snapshots_are_sequenced_and_older_snapshots_are_rejected(self):
+        sid = await self.login()
+        await self.wait_state(sid, "GC", "LIVE")
+        _, b = await self.get(sid, "/api/ibkr/book?root=GC")
+        newer = depth_body("GC", bids=[{"position": 0, "price": 4150.0, "size": 9, "marketMaker": "CME"}], asks=[{"position": 0, "price": 4150.1, "size": 3, "marketMaker": None}])
+        self.depth["GC"] = newer
+        await asyncio.sleep(1.2)
+        _, u = await self.get(sid, f"/api/ibkr/updates?root=GC&epoch={b['epoch']}&after={b['depthSeq']}")
+        self.assertFalse(u["resync"])
+        changed = {(c[1], c[2]): c[3] for c in u["changes"]}
+        self.assertEqual(changed[("bid", 4150.0)], 9.0)
+        self.assertEqual(changed[("bid", 4149.9)], 0.0)  # level no longer in the visible book -> removed
+        self.assertEqual([c[0] for c in u["changes"]], list(range(b["depthSeq"] + 1, b["depthSeq"] + 1 + len(u["changes"]))))
+        _, b2 = await self.get(sid, "/api/ibkr/book?root=GC")
+        self.assertEqual((b2["bids"], b2["rows"]["bids"][0]["marketMaker"]), ([[4150.0, 9.0]], "CME"))
+        # A response carrying an OLDER lastUpdate never overwrites the newer book.
+        self.depth["GC"] = depth_body("GC", age_s=5)
+        await asyncio.sleep(1.2)
+        _, st = await self.get(sid, "/api/ibkr/status")
+        self.assertGreater(st["roots"]["GC"]["outOfOrder"], 0)
+        _, b3 = await self.get(sid, "/api/ibkr/book?root=GC")
+        self.assertEqual(b3["bids"], [[4150.0, 9.0]])
+
+    async def test_upstream_401_is_offline_and_databento_keeps_working(self):
+        sid = await self.login()
+        await self.wait_state(sid, "GC", "LIVE")
+        self.depth["status"] = 401
+        st = await self.wait_state(sid, "GC", "OFFLINE")
+        self.assertIn("rejected the server credential", st["roots"]["GC"]["detail"])
+        _, b = await self.get(sid, "/api/ibkr/book?root=GC")
+        self.assertEqual((b["valid"], b["bids"], b["asks"], b["rows"]), (False, [], [], {"bids": [], "asks": []}))  # never old depth as live
+        s, h = await self.get(sid, "/api/databento/v1/health")
+        self.assertEqual(s, 200)  # Databento is independent of the IBKR depth provider
+        self.assertIn("instruments", h)
+        self.assertNotIn(DEPTH_TOKEN, self.log_buf.getvalue())  # nor the upstream error body that echoed it
+
+    async def test_timeout_then_recovery(self):
+        import tluxe_gateway.app as A
+        sid = await self.login()
+        await self.wait_state(sid, "SI", "LIVE")
+        orig = A.IBKR_PULL_TIMEOUT_S
+        A.IBKR_PULL_TIMEOUT_S = 0.3
+        try:
+            self.depth["delay"] = 1.0
+            st = await self.wait_state(sid, "SI", "OFFLINE", timeout=10)
+            self.assertEqual(st["roots"]["SI"]["detail"], "IBKR depth service timed out")
+            _, b = await self.get(sid, "/api/ibkr/book?root=SI")
+            self.assertEqual((b["valid"], b["bids"]), (False, []))
+            self.depth["delay"] = 0.0
+            self.depth["SI"] = depth_body("SI")
+            await self.wait_state(sid, "SI", "LIVE")
+        finally:
+            A.IBKR_PULL_TIMEOUT_S = orig
+
+    async def test_empty_and_malformed_responses_withhold_depth(self):
+        sid = await self.login()
+        await self.wait_state(sid, "GC", "LIVE")
+        self.depth["GC"] = lambda: depth_body("GC", bids=[], asks=[])
+        await self.wait_state(sid, "GC", "STALE")
+        _, b = await self.get(sid, "/api/ibkr/book?root=GC")
+        self.assertEqual((b["valid"], b["bids"]), (False, []))
+        for bad in ("{not json", json.dumps(depth_body("GC", mbo=True)), json.dumps(depth_body("GC", depthType="MBO")),
+                    json.dumps(depth_body("SI")), json.dumps(depth_body("GC", bids=[{"position": 0, "price": "x", "size": 1}]))):
+            self.depth["GC"] = bad
+            await asyncio.sleep(0.8)
+            _, b = await self.get(sid, "/api/ibkr/book?root=GC")
+            self.assertEqual((b["valid"], b["bids"], b["state"] in ("RECONNECTING", "OFFLINE")), (False, [], True), bad[:40])
+        _, st = await self.get(sid, "/api/ibkr/status")
+        self.assertGreaterEqual(st["roots"]["GC"]["malformed"], 5)
+        self.assertEqual(st["roots"]["SI"]["state"], "LIVE")  # GC failures never touch SI
+        self.depth["GC"] = lambda: depth_body("GC")
+        await self.wait_state(sid, "GC", "LIVE")
+
+    async def test_not_entitled_and_unsupported_are_reported_as_such(self):
+        sid = await self.login()
+        self.depth["GC"] = lambda: depth_body("GC", status="NOT ENTITLED", bids=[], asks=[])
+        self.depth["SI"] = lambda: depth_body("SI", status="UNSUPPORTED", bids=[], asks=[])
+        await self.wait_state(sid, "GC", "NOT_ENTITLED")
+        await self.wait_state(sid, "SI", "UNSUPPORTED")
+        _, b = await self.get(sid, "/api/ibkr/book?root=SI")
+        self.assertEqual((b["valid"], b["bids"]), (False, []))
+
+
+class TestIbkrPullRelay(unittest.TestCase):
+    """Pure relay rules with a controlled clock (TEST DATA ONLY)."""
+
+    def setUp(self):
+        from tluxe_gateway.ibkr_relay import IbkrRelay
+        self.now = time.time()
+        self.relay = IbkrRelay((), clock=lambda: self.now, pull=True)
+
+    def run_(self, coro):
+        return asyncio.run(coro)
+
+    def test_offline_after_three_failures_then_live(self):
+        r = self.relay
+        r.ingest_error("GC", "offline")
+        self.assertEqual(r.root_state("GC")[0], "RECONNECTING")
+        r.ingest_error("GC", "offline")
+        r.ingest_error("GC", "offline")
+        self.assertEqual(r.root_state("GC")[0], "OFFLINE")
+        self.run_(r.ingest("GC", depth_body("GC", age_s=time.time() - self.now)))
+        self.assertTrue(r.valid("GC"))
+        self.assertEqual(r.root_state("SI")[0], "RECONNECTING")  # SI never inherits GC's book
+
+    def test_ordering_and_contract_mismatch(self):
+        r = self.relay
+        rows = [{"position": 2, "price": 4149.8, "size": 1, "marketMaker": None}, {"position": 0, "price": 4150.0, "size": 4, "marketMaker": None},
+                {"position": 1, "price": 4149.9, "size": 2, "marketMaker": None}]
+        self.run_(r.ingest("GC", depth_body("GC", bids=rows)))
+        self.assertEqual([x["position"] for x in r.book("GC")["rows"]["bids"]], [0, 1, 2])
+        self.assertEqual([x[0] for x in r.book("GC")["bids"]], [4150.0, 4149.9, 4149.8])
+        r.targets = {"GC": "GCG7"}  # Databento trades a different expiry -> depth withheld, never mixed
+        self.assertEqual((r.root_state("GC")[0], r.valid("GC")), ("CONTRACT_MISMATCH", False))
+        r.targets = {"GC": "GCZ6"}
+        self.assertTrue(r.valid("GC"))
+        self.now += 11  # no successful poll for > 10 s
+        self.assertEqual(r.root_state("GC")[0], "STALE")
+        self.assertFalse(r.valid("GC"))
+
+    def test_a_live_but_old_snapshot_is_stale(self):
+        r = self.relay
+        self.run_(r.ingest("GC", depth_body("GC", age_s=time.time() - self.now + 30)))  # IBKR says LIVE, book 30 s old
+        self.assertEqual((r.root_state("GC")[0], r.valid("GC"), r.book("GC")["bids"]), ("STALE", False, []))
+        self.assertIn("no IBKR depth update", r.root_state("GC")[1])
+
+    def test_contract_change_invalidates(self):
+        r = self.relay
+        self.run_(r.ingest("SI", depth_body("SI")))
+        e = r.books["SI"].epoch
+        self.run_(r.ingest("SI", depth_body("SI", local="SIH7")))
+        self.assertGreater(r.books["SI"].epoch, e)
+        self.assertEqual(r.book("SI")["contract"]["localSymbol"], "SIH7")
 
 
 class TestGatewayWorkers(GatewayCase):

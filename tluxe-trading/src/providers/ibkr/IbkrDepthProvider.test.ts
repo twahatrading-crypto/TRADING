@@ -8,7 +8,8 @@ import { composeOrderFlowProviders } from '../level2/composeOrderFlow';
 import { ScriptedOrderFlowProvider } from '../orderFlow/testing/ScriptedOrderFlowProvider';
 import type { OrderFlowSink } from '../orderFlow/types';
 import { panelsOf } from '../../services/orderFlow/view';
-import { IBKR_DEPTH_CAPS, IbkrDepthProvider, feedStatusOf, ibkrHealth } from './IbkrDepthProvider';
+import { IBKR_DEPTH_CAPS, IbkrDepthProvider, feedStatusOf, ibkrBook, ibkrHealth, type IbkrRow } from './IbkrDepthProvider';
+import { visibleImbalance } from './ibkrView';
 
 /* TEST DATA ONLY - a scripted TLUXE gateway answers /api/ibkr/*; no IBKR connection or account is involved. */
 
@@ -21,6 +22,8 @@ interface RootGw {
   bids: [number, number][];
   asks: [number, number][];
   changes: [number, 'bid' | 'ask', number, number, number][];
+  rows?: { bids: IbkrRow[]; asks: IbkrRow[] };
+  lastUpdateMs?: number;
 }
 
 function fakeGateway() {
@@ -36,11 +39,11 @@ function fakeGateway() {
     if (q.pathname.endsWith('/status')) return ok({ configured: true, link: { connected: true }, session: { state: r?.state }, roots: { GC: { state: r?.state } } });
     if (!r) return { ok: false, status: 400, json: async () => ({}) };
     const live = r.valid && r.state === 'LIVE';
-    if (q.pathname.endsWith('/book')) return ok({ root: 'GC', state: r.state, detail: r.detail, valid: live, epoch: r.epoch, depthSeq: r.depthSeq, lastDepthMs: 1_000, serverMs: 1_000, bids: live ? r.bids : [], asks: live ? r.asks : [] });
+    if (q.pathname.endsWith('/book')) return ok({ root: 'GC', state: r.state, detail: r.detail, valid: live, epoch: r.epoch, depthSeq: r.depthSeq, lastDepthMs: 1_000, serverMs: 1_000, bids: live ? r.bids : [], asks: live ? r.asks : [], rows: live ? r.rows : undefined, lastUpdateMs: r.lastUpdateMs });
     const epoch = Number(q.searchParams.get('epoch'));
     const after = Number(q.searchParams.get('after'));
     const resync = !live || epoch !== r.epoch || after > r.depthSeq;
-    return ok({ state: r.state, detail: r.detail, valid: live, epoch: r.epoch, depthSeq: r.depthSeq, serverMs: 1_000, resync, changes: resync ? [] : r.changes.filter((c) => c[0] > after) });
+    return ok({ state: r.state, detail: r.detail, valid: live, epoch: r.epoch, depthSeq: r.depthSeq, serverMs: 1_000, resync, changes: resync ? [] : r.changes.filter((c) => c[0] > after), rows: live ? r.rows : undefined, lastUpdateMs: r.lastUpdateMs });
   };
   return { roots, urls, fetchImpl };
 }
@@ -187,5 +190,46 @@ describe('provider isolation through the real OrderFlowService (Databento-style 
     services.orderFlow.publish();
     expect(services.orderFlow.store.getState().depth.status).toBe('LIVE');
     expect(services.orderFlow.store.getState().trade.status).toBe('DISCONNECTED');
+  });
+});
+
+describe('IBKR visible price-level rows (DOM)', () => {
+  const row = (position: number, price: number, size: number): IbkrRow => ({ position, price, size, marketMaker: null });
+
+  it('shows the rows only while LIVE, never lets an older lastUpdate overwrite newer rows, clears on failure', async () => {
+    const gw = fakeGateway();
+    const p = new IbkrDepthProvider({ fetchImpl: gw.fetchImpl, pollMs: 100, statusMs: 1000 });
+    const r = recordingSink();
+    p.connect(r.sink);
+    p.subscribe(GC);
+    Object.assign(gw.roots.GC!, { state: 'LIVE', valid: true, depthSeq: 1, bids: [[4150.0, 5]], asks: [[4150.1, 3]],
+                                  rows: { bids: [row(0, 4150.0, 5)], asks: [row(0, 4150.1, 3)] }, lastUpdateMs: 2_000 });
+    await vi.advanceTimersByTimeAsync(2100);
+    expect(ibkrBook.getState().GC).toMatchObject({ bids: [{ position: 0, price: 4150.0, size: 5, marketMaker: null }], lastUpdateMs: 2_000 });
+    const since = ibkrBook.getState().GC!.since;
+    // an older response (lastUpdate 1_500) never replaces the newer rows
+    Object.assign(gw.roots.GC!, { rows: { bids: [row(0, 4149.0, 99)], asks: [] }, lastUpdateMs: 1_500 });
+    await vi.advanceTimersByTimeAsync(300);
+    expect(ibkrBook.getState().GC!.bids[0]!.price).toBe(4150.0);
+    Object.assign(gw.roots.GC!, { rows: { bids: [row(0, 4150.2, 7)], asks: [row(0, 4150.3, 1)] }, lastUpdateMs: 2_500 });
+    await vi.advanceTimersByTimeAsync(300);
+    expect(ibkrBook.getState().GC).toMatchObject({ bids: [{ price: 4150.2, size: 7 }], lastUpdateMs: 2_500, since });
+    // not LIVE -> the DOM is cleared (old depth is never shown as live)
+    Object.assign(gw.roots.GC!, { state: 'OFFLINE', valid: false });
+    await vi.advanceTimersByTimeAsync(300);
+    expect(ibkrBook.getState().GC).toBeNull();
+    // only the same-origin gateway is ever called - never the VPS, never with a credential
+    expect(gw.urls.every((u) => u.startsWith('/api/ibkr/'))).toBe(true);
+    p.disconnect();
+  });
+
+  it('UNSUPPORTED / NOT_ENTITLED / CONTRACT_MISMATCH are unavailable, not live', () => {
+    for (const s of ['UNSUPPORTED', 'NOT_ENTITLED', 'CONTRACT_MISMATCH'] as const) expect(feedStatusOf(s)).toBe('DATA_UNAVAILABLE');
+  });
+
+  it('visible-book imbalance uses only the published rows (no inferred orders)', () => {
+    const im = visibleImbalance([row(0, 10, 30), row(1, 9.9, 10)], [row(0, 10.1, 20)]);
+    expect(im).toEqual({ bid: 40, ask: 20, ratio: 2, imbalance: 20 / 60 });
+    expect(visibleImbalance([], [])).toEqual({ bid: 0, ask: 0, ratio: null, imbalance: null });
   });
 });

@@ -13,7 +13,7 @@ jobs:
     timeout-minutes: 25
     # set MAX_PROBES via the trigger file content if needed
     env:
-      BASE: https://trading-production-e1d5.up.railway.app
+      BASE: https://twahatrading.com
       MAX_PROBES: 1
     steps:
       - name: Probe splendid-exploration (once)
@@ -56,14 +56,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
-      BASE: https://trading-production-e1d5.up.railway.app
+      BASE: https://twahatrading.com
     steps:
       - name: GC + SI real data and history per timeframe (waits up to 20 min for history to settle)
         shell: bash
         run: |
           cat > check.py <<'PY'
           import json, sys, time, urllib.request
-          B = "https://trading-production-e1d5.up.railway.app"
+          B = "https://twahatrading.com"
           def get(p):
               with urllib.request.urlopen(B + p, timeout=20) as r:
                   return json.load(r)
@@ -111,7 +111,7 @@ jobs:
           npm init -y >/dev/null && npm i -s playwright@1 >/dev/null && npx playwright install --with-deps chromium >/dev/null 2>&1
           cat > probe.cjs <<'JS'
           const { chromium } = require('playwright');
-          const base = 'https://trading-production-e1d5.up.railway.app';
+          const base = 'https://twahatrading.com';
           const pages = ['/', '/engines/support-resistance', '/engines/liquidity', '/engines/order-blocks', '/engines/high-low-reversal',
                          '/engines/high-low-engine', '/engines/smc', '/engines/volume-profile', '/engines/volume-footprint', '/engines/liquidity-heatmap'];
           (async () => {
@@ -170,7 +170,7 @@ jobs:
           npm init -y >/dev/null && npm i -s playwright@1 >/dev/null && npx playwright install --with-deps chromium >/dev/null 2>&1
           cat > vp.cjs <<'JS'
           const { chromium } = require('playwright');
-          const base = 'https://trading-production-e1d5.up.railway.app';
+          const base = 'https://twahatrading.com';
           const fmtVol = (v) => v >= 1e9 ? `${(v / 1e9).toFixed(2)}B` : v >= 1e6 ? `${(v / 1e6).toFixed(2)}M` : v >= 1e4 ? `${(v / 1e3).toFixed(1)}K` : Math.round(v).toLocaleString('en-US');
           const nyHour17 = (t) => { // start (UTC s) of the 17:00 America/New_York trading day containing t
             for (let s = Math.floor(t / 3600) * 3600; s > t - 2 * 86400; s -= 3600) {
@@ -313,7 +313,7 @@ jobs:
           npm init -y >/dev/null && npm i -s playwright@1 >/dev/null && npx playwright install --with-deps chromium >/dev/null 2>&1
           cat > auth.cjs <<'JS'
           const { chromium } = require('playwright');
-          const base = 'https://trading-production-e1d5.up.railway.app';
+          const base = 'https://twahatrading.com';
           let fails = 0;
           const check = (ok, m) => { console.log(`${ok ? 'OK  ' : 'FAIL'} ${m}`); if (!ok) fails++; };
           const get = async (path, init = {}) => { const r = await fetch(base + path, { redirect: 'manual', ...init }); let t = ''; try { t = await r.text(); } catch {} return { status: r.status, headers: r.headers, text: t }; };
@@ -396,7 +396,7 @@ jobs:
           npm init -y >/dev/null && npm i -s playwright@1 >/dev/null && npx playwright install --with-deps chromium >/dev/null 2>&1
           cat > hm.cjs <<'JS'
           const { chromium } = require('playwright');
-          const base = 'https://trading-production-e1d5.up.railway.app';
+          const base = 'https://twahatrading.com';
           let fails = 0;
           const check = (ok, m) => { console.log(`    ${ok ? 'OK  ' : 'FAIL'} ${m}`); if (!ok) fails++; };
           (async () => {
@@ -525,3 +525,123 @@ jobs:
           })();
           JS
           node hm.cjs
+  ibkr:
+    # IBKR COMEX price-level depth on production (server-side pull from the VPS depth service). Read-only; no secret used.
+    if: ${{ contains(github.event.head_commit.message, '[ibkr]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: VPS depth service - public health only (the depth routes must refuse a request without the server credential)
+        shell: bash
+        run: |
+          echo "GET /health -> $(curl -s -m 15 -o h.json -w '%{http_code}' https://depth.twahatrading.com/health) :: $(head -c 300 h.json)"
+          for r in GC SI; do echo "GET /depth/$r (no credential) -> HTTP $(curl -s -m 15 -o /dev/null -w '%{http_code}' https://depth.twahatrading.com/depth/$r)"; done
+      - name: TLUXE production - IBKR depth API + Liquidity Heatmap GC -> SI -> GC (browser)
+        shell: bash
+        run: |
+          npm init -y >/dev/null && npm i -s playwright@1 >/dev/null && npx playwright install --with-deps chromium >/dev/null 2>&1
+          cat > ibkr.cjs <<'JS'
+          const { chromium } = require('playwright');
+          const base = 'https://twahatrading.com';
+          let fails = 0;
+          const check = (ok, m) => { console.log(`    ${ok ? 'OK  ' : 'FAIL'} ${m}`); if (!ok) fails++; };
+          const j = async (p) => (await fetch(base + p)).json();
+          const leak = (s) => /bearer|authorization|depth\.twahatrading|TLUXE_IBKR_DEPTH|:8766|:4001/i.test(s);
+          (async () => {
+            await new Promise((r) => setTimeout(r, 240000)); // this push redeploys Railway
+            let st = null;
+            for (let i = 0; i < 40; i++) {
+              const cfg = await j('/api/config');
+              st = await j('/api/ibkr/status');
+              const db = await Promise.all(['GC', 'SI'].map((x) => j(`/api/databento/status?root=${x}`)));
+              console.log(`settle ${i}: ibkrDepth=${cfg.ibkrDepth} mode=${st.mode} GC=${st.roots.GC.state} SI=${st.roots.SI.state} | databento ${db.map((x) => `${x.activeContract} ${x.freshness}`).join(' ')}`);
+              if (cfg.ibkrDepth && st.roots.GC.state === 'LIVE' && st.roots.SI.state === 'LIVE' && db.every((x) => x.verifiedByRealData)) break;
+              await new Promise((r) => setTimeout(r, 15000));
+            }
+            const cfgRaw = await (await fetch(base + '/api/config')).text();
+            console.log(`/api/config ${cfgRaw}`);
+            check(JSON.parse(cfgRaw).ibkrDepth === true, 'IBKR depth configured on the gateway (flag only)');
+            check(st.mode === 'pull' && st.depthTypeCode === 'PRICE_LEVEL' && st.mbo === false, `status mode=${st.mode} depthType=${st.depthTypeCode} mbo=${st.mbo}`);
+            for (const root of ['GC', 'SI']) {
+              const raw = { status: await (await fetch(base + '/api/ibkr/status')).text(), book: await (await fetch(base + `/api/ibkr/book?root=${root}`)).text() };
+              const b = JSON.parse(raw.book);
+              const u = await (await fetch(base + `/api/ibkr/updates?root=${root}&epoch=${b.epoch}&after=${b.depthSeq}`)).text();
+              const db = await j(`/api/databento/status?root=${root}`);
+              const r = st.roots[root];
+              console.log(`\n== ${root} state=${b.state} valid=${b.valid} source=${b.source} depthType=${b.depthType} mbo=${b.mbo} contract=${JSON.stringify(b.contract)} lastUpdate=${b.lastUpdateMs && new Date(b.lastUpdateMs).toISOString()} age=${b.lastUpdateMs && (Date.now() - b.lastUpdateMs)}ms polls=${r.polls} outOfOrder=${r.outOfOrder} malformed=${r.malformed}`);
+              console.log(`   bids ${JSON.stringify(b.rows.bids.slice(0, 4))}`);
+              console.log(`   asks ${JSON.stringify(b.rows.asks.slice(0, 4))}`);
+              check(b.state === 'LIVE' && b.valid, `${root}: LIVE`);
+              check(b.bids.length > 0 && b.asks.length > 0 && b.rows.bids.length > 0 && b.rows.asks.length > 0, `${root}: real bids (${b.bids.length}) + asks (${b.asks.length})`);
+              check(b.bids.length === 0 || b.asks.length === 0 || b.bids[0][0] < b.asks[0][0], `${root}: best bid ${b.bids[0] && b.bids[0][0]} < best ask ${b.asks[0] && b.asks[0][0]}`);
+              check(b.depthType === 'PRICE_LEVEL' && b.mbo === false && b.source === 'Interactive Brokers', `${root}: PRICE_LEVEL, mbo false, Interactive Brokers`);
+              check(b.contract && b.contract.localSymbol === db.activeContract && b.contract.exchange === 'COMEX', `${root}: IBKR ${b.contract && b.contract.localSymbol} = Databento ${db.activeContract} (COMEX)`);
+              check(b.rows.bids.every((x, i, a) => i === 0 || x.position > a[i - 1].position), `${root}: rows ordered by position`);
+              check(!leak(raw.status + raw.book + u + cfgRaw), `${root}: no credential / VPS address in any /api response`);
+            }
+            for (const bad of ['XAUUSD', 'XAGUSD']) check((await fetch(base + `/api/ibkr/book?root=${bad}`)).status === 400, `${bad} is never routed through IBKR`);
+            const b = await chromium.launch();
+            for (const inst of ['GC', 'SI', 'GC']) {
+              const db = await j(`/api/databento/status?root=${inst}`);
+              console.log(`\n######## ${inst} contract=${db.activeContract}`);
+              const ctx = await b.newContext({ viewport: { width: 1920, height: 1080 } });
+              await ctx.addInitScript((i) => { try { localStorage.setItem('tluxe.instrument.v1', i); } catch {} }, inst);
+              const p = await ctx.newPage();
+              const errs = [], hosts = new Set(), ibkrCalls = [];
+              p.on('pageerror', (e) => errs.push(String(e).slice(0, 200)));
+              p.on('request', (r) => {
+                const h = r.headers();
+                hosts.add(new URL(r.url()).host);
+                if (/\/api\/ibkr\//.test(r.url())) ibkrCalls.push(r.url().replace(base, ''));
+                if (/localhost|127\.0\.0\.1|:876\d|:4001|depth\.twahatrading/.test(r.url())) errs.push('FORBIDDEN HOST ' + r.url());
+                if (h.authorization || Object.values(h).some((v) => /bearer/i.test(v))) errs.push('AUTH HEADER on ' + r.url());
+              });
+              p.on('response', async (r) => { if (/\/api\//.test(r.url()) && !/\/api\/stream/.test(r.url())) { try { if (leak(await r.text())) errs.push('LEAK in ' + r.url()); } catch {} } });
+              await p.goto(base + '/#/engines/liquidity-heatmap');
+              await p.waitForSelector('.ofmain', { timeout: 30000 });
+              await p.waitForTimeout(45000);
+              const u = await p.evaluate(() => {
+                const t = (sel) => (document.querySelector(sel)?.textContent || '').replace(/\s+/g, ' ').trim();
+                const heat = document.querySelector('[data-testid="of-controls"] input[aria-label="Heatmap"]');
+                return { contract: t('[data-testid="of-contract"]'), feeds: t('[data-testid="of-feeds"]'), depthNa: t('[data-testid="of-depth-na"]'), rec: t('[data-testid="of-depth-recorded"]'),
+                         heatDisabled: heat ? heat.disabled : null, heatChecked: heat ? heat.checked : null, session: t('[data-testid="ibkr-session"]'),
+                         src: t('[data-testid="ibkr-dom-source"]'), imb: t('[data-testid="ibkr-imbalance"]'), rows: document.querySelectorAll('[data-testid="ibkr-dom"] tbody tr').length,
+                         dom: t('[data-testid="of-book"]'), header: (document.querySelector('header')?.innerText || '').replace(/\s+/g, ' ').slice(0, 300), page: document.querySelector('.ofmain').innerText,
+                         cvd: t('[data-testid="of-cvd-totals"]'), prof: t('[data-testid="of-profile-totals"]') };
+              });
+              const px = await p.evaluate(() => {
+                const c = document.querySelector('canvas.ofheat__canvas');
+                if (!c) return null;
+                const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+                let bands = 0;
+                for (let o = 0; o < d.length; o += 4) { const r = d[o], g = d[o + 1], bb = d[o + 2]; if ((bb > 150 && r < 90) || (r > 200 && g > 150 && bb < 80)) bands++; }
+                return { bands };
+              });
+              console.log(`  feeds="${u.feeds}"`);
+              console.log(`  session="${u.session}"`);
+              console.log(`  DOM rows=${u.rows} source="${u.src}"`);
+              console.log(`  imbalance="${u.imb}"`);
+              console.log(`  DOM="${u.dom.slice(0, 260)}"`);
+              console.log(`  heatmap toggle disabled=${u.heatDisabled} checked=${u.heatChecked} bandPx=${px && px.bands} depthNa="${u.depthNa}" recorded="${u.rec}"`);
+              console.log(`  CVD="${u.cvd}" SVP="${u.prof}"`);
+              console.log(`  hosts=${[...hosts].join(',')} ibkrCalls=${ibkrCalls.length} e.g. ${ibkrCalls.slice(0, 3).join(' ')}`);
+              check(/DEPTH · IBKR LIVE/.test(u.feeds), `${inst}: DEPTH · IBKR LIVE`);
+              check(/TRADES( · DATABENTO)?:? LIVE/.test(u.feeds) && /OHLCV: LIVE/.test(u.feeds) && /VOLUME: LIVE/.test(u.feeds), `${inst}: Databento trades / OHLCV / volume LIVE`);
+              check(/MBO: NOT ENTITLED/.test(u.feeds), `${inst}: Databento MBO stays NOT ENTITLED`);
+              check(u.rows > 0 && /PRICE_LEVEL/.test(u.src) && /MBO false/.test(u.src) && /Interactive Brokers/.test(u.src), `${inst}: COB = IBKR price levels (${u.rows} rows), PRICE_LEVEL, MBO false`);
+              check(/Visible IBKR book/.test(u.imb), `${inst}: imbalance labelled as the visible IBKR book`);
+              check(u.heatDisabled === false, `${inst}: Heatmap toggle enabled (genuine depth)`);
+              check(u.heatChecked !== true || (px && px.bands > 0), `${inst}: heatmap draws recorded IBKR depth (${px && px.bands} band px)`);
+              check(/RECORDED DEPTH HISTORY/.test(u.rec), `${inst}: recorded-history label shown`);
+              check(u.contract === db.activeContract && u.session.includes(db.activeContract), `${inst}: contract ${u.contract} = Databento ${db.activeContract} = IBKR`);
+              check(!/XAUUSD|XAGUSD/.test(u.page), `${inst}: no XAUUSD / XAGUSD`);
+              check([...hosts].every((h) => h === 'twahatrading.com' || /fonts\.(googleapis|gstatic)\.com/.test(h)), `${inst}: browser talks only to twahatrading.com`);
+              check(errs.length === 0, `${inst}: no page errors, auth headers, leaks or VPS / localhost requests ${JSON.stringify(errs).slice(0, 300)}`);
+              await ctx.close();
+            }
+            await b.close();
+            console.log(`\nIBKR RESULT: ${fails ? `FAIL (${fails})` : 'PASS'}`);
+            process.exit(fails ? 1 : 0);
+          })();
+          JS
+          node ibkr.cjs

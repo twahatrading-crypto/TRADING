@@ -63,7 +63,8 @@ per-process.
 ## 3. Environment variables (names only — values go in Railway Variables, never in Git)
 
 **tluxe-web (gateway)** — see `cloud/gateway/.env.example`
-* Optional — IBKR depth: `TLUXE_IBKR_BRIDGE_TOKEN_SHA256` (see §5b; only a hash, never the token).
+* Optional — IBKR depth (see §5b): `TLUXE_IBKR_DEPTH_URL` + `TLUXE_IBKR_DEPTH_TOKEN` (server-side pull, preferred), or
+  the older inbound link `TLUXE_IBKR_BRIDGE_TOKEN_SHA256` (only a hash, never the token).
 * Required:
   * `TLUXE_ENV=production`
   * `PUBLIC_APP_URL` and `API_PUBLIC_URL` — the same https origin
@@ -212,6 +213,16 @@ Runbook: `bridge/ibkr/README.md`. IBKR is the **depth source only** (Databento k
 * Browsers read `/api/ibkr/status | book | updates` (same origin; public read-only while owner login is not configured,
   session-protected once it is). No browser request ever goes to localhost, the VPS or a home PC.
 * Target contracts = the ACTIVE Databento contract per root; a mismatching IBKR book is withheld (CONTRACT_MISMATCH).
+* **Pull mode (current production path):** `TLUXE_IBKR_DEPTH_URL=https://depth.twahatrading.com` and
+  `TLUXE_IBKR_DEPTH_TOKEN` (Railway secret; never in Git, a `VITE_*` variable, a log, an error or an API response).
+  The gateway alone calls `GET {url}/depth/GC` and `/depth/SI` with `Authorization: Bearer <token>` (sequential per
+  root, every 0.5 s, 3 s timeout, https only), validates every snapshot (symbol = requested root, `depthType`
+  `PRICE_LEVEL`, `mbo` false, numeric rows) and serves it through the same `/api/ibkr/*` API. Pull mode takes
+  precedence over the inbound link. States: LIVE, STALE (`lastUpdate` > 10 s old or an empty book), RECONNECTING,
+  OFFLINE (3 failed polls or HTTP 401/403), NOT ENTITLED, UNSUPPORTED — depth is withheld in every state but LIVE.
+  An older `lastUpdate` never overwrites a newer book. `lastUpdate` is the bridge receive time, not an exchange time.
+  Depth type: **PRICE_LEVEL** (aggregated levels, ~10 per side) — **not MBO**: no order ids, order counts or queue
+  positions. The heatmap draws only depth recorded since the page opened (no earlier depth exists or is backfilled).
 * Home PC required: **no**. Cloud VPS required: **yes**. Permanent unattended IBKR authentication: **not claimed** —
   a manual IB Gateway login can be required after the weekly reset (TLUXE shows IBKR AUTH REQUIRED; depth stops).
 

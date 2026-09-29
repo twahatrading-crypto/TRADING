@@ -21,7 +21,9 @@ import type { Viewport } from '../components/orderFlow/heatmapMath';
 import { DOT_AGGREGATIONS, catchUpFrom, latestTrade, type DotAggregation, type TradeSource } from '../components/orderFlow/tradeDots';
 import { BookPanel, CvdPanel, EventsPanel, Pill, ProfilePanel, SettingsPanel } from '../components/orderFlow/OrderFlowPanels';
 import { capLabel } from '../components/databento/capabilities';
-import { IbkrDepthPill, IbkrSessionStrip } from '../components/orderFlow/IbkrSession';
+import { IbkrDepthPill, IbkrDomPanel, IbkrSessionStrip } from '../components/orderFlow/IbkrSession';
+import { useIbkrRootState } from '../providers/ibkr/ibkrView';
+import { ibkrBook, ibkrLabel } from '../providers/ibkr/IbkrDepthProvider';
 import '../components/sr/sr.css';
 import '../components/orderFlow/orderFlow.css';
 
@@ -163,6 +165,8 @@ function Workspace() {
   const depthAvailable = st.capabilities.depth !== 'NONE' || !!replay;
   // IBKR COMEX Level-2 is the depth source (cloud VPS link): its own labels and session health strip.
   const ibkrDepth = /^IBKR/.test(st.depth.provider ?? '');
+  const ibkrState = useIbkrRootState(def.id);
+  const ibkrSince = useStore(ibkrBook, (s) => s[def.id]?.since ?? null);
   const dbCaps = (dbFeed?.health?.instruments as Record<string, { capabilities?: Record<string, string> } | undefined> | undefined)?.[def.id]?.capabilities ?? null;
   const futures = instruments.list.filter((x) => x.kind === 'future' && x.exchange === 'COMEX');
   const pickable = futures.some((x) => x.id === def.id) ? futures : [def, ...futures];
@@ -290,8 +294,11 @@ function Workspace() {
           tape={tape}
           dotAggregation={dotAgg}
           tapeBehind={tapeBehind}
+          depthNaSource={ibkrDepth ? `IBKR ${ibkrLabel(ibkrState)}` : null}
+          depthRecordedSince={ibkrDepth ? ibkrSince : null}
         />
-        {ui.cob && <BookPanel className={cls('dom')} data={data} d={d} depthStatus={depthStatus} depthDetail={st.depth.detail} />}
+        {ui.cob && ibkrDepth && <IbkrDomPanel className={cls('dom')} root={def.id} d={d} />}
+        {ui.cob && !ibkrDepth && <BookPanel className={cls('dom')} data={data} d={d} depthStatus={depthStatus} depthDetail={st.depth.detail} />}
         {ui.svp && <ProfilePanel className={cls('profile')} session={data.profile} visible={visibleProfile} mode={profileMode} onMode={setProfileMode} d={d} tradeStatus={tradeStatus} tradeDetail={st.trade.detail} aggressor={st.capabilities.aggressorSide} />}
       </div>
       <div className={`ofbottom${ui.cvd ? '' : ' no-cvd'}`}>

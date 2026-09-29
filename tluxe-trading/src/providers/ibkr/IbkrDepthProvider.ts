@@ -23,7 +23,7 @@ import type { OrderFlowDepthProvider, OrderFlowSink } from '../orderFlow/types';
  *  - never MBO: IBKR reqMktDepth provides aggregated levels, not orders.
  * ========================================================================== */
 
-export type IbkrState = 'NOT_CONFIGURED' | 'CONNECTING' | 'LIVE' | 'STALE' | 'RECONNECTING' | 'AUTH_REQUIRED' | 'OFFLINE' | 'NOT_ENTITLED' | 'CONTRACT_UNRESOLVED' | 'UNKNOWN';
+export type IbkrState = 'NOT_CONFIGURED' | 'CONNECTING' | 'LIVE' | 'STALE' | 'RECONNECTING' | 'AUTH_REQUIRED' | 'OFFLINE' | 'NOT_ENTITLED' | 'UNSUPPORTED' | 'CONTRACT_UNRESOLVED' | 'CONTRACT_MISMATCH' | 'UNKNOWN';
 
 export interface IbkrContract {
   conId: number;
@@ -44,6 +44,8 @@ export interface IbkrRootStatus {
   bidLevels: number;
   askLevels: number;
   lastDepthMs: number | null;
+  /** Bridge receive time of the last IBKR depth snapshot (UTC) - NOT an exchange timestamp. */
+  lastUpdateMs?: number | null;
   rowsRequested?: number | null;
   ops?: Record<string, number> | null;
   marketMakerField?: boolean | null;
@@ -51,6 +53,9 @@ export interface IbkrRootStatus {
 
 export interface IbkrStatus {
   configured: boolean;
+  mode?: 'pull' | 'link';
+  depthTypeCode?: 'PRICE_LEVEL';
+  mbo?: false;
   link: { connected: boolean; stale: boolean; lastMessageMs: number | null; detail: string | null };
   session: {
     state: string | null;
@@ -77,6 +82,25 @@ export interface IbkrHealthState {
 /** Shared, read-only health for the UI (DEPTH · IBKR <state>, session panel). */
 export const ibkrHealth: Store<IbkrHealthState> = createStore<IbkrHealthState>({ status: null, error: null, fetchedAt: null });
 
+/** One visible IBKR price-level row exactly as IBKR published it (marketMaker null = not supplied; never inferred). */
+export interface IbkrRow {
+  position: number;
+  price: number;
+  size: number;
+  marketMaker: string | null;
+}
+export interface IbkrVisibleBook {
+  bids: IbkrRow[];
+  asks: IbkrRow[];
+  /** bridge receive time (lastUpdate, UTC) - not a proven exchange timestamp */
+  lastUpdateMs: number | null;
+  /** first time this browser session received a valid IBKR book for the root (heatmap history starts here) */
+  since: number;
+}
+/** The current visible IBKR book per root (DOM). null whenever depth is not LIVE + valid - never old depth as live. */
+export const ibkrBook: Store<Record<string, IbkrVisibleBook | null>> = createStore<Record<string, IbkrVisibleBook | null>>({});
+const recordedSince: Record<string, number> = {};
+
 export const IBKR_DEPTH_CAPS: Readonly<OrderFlowCapabilities> = Object.freeze({
   depth: 'MBP',
   depthLevels: null,
@@ -89,6 +113,7 @@ export const IBKR_DEPTH_CAPS: Readonly<OrderFlowCapabilities> = Object.freeze({
 });
 
 const ROOTS: readonly InstrumentId[] = ['GC', 'SI'];
+const REQUEST_TIMEOUT_MS = 4000;
 
 type FetchLike = (input: string) => Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>;
 type Timers = { setTimeout: (fn: () => void, ms: number) => unknown; clearTimeout: (t: unknown) => void; now: () => number };
@@ -104,6 +129,8 @@ interface BookResponse {
   serverMs: number;
   bids: [number, number][];
   asks: [number, number][];
+  rows?: { bids: IbkrRow[]; asks: IbkrRow[] };
+  lastUpdateMs?: number | null;
 }
 interface UpdatesResponse {
   state: IbkrState;
@@ -114,6 +141,8 @@ interface UpdatesResponse {
   serverMs: number;
   resync: boolean;
   changes: [number, 'bid' | 'ask', number, number, number][];
+  rows?: { bids: IbkrRow[]; asks: IbkrRow[] };
+  lastUpdateMs?: number | null;
 }
 
 /** IBKR state -> engine feed status. DISCONNECTED / CONNECTING are only sent AFTER the book is invalidated. */
@@ -130,7 +159,7 @@ export function feedStatusOf(s: IbkrState): FeedStatus {
     case 'UNKNOWN':
       return 'DISCONNECTED';
     default:
-      return 'DATA_UNAVAILABLE'; // NOT_CONFIGURED / AUTH_REQUIRED / NOT_ENTITLED / CONTRACT_UNRESOLVED
+      return 'DATA_UNAVAILABLE'; // NOT_CONFIGURED / AUTH_REQUIRED / NOT_ENTITLED / UNSUPPORTED / CONTRACT_*
   }
 }
 
@@ -160,7 +189,8 @@ export class IbkrDepthProvider implements OrderFlowDepthProvider {
   private readonly timers: Timers;
 
   constructor(private readonly opts: { base?: string; pollMs?: number; statusMs?: number; fetchImpl?: FetchLike; timers?: Timers } = {}) {
-    this.fetchImpl = opts.fetchImpl ?? ((u) => fetch(u, { credentials: 'same-origin' }));
+    // Same-origin gateway only (never the VPS, never a token): cookies only, with a request timeout.
+    this.fetchImpl = opts.fetchImpl ?? ((u) => fetch(u, { credentials: 'same-origin', signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) }));
     this.timers = opts.timers ?? { setTimeout: (fn, ms) => setTimeout(fn, ms), clearTimeout: (t) => clearTimeout(t as ReturnType<typeof setTimeout>), now: () => Date.now() };
   }
 
@@ -200,6 +230,7 @@ export class IbkrDepthProvider implements OrderFlowDepthProvider {
     if (!s) return;
     this.timers.clearTimeout(s.timer);
     this.subs.delete(id);
+    this.showRows(id, null);
   }
 
   /** The engine saw a gap / needs a fresh book: the next LIVE poll fetches a snapshot. */
@@ -214,6 +245,21 @@ export class IbkrDepthProvider implements OrderFlowDepthProvider {
     s.timer = this.timers.setTimeout(() => void this.poll(s), ms);
   }
 
+  /** Publish the visible rows for the DOM (or clear them). Polls are sequential per root, and a response whose
+   *  lastUpdate is older than the rows already shown is ignored (never overwrites newer depth). */
+  private showRows(root: string, r: { rows?: { bids: IbkrRow[]; asks: IbkrRow[] }; lastUpdateMs?: number | null } | null): void {
+    const cur = ibkrBook.getState()[root] ?? null;
+    if (!r || !r.rows) {
+      if (cur) ibkrBook.setState({ ...ibkrBook.getState(), [root]: null });
+      return;
+    }
+    const t = r.lastUpdateMs ?? null;
+    if (cur && cur.lastUpdateMs !== null && t !== null && t < cur.lastUpdateMs) return;
+    if (cur && t === cur.lastUpdateMs) return;
+    const since = (recordedSince[root] ??= this.timers.now());
+    ibkrBook.setState({ ...ibkrBook.getState(), [root]: { bids: r.rows.bids, asks: r.rows.asks, lastUpdateMs: t, since } });
+  }
+
   private setStatus(s: Sub, st: IbkrState, detail: string | null): void {
     const key = `${st}|${detail ?? ''}`;
     if (key === s.lastStatus) return;
@@ -225,6 +271,7 @@ export class IbkrDepthProvider implements OrderFlowDepthProvider {
    *  number puts the engine into SEQUENCE GAP; the held marker is never applied because every later snapshot carries
    *  a higher local sequence. */
   private invalidate(s: Sub, now: number): void {
+    this.showRows(s.def.id, null);
     if (!s.bookShown) return;
     s.bookShown = false;
     s.needSnapshot = true;
@@ -263,6 +310,7 @@ export class IbkrDepthProvider implements OrderFlowDepthProvider {
           s.after = b.depthSeq;
           s.bookShown = true;
           s.needSnapshot = false;
+          this.showRows(s.def.id, b);
           this.setStatus(s, 'LIVE', null);
         }
       } else {
@@ -288,7 +336,10 @@ export class IbkrDepthProvider implements OrderFlowDepthProvider {
             s.local += 1;
             this.sink?.message({ type: 'depth', instrumentId: s.def.id, seq: s.local, exchTime: recv, recvTime: now, side, price, size, action: size > 0 ? 'set' : 'delete' });
           }
-          if (s.bookShown) this.setStatus(s, 'LIVE', null);
+          if (s.bookShown) {
+            this.showRows(s.def.id, u);
+            this.setStatus(s, 'LIVE', null);
+          }
         }
       }
     } finally {

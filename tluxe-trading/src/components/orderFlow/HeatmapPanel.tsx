@@ -43,6 +43,10 @@ interface Props {
   dotAggregation?: DotAggregation;
   /** Exchange time of the newest trade received while older history is still being delivered (null = caught up). */
   tapeBehind?: number | null;
+  /** Depth source label when depth is missing (e.g. "IBKR OFFLINE"); default: generic Level-2 wording. */
+  depthNaSource?: string | null;
+  /** Start of the RECORDED depth history drawn by the heatmap (this session only; no earlier depth exists). */
+  depthRecordedSince?: number | null;
 }
 
 /** The central heatmap, rendered by HeatmapView on a canvas inside the shared ChartStage. */
@@ -115,7 +119,12 @@ export function HeatmapPanel(p: Props) {
       <div className="ofheat__stagewrap">
       {p.hasData && !depthOk && (
         <p className="ofheat__depthna" role="status" data-testid="of-depth-na" title={p.depthDetail ?? 'No valid Level-2 book'}>
-          <b>DEPTH DATA UNAVAILABLE</b> · LEVEL-2 PROVIDER NOT CONNECTED — executed trades only; no liquidity is drawn or inferred
+          {p.depthNaSource ? <><b>DEPTH UNAVAILABLE</b> · {p.depthNaSource}</> : <><b>DEPTH DATA UNAVAILABLE</b> · LEVEL-2 PROVIDER NOT CONNECTED</>} — executed trades only; no liquidity is drawn or inferred
+        </p>
+      )}
+      {p.hasData && depthOk && !p.replay && p.depthRecordedSince != null && (
+        <p className="ofheat__depthna ofheat__rec" role="note" data-testid="of-depth-recorded">
+          <b>RECORDED DEPTH HISTORY</b> since {fmtT(p.depthRecordedSince)} (this session) — no earlier depth exists · the COB shows the current live book
         </p>
       )}
       {p.hasData && p.tapeBehind != null && (

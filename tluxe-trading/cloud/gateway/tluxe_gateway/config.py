@@ -94,6 +94,9 @@ class GatewayConfig:
     mt5_bridge_keys: tuple[Mt5BridgeKey, ...] = ()
     # IBKR COMEX Level-2 depth link from the cloud Windows VPS (/bridge/ibkr). Same hash format as the MT5 link key.
     ibkr_bridge_keys: tuple[Mt5BridgeKey, ...] = ()
+    # IBKR COMEX price-level depth service on the VPS (https://depth.twahatrading.com), polled SERVER-SIDE with
+    # `Authorization: Bearer <TLUXE_IBKR_DEPTH_TOKEN>`. The token never reaches a browser, a log or an API response.
+    ibkr_depth: Upstream = field(default_factory=lambda: Upstream("ibkr-depth", "", Secret("")))
     static_dir: str = ""
     log_format: str = "text"
     # Production without an owner password hash (login not set up yet): the gateway still starts, but ONLY the
@@ -110,7 +113,8 @@ class GatewayConfig:
 
     def secrets(self) -> list[str]:
         """Every secret value (for log / response redaction)."""
-        vals = [self.database_url.reveal(), self.owner_password_hash.reveal(), self.ai.token.reveal(), self.databento.token.reveal(), self.news.token.reveal()]
+        vals = [self.database_url.reveal(), self.owner_password_hash.reveal(), self.ai.token.reveal(), self.databento.token.reveal(), self.news.token.reveal(),
+                self.ibkr_depth.token.reveal()]
         pw = urlparse(self.database_url.reveal()).password if self.database_url else None
         return [v for v in vals + [pw or ""] if v]
 
@@ -161,6 +165,19 @@ def _internal_url(raw: str, key: str) -> tuple[str, str]:
     except ValueError:
         return "", f"{key} has an invalid port"
     return u, ""
+
+
+def _ibkr_depth(e: dict, prod: bool) -> Upstream:
+    """TLUXE_IBKR_DEPTH_URL + TLUXE_IBKR_DEPTH_TOKEN. HTTPS only in production (plain http only to loopback in dev)."""
+    url, problem = _internal_url(e.get("TLUXE_IBKR_DEPTH_URL") or "", "TLUXE_IBKR_DEPTH_URL")
+    token = (e.get("TLUXE_IBKR_DEPTH_TOKEN") or "").strip()
+    if url and not problem:
+        p = urlparse(url)
+        if p.scheme != "https" and (prod or p.hostname not in ("127.0.0.1", "localhost", "::1")):
+            url, problem = "", "TLUXE_IBKR_DEPTH_URL must be https:// (production access goes through the TLS endpoint only)"
+    if url and not token and not problem:
+        problem = "TLUXE_IBKR_DEPTH_TOKEN is not set"
+    return Upstream("ibkr-depth", url, Secret(token), problem)
 
 
 def _mt5_keys(raw: str, name: str = "TLUXE_MT5_BRIDGE_TOKEN_SHA256") -> tuple[Mt5BridgeKey, ...]:
@@ -259,6 +276,7 @@ def from_env(env: dict | None = None) -> GatewayConfig:
         ai=upstream("ai", "TLUXE_AI_URL", "TLUXE_AI_TOKEN"),
         databento=upstream("databento", "TLUXE_DATABENTO_URL", "TLUXE_DB_BRIDGE_TOKEN"),
         news=upstream("news", "TLUXE_NEWS_URL", "TLUXE_NEWS_TOKEN"),
+        ibkr_depth=_ibkr_depth(e, prod),
         mt5_bridge_keys=mt5_keys,
         ibkr_bridge_keys=ibkr_keys,
         static_dir=(e.get("TLUXE_STATIC_DIR") or "").strip(),

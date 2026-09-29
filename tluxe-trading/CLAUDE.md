@@ -214,6 +214,9 @@ BUY/SELL setup states with entry zone / SL / TP / R:R appear ONLY on the High / 
   invalidate the engine book via a local sequence break so the Databento trade history is never reset. States CONNECTING /
   LIVE / STALE / RECONNECTING / AUTH_REQUIRED / OFFLINE / NOT_ENTITLED. Home PC not required; weekly IBKR re-login may be.
   No IBKR credentials anywhere in TLUXE (typed only into IB Gateway). Runbook: `bridge/ibkr/README.md`.
+  Production path = PULL mode: the gateway polls `TLUXE_IBKR_DEPTH_URL` (https://depth.twahatrading.com) `/depth/GC|SI`
+  with the server-side `TLUXE_IBKR_DEPTH_TOKEN` (never in the browser / logs / responses), PRICE_LEVEL, mbo false,
+  `lastUpdate` = bridge receive time. The COB shows the IBKR rows (IbkrDomPanel); imbalance = visible IBKR book only.
 - Sweep / Reversal is not built yet (disabled SOON in the sidebar).
 
 ## Chart navigation (shared by every strategy chart)

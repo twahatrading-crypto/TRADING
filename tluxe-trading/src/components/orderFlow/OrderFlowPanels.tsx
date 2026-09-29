@@ -14,7 +14,7 @@ export const Pill = ({ status, label, sep = ': ' }: { status: FeedStatus; label?
   </span>
 );
 
-function Panel({ title, icon, children, right, className, testId }: { title: string; icon: ReactNode; children: ReactNode; right?: ReactNode; className?: string; testId?: string }) {
+export function Panel({ title, icon, children, right, className, testId }: { title: string; icon: ReactNode; children: ReactNode; right?: ReactNode; className?: string; testId?: string }) {
   return (
     <section className={`panel ofpanel ${className ?? ''}`} aria-label={title} data-testid={testId}>
       <header className="ofpanel__head">

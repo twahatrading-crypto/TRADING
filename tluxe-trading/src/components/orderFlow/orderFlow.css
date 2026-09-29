@@ -188,3 +188,6 @@
 .ofibkr--warn .ofibkr__state { color: var(--amber, #e5a33b); }
 .ofibkr--bad .ofibkr__state, .ofibkr__auth { color: var(--red, #ef4444); font-weight: 600; }
 .ofmain.has-ibkr .ofgrid { height: max(440px, calc(100vh - 537px)); }
+.ofdom__src { margin: 0 0 4px; font-size: 10.5px; color: var(--text-3); }
+.ofdom__src b { color: var(--text); }
+.ofheat__rec b { color: var(--text-2); }

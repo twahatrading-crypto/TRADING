@@ -215,7 +215,7 @@ async def runtime_config(request: web.Request) -> web.Response:
     return _json({"mode": "cloud", "env": cfg.env, "version": __version__, "authRequired": not cfg.public_market_data,
                   "publicMarketData": cfg.public_market_data, "streamPath": "/api/stream", "readOnly": True,
                   # IBKR COMEX Level-2 depth link configured (the key hash is set) - a flag only, never the key.
-                  "ibkrDepth": bool(cfg.ibkr_bridge_keys)})
+                  "ibkrDepth": bool(cfg.ibkr_bridge_keys) or cfg.ibkr_depth.configured})
 
 
 async def login(request: web.Request) -> web.Response:
@@ -512,7 +512,7 @@ async def ibkr_bridge_ws(request: web.Request) -> web.StreamResponse:
     auth = request.headers.get("Authorization", "")
     token = auth[7:] if auth.startswith("Bearer ") else ""
     bridge_id = (request.headers.get("X-TLUXE-Bridge-Id") or "ibkr-vps")[:64]
-    if not token_ok(token, cfg.ibkr_bridge_keys):
+    if relay.pull or not token_ok(token, cfg.ibkr_bridge_keys):
         relay.counts["authRejected"] += 1
         await store.auth_event("IBKR_BRIDGE_REJECTED", bridge_id)
         return _err(401, "UNAUTHORIZED", "Invalid IBKR bridge credential.")
@@ -542,7 +542,7 @@ async def _ibkr_worker(app: web.Application) -> None:
     while True:
         try:
             await asyncio.sleep(5)
-            if relay.ws is None:
+            if relay.ws is None and not relay.pull:
                 continue
             targets: dict[str, str] = {}
             if cfg.databento.configured:
@@ -551,11 +551,65 @@ async def _ibkr_worker(app: web.Application) -> None:
                     c = (((h or {}).get("instruments") or {}).get(root) or {}).get("contract") if s == 200 else None
                     if isinstance(c, str) and c:
                         targets[root] = c
+            relay.targets = {r: t for r, t in targets.items() if r in ("GC", "SI") and t}
             await relay.tick(targets)
         except asyncio.CancelledError:
             raise
         except Exception:
             log.exception("ibkr worker")
+
+
+IBKR_PULL_EVERY_S = 0.5
+IBKR_PULL_TIMEOUT_S = 3.0
+IBKR_PULL_MAX_BYTES = 512_000
+
+
+async def _ibkr_pull_once(app: web.Application, root: str) -> str:
+    """One authenticated GET of the VPS depth service for GC or SI (never XAUUSD / XAGUSD). The bearer token is attached
+    here, server-side only; nothing about the request (URL, headers, token, upstream body) is logged or returned.
+    Returns the outcome kind ("ok" | "http" | "timeout" | "offline" | "malformed") for state-change logging."""
+    up, relay = app[K_CFG].ibkr_depth, app[K_IBKR]
+    try:
+        async with app[K_HTTP].get(f"{up.url}/depth/{root}", headers={"Authorization": f"Bearer {up.token.reveal()}", "Accept": "application/json", "User-Agent": f"TLUXE-Gateway/{__version__}"},
+                                   timeout=ClientTimeout(total=IBKR_PULL_TIMEOUT_S), allow_redirects=False) as r:
+            if r.status != 200:
+                relay.ingest_error(root, "http", r.status)
+                return f"http {r.status}"
+            raw = await r.content.read(IBKR_PULL_MAX_BYTES + 1)
+    except asyncio.TimeoutError:
+        relay.ingest_error(root, "timeout")
+        return "timeout"
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001 - connection refused / DNS / TLS: reported as unreachable, the message is never kept
+        relay.ingest_error(root, "offline")
+        return "offline"
+    try:
+        if len(raw) > IBKR_PULL_MAX_BYTES:
+            raise ValueError("too large")
+        body = json.loads(raw)
+    except (ValueError, UnicodeDecodeError):
+        relay.ingest_error(root, "malformed")
+        return "malformed"
+    await relay.ingest(root, body)
+    return "ok" if relay.pulls[root].errors == 0 else "malformed"
+
+
+async def _ibkr_depth_poller(app: web.Application, root: str) -> None:
+    """Pull mode: poll https://<depth service>/depth/<root> sequentially (one request in flight per root, so responses
+    cannot interleave; an older lastUpdate is additionally rejected by the relay)."""
+    last = None
+    while True:
+        try:
+            kind = await _ibkr_pull_once(app, root)
+            if kind != last:
+                log.info("IBKR depth %s: %s (%s)", root, app[K_IBKR].root_state(root)[0], kind)
+                last = kind
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.error("IBKR depth %s poller error", root)  # no traceback: it could carry request details
+        await asyncio.sleep(IBKR_PULL_EVERY_S)
 
 
 # ------------------------------------------------------------------ background workers
@@ -695,7 +749,9 @@ def make_app(cfg: GatewayConfig, store=None, workers: bool = True, http_session_
         await app[K_STORE].add_integrity("mt5", None, kind, detail)
 
     app[K_RELAY] = Mt5Relay(cfg.mt5_bridge_keys, on_integrity)
-    app[K_IBKR] = IbkrRelay(cfg.ibkr_bridge_keys)
+    # Pull mode (the VPS depth service) takes precedence over the older inbound VPS link: one depth source per book.
+    pull = cfg.ibkr_depth.configured
+    app[K_IBKR] = IbkrRelay(() if pull else cfg.ibkr_bridge_keys, pull=pull)
 
     async def startup(app: web.Application) -> None:
         if cfg.production and isinstance(app[K_STORE], MemoryStore):
@@ -710,6 +766,9 @@ def make_app(cfg: GatewayConfig, store=None, workers: bool = True, http_session_
         if workers:
             for w in (_status_worker, _databento_worker, _news_worker, _mt5_heartbeat_worker, _retention_worker, _ibkr_worker):
                 app[K_STATE]["tasks"].append(asyncio.create_task(w(app)))
+            if cfg.ibkr_depth.configured:
+                for root in ("GC", "SI"):  # IBKR depth is COMEX GC / SI only - XAUUSD / XAGUSD are never routed here
+                    app[K_STATE]["tasks"].append(asyncio.create_task(_ibkr_depth_poller(app, root)))
 
     async def shutdown(app: web.Application) -> None:
         log.info("gateway shutting down gracefully")
