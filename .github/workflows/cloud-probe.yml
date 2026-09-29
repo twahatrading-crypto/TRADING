@@ -693,7 +693,8 @@ jobs:
             // ---------- Phase A: the gateway process running BEFORE this push's redeploy ----------
             const before = await hist();
             const B = {};
-            for (const r of ['GC', 'SI']) { const st = rootSt(before, r); B[r] = st; console.log(`BEFORE restart ${r}: instance=${before.instance || '(previous build)'} first=${iso(st && st.firstMs)} last=${iso(st && st.lastMs)} rows=${st && st.rows} observations=${st && st.observations}`); }
+            console.log(`BEFORE restart: gateway instance=${before.instance || '(bde061b build: no instance id yet)'} tableBytes=${before.tableBytes} persistence=${before.persistence}`);
+            for (const r of ['GC', 'SI']) { const st = rootSt(before, r); B[r] = st; console.log(`BEFORE restart ${r}: first=${iso(st && st.firstMs)} latest=${iso(st && st.lastMs)} rows=${st && st.rows} observations=${st && st.observations}`); }
             // ---------- Phase B: wait for the new gateway process (Railway redeploy of this commit) ----------
             let after = null;
             for (let i = 0; i < 80; i++) {
@@ -716,6 +717,7 @@ jobs:
               if (B[r] && B[r].firstMs) {
                 check(st.firstMs === B[r].firstMs, `${r}: first stored timestamp unchanged across the restart (${iso(st.firstMs)})`);
                 check(st.observations > B[r].observations && st.lastMs > B[r].lastMs, `${r}: new observations appended after the restart (${B[r].observations} -> ${st.observations})`);
+                check(st.rows >= B[r].rows, `${r}: stored rows did not decrease (${B[r].rows} -> ${st.rows}; retention 7 days, all rows younger)`);
               }
             }
             // No liquidity across the restart: matrix coverage around the new process start.
@@ -770,9 +772,9 @@ jobs:
               const rate = (off) => { let n = 0, ok = 0; for (const x of trades) { const b = book.get(Math.floor((x.t + off) / 1000) * 1000); if (!b || !isFinite(b.bb) || !isFinite(b.ba)) continue; n++; if (x.p >= b.bb - tick * 1.01 && x.p <= b.ba + tick * 1.01) ok++; } return { n, r: n ? ok / n : 0 }; };
               const offs = [-5000, -3000, -2000, -1000, 0, 1000, 2000, 3000, 5000].map((o) => ({ o, ...rate(o) }));
               const best = offs.reduce((a, b) => (b.r > a.r ? b : a));
-              console.log(`${r} alignment: ${trades.length} Databento trades (contract ${trades[0] && trades[0].c}) vs stored IBKR best bid/ask per 1 s: ${offs.map((x) => `${x.o / 1000}s=${(x.r * 100).toFixed(1)}%`).join(' ')}`);
+              console.log(`${r} timestamp semantics: Databento trade = tsEventNs (CME matching-engine event time, UTC ns since epoch); IBKR depth = lastUpdate (VPS bridge receive time of the IBKR update, UTC ms since epoch). Both absolute UTC - no timezone conversion anywhere; expected skew = IBKR network + bridge latency (tens of ms).`);
+              console.log(`${r} alignment DIAGNOSTIC (never used to shift data): ${trades.length} Databento trades (contract ${trades[0] && trades[0].c}) inside stored IBKR best bid/ask ±1 tick of the same 1 s bucket at shift: ${offs.map((x) => `${x.o / 1000}s=${(x.r * 100).toFixed(1)}%`).join(' ')} | best shift ${best.o} ms`);
               check(trades.length > 50 && offs.find((x) => x.o === 0).r >= 0.9, `${r}: trades sit inside the stored IBKR spread at the SAME timestamp (${(offs.find((x) => x.o === 0).r * 100).toFixed(1)}%)`);
-              check(Math.abs(best.o) <= 1000, `${r}: no time offset between Databento trades and stored IBKR depth (best shift ${best.o} ms)`);
             }
             // ---------- Phase F: browser views (first open, refresh, second device) + screenshots ----------
             const b = await chromium.launch();

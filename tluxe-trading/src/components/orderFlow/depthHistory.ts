@@ -17,6 +17,8 @@ export interface HistoryColumn {
   w: number;
   /** Fraction of the bucket covered by a valid recorded book (0..1). */
   coverage: number;
+  /** Exact recorded-valid intervals [from, to) inside the bucket (flattened pairs). Paint only inside them. */
+  valid: Float64Array;
   bidTicks: Int32Array;
   bidSizes: Float64Array;
   askTicks: Int32Array;
@@ -34,7 +36,7 @@ export interface HeatmapResponse {
   bucketMs: number;
   from: number;
   to: number;
-  columns: [number, number, [number, number][], [number, number][]][];
+  columns: [number, number, [number, number][], [number, number][], [number, number][]?][];
 }
 
 type FetchLike = (url: string) => Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>;
@@ -48,10 +50,11 @@ export function chooseBucket(spanMs: number, plotPx: number, minMs: number): num
 /** Server columns → heatmap columns (prices to ticks). Pure. */
 export function toColumns(r: HeatmapResponse, tickSize: number): HistoryColumn[] {
   const tk = (p: number) => Math.round(p / tickSize);
-  return r.columns.map(([t, coverage, bids, asks]) => ({
+  return r.columns.map(([t, coverage, bids, asks, segs]) => ({
     t,
     w: r.bucketMs,
     coverage,
+    valid: Float64Array.from((segs ?? [[t, t + r.bucketMs]]).flat()),
     bidTicks: Int32Array.from(bids, (x) => tk(x[0])),
     bidSizes: Float64Array.from(bids, (x) => x[1]),
     askTicks: Int32Array.from(asks, (x) => tk(x[0])),
@@ -66,6 +69,12 @@ export function toColumns(r: HeatmapResponse, tickSize: number): HistoryColumn[]
 export function mergeColumns(cur: readonly HistoryColumn[], add: readonly HistoryColumn[], from: number, to: number): HistoryColumn[] {
   const keep = cur.filter((c) => c.t < from || c.t >= to);
   return [...keep, ...add].sort((a, b) => a.t - b.t);
+}
+
+/** t lies inside one of the column's recorded-valid intervals. */
+export function validAt(c: HistoryColumn, t: number): boolean {
+  for (let i = 0; i < c.valid.length; i += 2) if (t >= c.valid[i]! && t < c.valid[i + 1]!) return true;
+  return false;
 }
 
 /** Column covering time t (binary search), or null. */

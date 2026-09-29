@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { chooseBucket, columnAt, DepthHistory, mergeColumns, toColumns, type HeatmapResponse, type HistoryColumn } from './depthHistory';
+import { chooseBucket, columnAt, DepthHistory, mergeColumns, toColumns, validAt, type HeatmapResponse, type HistoryColumn } from './depthHistory';
 
 /* TEST DATA ONLY - a scripted /api/ibkr/heatmap; no gateway or IBKR connection is involved. */
 
@@ -22,7 +22,7 @@ const resp = (over: Partial<HeatmapResponse> = {}): HeatmapResponse => ({
   ...over,
 });
 
-const col = (t: number, w = 1000): HistoryColumn => ({ t, w, coverage: 1, bidTicks: new Int32Array(), bidSizes: new Float64Array(), askTicks: new Int32Array(), askSizes: new Float64Array() });
+const col = (t: number, w = 1000): HistoryColumn => ({ t, w, coverage: 1, valid: Float64Array.from([t, t + w]), bidTicks: new Int32Array(), bidSizes: new Float64Array(), askTicks: new Int32Array(), askSizes: new Float64Array() });
 
 describe('recorded depth history (display side)', () => {
   it('chooseBucket: at most one column per two pixels, never finer than the engine aggregation', () => {
@@ -46,6 +46,14 @@ describe('recorded depth history (display side)', () => {
     const m = mergeColumns(cur, [col(3000), col(4000)], 3000, 5000);
     expect(m.map((x) => x.t)).toEqual([1000, 2000, 3000, 4000]);
     expect(new Set(m.map((x) => x.t)).size).toBe(m.length);
+  });
+
+  it('only the exact recorded-valid intervals of a coarse bucket are paintable (no pre-record, no cross-gap)', () => {
+    const [c] = toColumns(resp({ bucketMs: 60_000, columns: [[0, 0.6, [[4150.0, 5]], [], [[17_600, 30_000], [40_000, 60_000]]]] }), 0.1);
+    expect(validAt(c!, 17_599)).toBe(false); // before the first recorded snapshot
+    expect(validAt(c!, 17_600)).toBe(true);
+    expect(validAt(c!, 35_000)).toBe(false); // inside a feed gap
+    expect(validAt(c!, 59_999)).toBe(true);
   });
 
   it('columnAt finds the covering bucket, null in a gap', () => {

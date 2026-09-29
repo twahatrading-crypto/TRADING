@@ -50,6 +50,19 @@ class TestMatrix(unittest.TestCase):
         self.assertEqual(cell(m, 1000, "ask", 4150.1), 50.0)
         self.assertEqual(m["columns"][0][1], 1.0)  # fully covered
 
+    def test_exact_valid_intervals_inside_coarse_buckets(self):
+        # 60 s buckets: recording starts at 17.6 s and has a gap 30-40 s; the column says exactly where it is valid
+        rows = [snap(17_600, [(1.0, 10)], [], t1=30_000), gap(30_000), snap(40_000, [(1.0, 10)], [], t1=60_000)]
+        m = build_matrix(rows, 0, 60_000, 60_000)
+        self.assertEqual(m["columns"][0][4], [[17_600, 30_000], [40_000, 60_000]])
+
+    def test_quiet_confirmed_book_is_continuous(self):
+        # no level change for 50 s, but liveness rows every second -> full coverage (quiet != invalid)
+        rows = [snap(0, [(1.0, 10)], [], t1=0)] + [delta(t, t, []) for t in range(1000, 51_000, 1000)]
+        m = build_matrix(rows, 0, 50_000, 10_000)
+        self.assertEqual([c[1] for c in m["columns"]], [1.0] * 5)
+        self.assertEqual([c[4] for c in m["columns"]], [[[t, t + 10_000]] for t in range(0, 50_000, 10_000)])
+
     def test_nothing_before_the_first_recorded_snapshot(self):
         rows = [snap(5000, [(4150.0, 10)], [], t1=6000)]
         m = build_matrix(rows, 0, 7000, 1000)

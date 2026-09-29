@@ -227,10 +227,13 @@ class DepthRecorder:
 # ------------------------------------------------------------------ matrix
 def build_matrix(rows: list[dict], from_ms: int, to_ms: int, bucket_ms: int, carry_ms: int = CARRY_MS) -> dict:
     """Time x price liquidity matrix from recorded rows (see module doc). Returns the columns with any valid coverage:
-    [t, coverage 0..1, [[price, bid size], ...], [[price, ask size], ...]] and the last confirmed time."""
+    [t, coverage 0..1, [[price, bid size], ...], [[price, ask size], ...], [[valid from, valid to], ...]] and the last
+    confirmed time. The intervals are exact: a renderer paints a bucket only inside them (never before the first
+    record, never across a gap inside a coarse bucket)."""
     n = max(0, (to_ms - from_ms + bucket_ms - 1) // bucket_ms)
     acc: list[dict | None] = [None] * n
     cov = [0.0] * n
+    segs: list[list[list[int]] | None] = [None] * n  # exact recorded-valid intervals inside each bucket
     book: tuple[dict[float, float], dict[float, float]] = ({}, {})
     valid = False
     inst = None  # recording process of the current base snapshot
@@ -248,6 +251,13 @@ def build_matrix(rows: list[dict], from_ms: int, to_ms: int, bucket_ms: int, car
             dt = end - a
             if dt > 0:
                 cov[i] += dt
+                sg = segs[i]
+                if sg is None:
+                    segs[i] = [[a, end]]
+                elif sg[-1][1] >= a:
+                    sg[-1][1] = max(sg[-1][1], end)
+                else:
+                    sg.append([a, end])
                 cell = acc[i]
                 if cell is None:
                     cell = acc[i] = {}
@@ -297,7 +307,7 @@ def build_matrix(rows: list[dict], from_ms: int, to_ms: int, bucket_ms: int, car
         c = cov[i]
         bids = sorted(([p, round(v / c, 2)] for (sd, p), v in acc[i].items() if sd == BID and v > 0), key=lambda x: -x[0])
         asks = sorted(([p, round(v / c, 2)] for (sd, p), v in acc[i].items() if sd == ASK and v > 0), key=lambda x: x[0])
-        cols.append([from_ms + i * bucket_ms, round(min(1.0, c / bucket_ms), 3), bids, asks])
+        cols.append([from_ms + i * bucket_ms, round(min(1.0, c / bucket_ms), 3), bids, asks, segs[i]])
     return {"columns": cols, "lastObservedMs": alive_to or None}
 
 

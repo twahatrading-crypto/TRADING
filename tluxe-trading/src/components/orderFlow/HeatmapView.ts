@@ -2,7 +2,7 @@ import type { HeatmapViewSettings } from '../../engines/orderFlow/config';
 import type { HeatmapColumn, OrderFlowEngine } from '../../engines/orderFlow/engine';
 import type { ChartNavigable } from '../chart/ChartStage';
 import { colorAt, columnRows, intensity, percentile, smooth, type Viewport } from './heatmapMath';
-import { columnAt, type DepthHistory, type HistoryColumn } from './depthHistory';
+import { columnAt, validAt, type DepthHistory, type HistoryColumn } from './depthHistory';
 import {
   aggregateDots,
   autoBucketMs,
@@ -588,7 +588,8 @@ export class HeatmapView implements ChartNavigable {
       const at = (t: number): LiqColumn | null => {
         if (hist && histEnd !== null && t < histEnd) {
           const hc: HistoryColumn | null = columnAt(hist.columns, t);
-          return hc ? { ...hc, valid: true } : null;
+          // Only inside the bucket's exact recorded-valid intervals: never before the first record, never across a gap.
+          return hc && validAt(hc, t) ? { ...hc, valid: true } : null;
         }
         const ec = this.engineColumnAt(vis, t, agg);
         return ec ? { ...ec, w: agg } : null;
@@ -602,7 +603,8 @@ export class HeatmapView implements ChartNavigable {
       for (let x = 0; x < W; x++) {
         const t = v.t0 + ((x + 0.5) / W) * (v.t1 - v.t0);
         let c: LiqColumn | null;
-        if (prevCol && t >= prevCol.t && t < prevCol.t + prevCol.w && prevKey === (histEnd !== null && t < histEnd ? 1 : 0)) c = prevCol;
+        const inHist = histEnd !== null && t < histEnd;
+        if (prevCol && t >= prevCol.t && t < prevCol.t + prevCol.w && prevKey === (inHist ? 1 : 0) && (!inHist || validAt(prevCol as unknown as HistoryColumn, t))) c = prevCol;
         else {
           c = at(t);
           prevKey = histEnd !== null && t < histEnd ? 1 : 0;
@@ -626,7 +628,7 @@ export class HeatmapView implements ChartNavigable {
       }
       const vals: number[] = [];
       // Auto normalization: the visible columns; otherwise everything loaded (recorded history + live columns).
-      const normSrc: readonly { valid: boolean; bidSizes: Float64Array; askSizes: Float64Array }[] = s.autoNormalize ? distinct : [...(hist?.columns.map((c) => ({ ...c, valid: true })) ?? []), ...cols];
+      const normSrc: readonly { valid: boolean; bidSizes: Float64Array; askSizes: Float64Array }[] = s.autoNormalize ? distinct : [...(hist?.columns.map((c) => ({ bidSizes: c.bidSizes, askSizes: c.askSizes, valid: true })) ?? []), ...cols];
       for (const c of normSrc) {
         if (!c.valid) continue;
         for (const z of c.bidSizes) vals.push(z);
@@ -662,7 +664,7 @@ export class HeatmapView implements ChartNavigable {
               const k = intensity(colVals[r]!, lo, hi, s.contrast, s.minDepth);
               if (k > 0) {
                 rgb = lut[Math.min(255, Math.max(1, Math.round(k * 255)))]!;
-                if (firstX !== null && x < firstX) preFirstPx += 1; // must stay 0: no depth before the first record
+                if (firstX !== null && x + 0.5 < firstX) preFirstPx += 1; // pixel centre before the first record: must stay 0
               }
             }
             img.data[o] = rgb[0];

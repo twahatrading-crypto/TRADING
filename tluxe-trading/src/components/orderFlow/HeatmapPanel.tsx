@@ -130,7 +130,7 @@ export function HeatmapPanel(p: Props) {
           {p.depthNaSource ? <><b>DEPTH UNAVAILABLE</b> · {p.depthNaSource}</> : <><b>DEPTH DATA UNAVAILABLE</b> · LEVEL-2 PROVIDER NOT CONNECTED</>} — executed trades only; no liquidity is drawn or inferred
         </p>
       )}
-      {p.hasData && depthOk && !p.replay && p.depthRecordedSince != null && (
+      {p.hasData && !p.replay && p.depthRecordedSince != null && (depthOk || p.history?.firstRecordedMs != null) && (
         <p className="ofheat__depthna ofheat__rec" role="note" data-testid="of-depth-recorded">
           {p.history && p.history.firstRecordedMs != null ? (
             <><b>RECORDED DEPTH HISTORY SINCE {fmtDate(p.depthRecordedSince)}</b> · IBKR price levels stored server-side · no depth exists before this time · the COB shows the current live book</>

@@ -7,3 +7,4 @@ hm price-layer split 2026-09-28T19:41:39Z
 2026-09-29T10:10:25Z ibkr depth banner wording
 2026-09-29T10:53:31Z depth history + heatmap
 2026-09-29T11:02:55Z depth history production verification (restart / no-browser / alignment)
+2026-09-29T11:12:59Z restart test + interval fix

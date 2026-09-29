@@ -32,7 +32,10 @@ RING = 20_000  # recent price-level changes kept per root for incremental browse
 MAX_MESSAGE = 4_000_000
 ROOTS = ("GC", "SI")
 # ---- pull mode (TLUXE_IBKR_DEPTH_URL / TOKEN): the VPS depth service is polled server-side ----
-PULL_STALE_S = 10.0  # lastUpdate (bridge receive time) older than this -> STALE: depth withheld, never shown as live
+# Confirmation = a successful poll whose response says status LIVE. The depth service's lastUpdate is the time of the
+# last BOOK CHANGE (not a heartbeat): a quiet but confirmed-live book legitimately keeps its displayed liquidity.
+PULL_STALE_S = 10.0  # no successful LIVE poll for this long -> RECONNECTING: depth withheld
+PULL_MAX_QUIET_S = 600.0  # safety net: not a single IBKR level change for this long -> STALE (feed presumed frozen)
 PULL_OFFLINE_AFTER = 3  # consecutive failed polls -> OFFLINE (before that RECONNECTING)
 UPSTREAM_STATES = {"LIVE": "LIVE", "STALE": "STALE", "RECONNECTING": "RECONNECTING", "OFFLINE": "OFFLINE",
                    "NOT_ENTITLED": "NOT_ENTITLED", "NOT ENTITLED": "NOT_ENTITLED", "UNSUPPORTED": "UNSUPPORTED"}
@@ -340,11 +343,11 @@ class IbkrRelay:
         b.contract = c or None
         p.rows = {"bids": [{"position": r[0], "price": r[1], "size": r[2], "marketMaker": r[3]} for r in d["bids"]],
                   "asks": [{"position": r[0], "price": r[1], "size": r[2], "marketMaker": r[3]} for r in d["asks"]]}
-        fresh = self.now_ms() - d["lastUpdateMs"] <= PULL_STALE_S * 1000
+        fresh = self.now_ms() - d["lastUpdateMs"] <= PULL_MAX_QUIET_S * 1000
         if d["status"] != "LIVE" or not fresh or not (d["bids"] or d["asks"]):
             if d["status"] == "LIVE":
                 p.state = "STALE"
-                p.detail = "IBKR returned an empty book" if not (d["bids"] or d["asks"]) else f"no IBKR depth update for > {int(PULL_STALE_S)} s"
+                p.detail = "IBKR returned an empty book" if not (d["bids"] or d["asks"]) else f"no IBKR depth change for > {int(PULL_MAX_QUIET_S)} s (feed presumed frozen)"
             b.invalidate(p.detail or d["status"])
             if self.recorder:
                 self.recorder.gap(root, p.detail or d["status"])
@@ -391,8 +394,8 @@ class IbkrRelay:
             p = self.pulls[root]
             st, detail = p.state, p.detail
             now = self.clock()
-            if st == "LIVE" and p.last_update_ms is not None and now * 1000 - p.last_update_ms > PULL_STALE_S * 1000:
-                st, detail = "STALE", f"no IBKR depth update for > {int(PULL_STALE_S)} s (last {p.last_update_ms})"
+            if st == "LIVE" and p.last_update_ms is not None and now * 1000 - p.last_update_ms > PULL_MAX_QUIET_S * 1000:
+                st, detail = "STALE", f"no IBKR depth change for > {int(PULL_MAX_QUIET_S)} s (last {p.last_update_ms})"
             if st == "LIVE" and (p.last_ok_s is None or now - p.last_ok_s > PULL_STALE_S):
                 st, detail = "RECONNECTING", "IBKR depth service not answering"
             tgt, c = self.targets.get(root), self.books[root].contract

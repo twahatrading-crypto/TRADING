@@ -796,15 +796,26 @@ class TestIbkrPullRelay(unittest.TestCase):
         self.assertEqual((r.root_state("GC")[0], r.valid("GC")), ("CONTRACT_MISMATCH", False))
         r.targets = {"GC": "GCZ6"}
         self.assertTrue(r.valid("GC"))
-        self.now += 11  # no successful poll for > 10 s
-        self.assertEqual(r.root_state("GC")[0], "STALE")
+        self.now += 11  # no successful poll for > 10 s: coverage is no longer confirmed
+        self.assertEqual(r.root_state("GC")[0], "RECONNECTING")
         self.assertFalse(r.valid("GC"))
 
-    def test_a_live_but_old_snapshot_is_stale(self):
+    def test_a_quiet_but_confirmed_book_stays_live(self):
+        # lastUpdate = last BOOK CHANGE. A book that has not changed for 60 s but is confirmed LIVE by every poll keeps
+        # its displayed liquidity - no artificial gap because the book was quiet.
         r = self.relay
-        self.run_(r.ingest("GC", depth_body("GC", age_s=time.time() - self.now + 30)))  # IBKR says LIVE, book 30 s old
+        body = depth_body("GC", age_s=time.time() - self.now)
+        self.run_(r.ingest("GC", body))
+        for _ in range(120):
+            self.now += 0.5
+            self.run_(r.ingest("GC", body))  # same lastUpdate, status LIVE
+        self.assertEqual((r.root_state("GC")[0], r.valid("GC")), ("LIVE", True))
+
+    def test_a_frozen_feed_is_stale(self):
+        r = self.relay
+        self.run_(r.ingest("GC", depth_body("GC", age_s=time.time() - self.now + 700)))  # not one change for > 600 s
         self.assertEqual((r.root_state("GC")[0], r.valid("GC"), r.book("GC")["bids"]), ("STALE", False, []))
-        self.assertIn("no IBKR depth update", r.root_state("GC")[1])
+        self.assertIn("no IBKR depth change", r.root_state("GC")[1])
 
     def test_contract_change_invalidates(self):
         r = self.relay
