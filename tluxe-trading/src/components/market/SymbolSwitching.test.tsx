@@ -24,8 +24,10 @@ vi.mock('../chart/ChartController', () => ({
 
 // ChartPanel loads the chart modules with a dynamic import() in an effect. Resolve them once up front so that load can
 // never still be in flight when this file's environment is torn down (EnvironmentTeardownError).
+// The real ChartController graph (primitives, labelLayout) is loaded too: under parallel CI load the component's
+// dynamic import could otherwise still be evaluating that graph at teardown (seen in CI on 0278c79).
 beforeAll(async () => {
-  await Promise.all([import('lightweight-charts'), import('../chart/ChartController')]);
+  await Promise.all([import('lightweight-charts'), import('../chart/ChartController'), vi.importActual('../chart/ChartController')]);
 });
 
 function Dash() {
