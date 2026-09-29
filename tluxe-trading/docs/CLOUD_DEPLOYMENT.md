@@ -216,7 +216,7 @@ Runbook: `bridge/ibkr/README.md`. IBKR is the **depth source only** (Databento k
 * **Pull mode (current production path):** `TLUXE_IBKR_DEPTH_URL=https://depth.twahatrading.com` and
   `TLUXE_IBKR_DEPTH_TOKEN` (Railway secret; never in Git, a `VITE_*` variable, a log, an error or an API response).
   The gateway alone calls `GET {url}/depth/GC` and `/depth/SI` with `Authorization: Bearer <token>` (sequential per
-  root, every 0.5 s, 3 s timeout, https only), validates every snapshot (symbol = requested root, `depthType`
+  root, every 0.25 s, 3 s timeout, https only), validates every snapshot (symbol = requested root, `depthType`
   `PRICE_LEVEL`, `mbo` false, numeric rows) and serves it through the same `/api/ibkr/*` API. Pull mode takes
   precedence over the inbound link. States: LIVE, STALE (`lastUpdate` > 10 s old or an empty book), RECONNECTING,
   OFFLINE (3 failed polls or HTTP 401/403), NOT ENTITLED, UNSUPPORTED — depth is withheld in every state but LIVE.

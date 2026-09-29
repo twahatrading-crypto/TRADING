@@ -652,7 +652,7 @@ async def _ibkr_worker(app: web.Application) -> None:
             log.exception("ibkr worker")
 
 
-IBKR_PULL_EVERY_S = 0.5
+IBKR_PULL_EVERY_S = 0.25  # measured production experiment (was 0.5): fewer book changes coalesced per observation
 IBKR_PULL_TIMEOUT_S = 3.0
 IBKR_PULL_MAX_BYTES = 512_000
 

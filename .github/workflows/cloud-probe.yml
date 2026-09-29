@@ -699,6 +699,43 @@ jobs:
           const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
           const hist = async () => j('/api/ibkr/history');
           const rootSt = (h, r) => h.roots && h.roots[r] && h.roots[r][h.contracts ? h.contracts[r] : Object.keys(h.roots[r])[0]];
+          // Polling experiment (measurement only). fineAlign = the Phase E 250 ms alignment formula, unchanged, for any window
+          // (heatmap requests chunked to 10 min: at most 4000 columns per request).
+          const fineAlign = async (r, from, to) => {
+            const tick = r === 'GC' ? 0.1 : 0.005;
+            const head = await j(`/api/databento/v1/trades/${r}?after=0&limit=1`);
+            const tr = await j(`/api/databento/v1/trades/${r}?after=${Math.max(0, head.lastIndex - 20000)}&limit=20000`);
+            const cols = [];
+            for (let f = from; f < to; f += 600000) cols.push(...(await j(`/api/ibkr/heatmap?root=${r}&from=${Math.floor(f)}&to=${Math.ceil(Math.min(to, f + 600000))}&bucket=250`)).columns);
+            const book2 = new Map(cols.map((c) => [c[0], { bb: Math.max(...c[2].map((x) => x[0])), ba: Math.min(...c[3].map((x) => x[0])) }]));
+            const tr2 = tr.trades.map((x) => ({ t: Math.floor(x.tsEventNs / 1e6), p: x.price })).filter((x) => x.t >= from && x.t < Math.min(to, Date.now() - 2000));
+            const rate2 = (off) => { let n = 0, ok = 0; for (const x of tr2) { const b = book2.get(Math.floor((x.t + off) / 250) * 250); if (!b || !isFinite(b.bb) || !isFinite(b.ba)) continue; n++; if (x.p >= b.bb - tick * 1.01 && x.p <= b.ba + tick * 1.01) ok++; } return n ? ok / n : 0; };
+            const fine = [-1000, -500, -250, 0, 250, 500, 750, 1000, 1500].map((o) => ({ o, r: rate2(o) }));
+            const bestFine = fine.reduce((a, b) => (b.r > a.r ? b : a));
+            const win = Math.max(...fine.filter((x) => x.o >= 0 && x.o <= 750).map((x) => x.r));
+            const oldest = tr.trades.length ? Math.floor(tr.trades[0].tsEventNs / 1e6) : null;
+            return { n: tr2.length, fine, bestFine, win, complete: oldest !== null && oldest <= from };
+          };
+          const fmtFine = (a) => `${a.fine.map((x) => `${x.o}ms=${(x.r * 100).toFixed(1)}%`).join(' ')} | best ${a.bestFine.o} ms ${(a.bestFine.r * 100).toFixed(1)}% | best within 0-750 ms ${(a.win * 100).toFixed(1)}% | ${a.n} trades${a.complete ? '' : ' (trade history shorter than the window)'}`;
+          // Infrastructure sample: request / change / storage rates, errors, receive lag, API latency over one window.
+          const infra = async (label, ms) => {
+            const lat = [];
+            const st = async () => { const t = Date.now(); const x = await j('/api/ibkr/status'); lat.push(Date.now() - t); return x; };
+            const h1 = await hist(); await st();
+            for (let k = 0; k < Math.round(ms / 10000); k++) { await sleep(10000); await st(); }
+            const h2 = await hist();
+            const sec = (h2.serverMs - h1.serverMs) / 1000;
+            lat.sort((a, b) => a - b);
+            const same = h1.instance === h2.instance;
+            console.log(`${label} INFRA ${iso(h1.serverMs)} -> ${iso(h2.serverMs)} (${sec.toFixed(0)} s) gateway instance ${h1.instance}${same ? '' : ` -> ${h2.instance} (process switched inside the window: rates invalid)`}`);
+            for (const r of ['GC', 'SI']) {
+              const a = h1.ibkrFeed[r], b = h2.ibkrFeed[r], x = rootSt(h1, r), y = rootSt(h2, r);
+              const gapsIn = (h2.recentGaps[r] || []).filter((g) => g.t >= h1.serverMs && g.t <= h2.serverMs).map((g) => g.reason);
+              console.log(`${label} ${r}: depthRequests/s=${((b.polls - a.polls) / sec).toFixed(2)} levelChanges/s=${((b.depthSeq - a.depthSeq) / sec).toFixed(2)} observations/s=${((y.observations - x.observations) / sec).toFixed(2)} gapEvents=${y.gaps - x.gaps} ${JSON.stringify(gapsIn)} malformed+${b.malformed - a.malformed} outOfOrder+${b.outOfOrder - a.outOfOrder} state=${b.state} receiveLagMs=${JSON.stringify(b.receiveLagMs)}`);
+            }
+            console.log(`${label} PostgreSQL: rowsWritten/s=${((h2.rowsWritten - h1.rowsWritten) / sec).toFixed(2)} growth=${((h2.tableBytes - h1.tableBytes) / 1024 / (sec / 60)).toFixed(1)} KiB/min (tableBytes ${h1.tableBytes} -> ${h2.tableBytes}) writeErrors+${h2.writeErrors - h1.writeErrors} pending=${h2.pendingRows} dropped=${h2.droppedUnsaved} | IBKR reconnects=${h2.ibkrSession.reconnects} | /api/ibkr/status latency ms p50=${lat[lat.length >> 1]} p90=${lat[Math.floor(lat.length * 0.9)]} max=${lat[lat.length - 1]} (event-loop load proxy: the gateway does not expose CPU / memory)`);
+            return { same, h1, h2 };
+          };
           (async () => {
             const jobStart = Date.now();
             // ---------- Phase A: the gateway process running BEFORE this push's redeploy ----------
@@ -706,6 +743,12 @@ jobs:
             const B = {};
             console.log(`BEFORE restart: gateway instance=${before.instance || '(bde061b build: no instance id yet)'} tableBytes=${before.tableBytes} persistence=${before.persistence}`);
             for (const r of ['GC', 'SI']) { const st = rootSt(before, r); B[r] = st; console.log(`BEFORE restart ${r}: first=${iso(st && st.firstMs)} latest=${iso(st && st.lastMs)} rows=${st && st.rows} observations=${st && st.observations}`); }
+            // ---------- Phase A2: BASELINE of the running (previous) process, same methodology, before Railway switches ----------
+            if (!(before.instance && before.processStartedMs > jobStart - 120000)) {
+              const now0 = Date.now();
+              for (const r of ['GC', 'SI']) console.log(`BASELINE (previous process ${before.instance}) ${r} fine alignment DIAGNOSTIC (250 ms buckets, last 5 min): ${fmtFine(await fineAlign(r, now0 - 300000, now0))}`);
+              await infra('BASELINE', 180000);
+            } else console.log('BASELINE: Railway had already switched before this job started - no baseline sample from the previous process');
             // ---------- Phase B: wait for the new gateway process (Railway redeploy of this commit) ----------
             // Railway may already have switched processes before the BEFORE read (seen: new process up 17 s after the push);
             // then the BEFORE totals are what the new process loaded from PostgreSQL at start-up = the pre-restart history.
@@ -750,7 +793,7 @@ jobs:
               check(!around.includes('.'), `${r}: continuous confirmed coverage across the overlapping restart (${around.join('')})`);
             }
             // ---------- Phase C: browser-independent collection (no browser opened by this job yet) ----------
-            const h1 = await hist(); await sleep(180000); const h2 = await hist();
+            const { h1, h2 } = await infra('AFTER', 180000);
             for (const r of ['GC', 'SI']) {
               const a = rootSt(h1, r), b = rootSt(h2, r);
               console.log(`${r} no-browser window ${iso(h1.serverMs)} -> ${iso(h2.serverMs)}: observations ${a.observations} -> ${b.observations}, latest ${iso(a.lastMs)} -> ${iso(b.lastMs)}`);
@@ -805,7 +848,7 @@ jobs:
               console.log(`${r} clock evidence: Databento tsRecv - tsEvent (ms) min=${dbLag[0] && dbLag[0].toFixed(1)} p50=${dbLag[dbLag.length >> 1] && dbLag[dbLag.length >> 1].toFixed(1)} | IBKR gateway-receive - lastUpdate (ms) ${JSON.stringify(lag)} (min = VPS-vs-Railway clock offset + smallest network/poll delay)`);
               console.log(`${r} fine alignment DIAGNOSTIC (250 ms buckets, last 5 min, ${tr2.length} trades): ${fine.map((x) => `${x.o}ms=${(x.r * 100).toFixed(1)}%`).join(' ')} | best ${bestFine.o} ms`);
               check(lag && Math.abs(lag.min) < 250, `${r}: VPS and Railway clocks agree (smallest IBKR receive lag ${lag && lag.min} ms) - no clock / timezone offset`);
-              check(best.o >= 0 && best.o <= 1000 && bestFine.o >= -250, `${r}: recorded IBKR depth is never EARLIER than Databento trades (best shift ${best.o} ms / ${bestFine.o} ms: IBKR receive + 0.5 s poll latency, not corrected)`);
+              check(best.o >= 0 && best.o <= 1000 && bestFine.o >= -250, `${r}: recorded IBKR depth is never EARLIER than Databento trades (best shift ${best.o} ms / ${bestFine.o} ms: IBKR receive + poll latency, not corrected)`);
               check(tr2.length > 20 && Math.max(...fine.filter((x) => x.o >= 0 && x.o <= 750).map((x) => x.r)) >= 0.9, `${r}: price alignment at 250 ms resolution - ${(Math.max(...fine.filter((x) => x.o >= 0 && x.o <= 750).map((x) => x.r)) * 100).toFixed(1)}% of trades inside the stored IBKR best bid/ask ±1 tick within the measured 0-750 ms observation latency`);
               console.log(`${r} timestamp semantics: Databento trade = tsEventNs (CME matching-engine event time, UTC ns since epoch); IBKR depth = lastUpdate (VPS bridge receive time of the IBKR update, UTC ms since epoch). Both absolute UTC - no timezone conversion anywhere; expected skew = IBKR network + bridge latency (tens of ms).`);
               console.log(`${r} alignment DIAGNOSTIC (never used to shift data): ${trades.length} Databento trades (contract ${trades[0] && trades[0].c}) inside stored IBKR best bid/ask ±1 tick of the same 1 s bucket at shift: ${offs.map((x) => `${x.o / 1000}s=${(x.r * 100).toFixed(1)}%`).join(' ')} | best shift ${best.o} ms`);
@@ -865,6 +908,22 @@ jobs:
               console.log(`  ${inst} rendered history: ${iso(a3.d.histFirstT)} -> ${iso(a3.d.histLastT)} bucket ${a3.d.histBucket} ms, ${a3.d.histCols} time buckets, ${a3.d.priceRows} price rows (${a3.d.priceRowTicks} tick/row), missing buckets ${a3.d.missingBuckets}`);
             }
             await b.close();
+            // ---------- Phase G: polling experiment - matched windows just before / after the process switch ----------
+            {
+              const stops = ['GC', 'SI'].map((r) => ((after.recentGaps[r] || []).find((x) => x.reason === 'gateway stopped' && x.i && x.i !== after.instance) || { t: 0 }).t);
+              const aFrom = Math.max(after.processStartedMs, ...stops) + 30000;
+              const L = Math.min(Date.now() - 5000 - aFrom, 45 * 60000);
+              const bTo = after.processStartedMs - 30000;
+              console.log(`\nPOLLING EXPERIMENT matched windows (${(L / 60000).toFixed(1)} min each): BEFORE ${iso(bTo - L)} -> ${iso(bTo)} (previous process only) | AFTER ${iso(aFrom)} -> ${iso(aFrom + L)} (new process only)`);
+              for (const r of ['GC', 'SI']) {
+                for (const [tag, f] of [['BEFORE', bTo - L], ['AFTER', aFrom]]) {
+                  console.log(`${tag} ${r} whole window: ${fmtFine(await fineAlign(r, f, f + L))}`);
+                  const parts = [];
+                  for (let c = f; c + 300000 <= f + L; c += 300000) { const x = await fineAlign(r, c, c + 300000); parts.push(`${(x.fine[3].r * 100).toFixed(0)}/${(x.win * 100).toFixed(0)}%(${x.n})`); }
+                  console.log(`${tag} ${r} per 5 min [0 ms / best 0-750 ms (trades)]: ${parts.join(' ')}`);
+                }
+              }
+            }
             console.log(`\nDEPTH HISTORY RESULT: ${fails ? `FAIL (${fails})` : 'PASS'}`);
             process.exit(fails ? 1 : 0);
           })();
