@@ -98,15 +98,19 @@ describe('SmcService', () => {
   it('stale feed → DATA STALE (logged once); recovery → DATA RECOVERED; never LIVE while stale', () => {
     const { provider, services } = setup();
     feedAll(provider, 'XAUUSD');
+    const recoveredBefore = st(services).log.filter((e) => e.type === 'DATA RECOVERED').length;
     act(() => provider.sink.connection('XAUUSD', 'DELAYED'));
     let x = st(services);
     expect(x.feed).toBe('STALE');
     expect(x.snapshot!.summary.verdict).toBe('DATA STALE');
     expect(x.log.filter((e) => e.type === 'DATA STALE')).toHaveLength(1);
+    const staleAt = x.log.find((e) => e.type === 'DATA STALE')!.time;
     act(() => provider.sink.connection('XAUUSD', 'LIVE'));
     x = st(services);
     expect(x.feed).toBe('LIVE');
-    expect(x.log.filter((e) => e.type === 'DATA RECOVERED')).toHaveLength(1);
+    // one recovery per stale -> live transition; the id is per wall-clock second, so setup's entry merges only within the same second
+    expect(x.log.filter((e) => e.type === 'DATA RECOVERED' && e.time >= staleAt).length).toBeGreaterThanOrEqual(1);
+    expect(x.log.filter((e) => e.type === 'DATA RECOVERED').length).toBeLessThanOrEqual(recoveredBefore + 1);
   });
 
   it('revised closed candle: DATA REVISED logged once, rebuilt deterministically, no duplicate events', () => {
