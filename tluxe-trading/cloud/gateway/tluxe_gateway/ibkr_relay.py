@@ -48,7 +48,11 @@ def _lag_stats(v) -> dict | None:
     if not v:
         return None
     x = sorted(v)
-    return {"n": len(x), "min": x[0], "p50": x[len(x) // 2], "p90": x[int(len(x) * 0.9)], "max": x[-1]}
+    return {"n": len(x), "min": x[0], "p50": x[len(x) // 2], "p90": x[int(len(x) * 0.9)], "p99": x[int(len(x) * 0.99)], "max": x[-1]}
+
+
+LAG_BUCKET_MS = 10
+LAG_BUCKETS = 1000  # 0 .. 10 s in 10 ms buckets; the last bucket also counts everything above
 
 
 class Malformed(ValueError):
@@ -126,6 +130,11 @@ class PullState:
         # Clock / latency evidence: gateway receive time - IBKR lastUpdate for every NEW update (ms). Its minimum is
         # the VPS-to-gateway clock offset plus the smallest network + poll delay (never negative if clocks agree).
         self.recv_lag: collections.deque = collections.deque(maxlen=600)
+        # The same measurement as a cumulative histogram since process start (diagnostics: a client diffs two reads to
+        # get the exact distribution over any window - the deque above only covers the most recent updates).
+        self.lag_hist: collections.Counter = collections.Counter()
+        self.lag_n = 0
+        self.lag_max: int | None = None
 
 
 ACCOUNT_ID = re.compile(r"\b(?:DU|DF|DI|U|F|I)\d{5,10}\b")
@@ -344,7 +353,11 @@ class IbkrRelay:
             p.out_of_order += 1  # an older snapshot never overwrites a newer book
             return
         if p.last_update_ms is None or d["lastUpdateMs"] != p.last_update_ms:
-            p.recv_lag.append(self.now_ms() - d["lastUpdateMs"])
+            lag = self.now_ms() - d["lastUpdateMs"]
+            p.recv_lag.append(lag)
+            p.lag_hist[min(max(int(lag), 0) // LAG_BUCKET_MS, LAG_BUCKETS - 1)] += 1
+            p.lag_n += 1
+            p.lag_max = lag if p.lag_max is None else max(p.lag_max, lag)
         p.errors, p.last_ok_s, p.last_update_ms = 0, self.clock(), d["lastUpdateMs"]
         p.state, p.detail = d["status"], None
         c = d["contract"]
@@ -457,6 +470,7 @@ class IbkrRelay:
             out["roots"][root] = {"state": st, "detail": detail, "valid": self.valid(root), "contract": b.contract, "target": self.targets.get(root),
                                   "lastUpdateMs": pl.last_update_ms, "polls": pl.polls, "outOfOrder": pl.out_of_order, "malformed": pl.malformed,
                                   "receiveLagMs": _lag_stats(pl.recv_lag),
+                                  "receiveLagHist": {"bucketMs": LAG_BUCKET_MS, "n": pl.lag_n, "max": pl.lag_max, "counts": {str(k): v for k, v in sorted(pl.lag_hist.items())}},
                                   "bidLevels": len(b.bids), "askLevels": len(b.asks), "depthSeq": b.seq, "epoch": b.epoch, "lastDepthMs": b.last_depth_ms,
                                   "rowsRequested": r.get("rowsRequested"), "ops": r.get("ops"), "marketMakerField": r.get("marketMakerField"), "resetReason": b.reason}
         return out

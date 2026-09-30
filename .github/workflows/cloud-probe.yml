@@ -677,6 +677,150 @@ jobs:
           })();
           JS
           node ibkr.cjs
+  busy:
+    # Busy-session GC alignment (SI control) on PRODUCTION at 250 ms polling. The alignment formula is the depth job's
+    # 250 ms formula, UNCHANGED. The decision rules below were fixed BEFORE the run (commit of 2026-09-30 06:xx UTC).
+    if: ${{ contains(github.event.head_commit.message, '[busy]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - name: Busy-session alignment - 60 min sample, every consecutive 5-min window, latency distribution, integrity
+        shell: bash
+        run: |
+          cat > busy.cjs <<'JS'
+          const base = 'https://twahatrading.com';
+          const SAMPLE_MIN = 60;
+          // Pre-registered decision rules (not changed after seeing results):
+          const GATE = 0.9;            // overall best-within-0..750 ms >= 90 % (the existing gate formula on the whole sample)
+          const ADEQUATE_N = 100;      // a 5-min window is adequately sampled with >= 100 evaluated trades
+          const MAX_MATERIAL = 1;      // "repeatedly" = 2+ adequately sampled windows whose Wilson 95 % upper bound < 90 %
+          const QUIET_TPM = 33;        // GC trades/min in the 2026-09-29 20:00 UTC quiet sample (318 trades / 9.6 min)
+          let fails = 0;
+          const check = (ok, m) => { console.log(`    ${ok ? 'OK  ' : 'FAIL'} ${m}`); if (!ok) fails++; };
+          const j = async (p) => (await fetch(base + p, { headers: { 'User-Agent': 'tluxe-cloud-probe/1.0' } })).json();
+          const iso = (t) => (t ? new Date(Number(t)).toISOString() : '—');
+          const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+          const hist = async () => j('/api/ibkr/history');
+          const rootSt = (h, r) => h.roots && h.roots[r] && h.roots[r][h.contracts ? h.contracts[r] : Object.keys(h.roots[r])[0]];
+          const OFFS = [-1000, -500, -250, 0, 250, 500, 750, 1000, 1500];
+          // All Databento trades of [from, to) (paged back by transport index until the window start is covered).
+          const tradesIn = async (r, from, to) => {
+            const head = await j(`/api/databento/v1/trades/${r}?after=0&limit=1`);
+            let hi = head.lastIndex, all = [];
+            for (let k = 0; k < 40; k++) {
+              const after = Math.max(0, hi - 20000);
+              const tr = await j(`/api/databento/v1/trades/${r}?after=${after}&limit=20000`);
+              all = tr.trades.concat(all);
+              const oldest = tr.trades.length ? Math.floor(tr.trades[0].tsEventNs / 1e6) : null;
+              if (after === 0 || oldest === null || oldest <= from) break;
+              hi = after;
+            }
+            const seen = new Set();
+            return all.filter((x) => (seen.has(x.i) ? false : seen.add(x.i))).map((x) => ({ t: Math.floor(x.tsEventNs / 1e6), p: x.price, c: x.contract })).filter((x) => x.t >= from && x.t < to);
+          };
+          // The depth job's 250 ms alignment formula, unchanged: trade inside the stored IBKR best bid / ask +-1 tick of the
+          // 250 ms bucket at (trade time + offset).
+          const book250 = async (r, from, to) => {
+            const cols = [];
+            for (let f = from; f < to; f += 600000) cols.push(...(await j(`/api/ibkr/heatmap?root=${r}&from=${Math.floor(f)}&to=${Math.ceil(Math.min(to, f + 600000))}&bucket=250`)).columns);
+            return new Map(cols.map((c) => [c[0], { bb: Math.max(...c[2].map((x) => x[0])), ba: Math.min(...c[3].map((x) => x[0])) }]));
+          };
+          const align = (tr, book, tick) => {
+            const rate2 = (off) => { let n = 0, ok = 0; for (const x of tr) { const b = book.get(Math.floor((x.t + off) / 250) * 250); if (!b || !isFinite(b.bb) || !isFinite(b.ba)) continue; n++; if (x.p >= b.bb - tick * 1.01 && x.p <= b.ba + tick * 1.01) ok++; } return { n, r: n ? ok / n : 0 }; };
+            const fine = OFFS.map((o) => ({ o, ...rate2(o) }));
+            const best = fine.reduce((a, b) => (b.r > a.r || (b.r === a.r && Math.abs(b.o) < Math.abs(a.o)) ? b : a));
+            const gate = fine.filter((x) => x.o >= 0 && x.o <= 750).reduce((a, b) => (b.r > a.r ? b : a));
+            return { fine, best, gate, trades: tr.length };
+          };
+          const wilson = (p, n) => { if (!n) return [0, 1]; const z = 1.96, d = 1 + z * z / n, c = p + z * z / (2 * n), m = z * Math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)); return [(c - m) / d, (c + m) / d]; };
+          const pct = (x) => `${(x * 100).toFixed(1)}%`;
+          const at = (a, o) => a.fine.find((x) => x.o === o);
+          // Latency distribution over the sample: difference of the gateway's cumulative 10 ms receive-lag histograms.
+          const lagDiff = (h0, h1) => {
+            const c = {}; let n = 0;
+            for (const [k, v] of Object.entries(h1.counts || {})) { const d = v - ((h0.counts || {})[k] || 0); if (d > 0) { c[k] = d; n += d; } }
+            const ks = Object.keys(c).map(Number).sort((a, b) => a - b);
+            const q = (p) => { let acc = 0; for (const k of ks) { acc += c[k]; if (acc >= p * n) return (k + 1) * h1.bucketMs; } return null; };
+            return { n, p50: q(0.5), p90: q(0.9), p99: q(0.99), max: ks.length ? (ks.at(-1) + 1) * h1.bucketMs : null };
+          };
+          (async () => {
+            const jobStart = Date.now();
+            // ---------- 1. wait for this push's gateway process to be the only one recording (after Railway's overlap) ----------
+            const h0 = await hist();
+            let cur = h0.instance && h0.processStartedMs > jobStart - 120000 ? h0 : null;
+            for (let k = 0; !cur && k < 180; k++) { await sleep(15000); try { const h = await hist(); if (h.instance && h.instance !== h0.instance) cur = h; } catch {} }
+            check(!!cur, `deployed gateway process running (${cur && cur.instance}, started ${iso(cur && cur.processStartedMs)})`);
+            if (!cur) process.exit(1);
+            for (let k = 0; k < 40; k++) { const h = await hist(); if (['GC', 'SI'].every((r) => (h.recentGaps[r] || []).some((g) => g.reason === 'gateway stopped' && g.i && g.i !== cur.instance && g.t > cur.processStartedMs - 180000))) break; await sleep(15000); }
+            await sleep(30000);
+            // ---------- 2. the sample: SAMPLE_MIN minutes of live collection, status read every 60 s ----------
+            const s0 = await j('/api/ibkr/status'), a0 = await hist(), d0 = await Promise.all(['GC', 'SI'].map((r) => j(`/api/databento/status?root=${r}`)));
+            const T0 = a0.serverMs;
+            const states = { GC: {}, SI: {} };
+            for (let k = 0; k < SAMPLE_MIN; k++) {
+              await sleep(60000);
+              try { const s = await j('/api/ibkr/status'); for (const r of ['GC', 'SI']) states[r][s.roots[r].state] = (states[r][s.roots[r].state] || 0) + 1; } catch { for (const r of ['GC', 'SI']) states[r].UNREACHABLE = (states[r].UNREACHABLE || 0) + 1; }
+            }
+            const s1 = await j('/api/ibkr/status'), a1 = await hist(), d1 = await Promise.all(['GC', 'SI'].map((r) => j(`/api/databento/status?root=${r}`)));
+            const T1 = a1.serverMs, sec = (T1 - T0) / 1000;
+            const sameProc = a0.instance === a1.instance;
+            console.log(`\nBUSY SESSION SAMPLE ${iso(T0)} -> ${iso(T1)} (${(sec / 60).toFixed(1)} min) gateway instance ${a0.instance}${sameProc ? '' : ` -> ${a1.instance} (process changed: rates / latency invalid)`}; IBKR polling 250 ms`);
+            console.log(`PRE-REGISTERED RULES: overall best-within-0..750 ms >= ${GATE * 100}% | adequate window n >= ${ADEQUATE_N} evaluated trades | material failure = adequate AND Wilson 95% upper < 90% | FAIL if > ${MAX_MATERIAL} material failures | busy = GC >= ${2 * QUIET_TPM} trades/min (2x the ${QUIET_TPM}/min quiet sample)`);
+            check(sameProc, 'one gateway process for the whole sample');
+            const verdict = {};
+            ['GC', 'SI'].forEach((r, i) => {
+              const x0 = s0.roots[r], x1 = s1.roots[r], p0 = rootSt(a0, r), p1 = rootSt(a1, r);
+              const lag = lagDiff(x0.receiveLagHist, x1.receiveLagHist);
+              console.log(`\n${r} FEED: IBKR states per minute ${JSON.stringify(states[r])} | depth snapshots/s ${((x1.polls - x0.polls) / sec).toFixed(2)} | level changes/s ${((x1.depthSeq - x0.depthSeq) / sec).toFixed(2)} | IBKR depth observations stored ${p1.observations - p0.observations} (${((p1.observations - p0.observations) / sec).toFixed(2)}/s) | gap events ${p1.gaps - p0.gaps} ${JSON.stringify((a1.recentGaps[r] || []).filter((g) => g.t >= T0 && g.t <= T1).map((g) => [iso(g.t), g.reason, g.i]))} | Databento trades received ${d1[i].received.trades - d0[i].received.trades}, state ${d1[i].state} / ${d1[i].freshness}, contract ${d1[i].activeContract}`);
+              console.log(`${r} RECEIVE LAG over the sample (gateway receive - IBKR lastUpdate, 10 ms buckets, ${lag.n} updates): p50 ${lag.p50} ms | p90 ${lag.p90} ms | p99 ${lag.p99} ms | max ${lag.max} ms`);
+              check(Object.keys(states[r]).every((k) => k === 'LIVE'), `${r}: IBKR LIVE at every one-minute read (${JSON.stringify(states[r])})`);
+              check(d1[i].freshness === 'LIVE' && d1[i].received.trades > d0[i].received.trades, `${r}: Databento trades LIVE and updating`);
+              check(p1.observations > p0.observations && a1.writeErrors === a0.writeErrors, `${r}: PostgreSQL recording (+${p1.observations - p0.observations} observations), write errors +${a1.writeErrors - a0.writeErrors}`);
+              check(x1.malformed === x0.malformed && x1.outOfOrder === x0.outOfOrder, `${r}: malformed +${x1.malformed - x0.malformed}, out-of-order +${x1.outOfOrder - x0.outOfOrder}`);
+              verdict[r] = { lag };
+            });
+            // ---------- 3. alignment over the whole sample and every consecutive 5-min window ----------
+            for (const r of ['GC', 'SI']) {
+              const tick = r === 'GC' ? 0.1 : 0.005;
+              const tr = await tradesIn(r, T0, T1 - 2000);
+              const book = await book250(r, T0, T1);
+              const m1 = await j(`/api/ibkr/heatmap?root=${r}&from=${T0}&to=${T1}&bucket=1000`);
+              const ts = m1.columns.map((c) => c[0]);
+              const offGrid = m1.columns.flatMap((c) => c[2].concat(c[3])).filter(([p]) => Math.abs(p / tick - Math.round(p / tick)) > 1e-6).length;
+              const contracts = [...new Set(tr.map((x) => x.c))];
+              check(ts.length - new Set(ts).size === 0 && offGrid === 0, `${r}: 1 s matrix over the sample - ${ts.length} columns, duplicates ${ts.length - new Set(ts).size}, off-tick prices ${offGrid}`);
+              check(contracts.length === 1 && contracts[0] === m1.contract, `${r}: Databento trades contract ${contracts.join(',')} = stored IBKR depth contract ${m1.contract} (no substitution)`);
+              const all = align(tr, book, tick);
+              const tpm = tr.length / (sec / 60);
+              const [lo, hi] = wilson(all.gate.r, all.gate.n);
+              console.log(`\n${r} OVERALL ${iso(T0)} -> ${iso(T1)}: ${tr.length} Databento trades (${tpm.toFixed(1)}/min), ${all.gate.n} evaluated | 0 ms ${pct(at(all, 0).r)} | +250 ${pct(at(all, 250).r)} | +500 ${pct(at(all, 500).r)} | +750 ${pct(at(all, 750).r)} | best ${pct(all.best.r)} at ${all.best.o} ms | gate (best within 0-750) ${pct(all.gate.r)} at ${all.gate.o} ms, 95% CI ${pct(lo)}-${pct(hi)} | all offsets: ${all.fine.map((x) => `${x.o}=${pct(x.r)}`).join(' ')}`);
+              console.log(`${r} 5-MIN WINDOWS (window start | trades | evaluated | 0 ms | +250 | +500 | +750 | best (offset) | gate | 95% CI | class):`);
+              let material = 0, adequate = 0, below = 0;
+              for (let w = T0; w + 300000 <= T1 + 1000; w += 300000) {
+                const sub = tr.filter((x) => x.t >= w && x.t < w + 300000);
+                const a = align(sub, book, tick);
+                const [l, h] = wilson(a.gate.r, a.gate.n);
+                const ad = a.gate.n >= ADEQUATE_N;
+                const cls = !ad ? 'LOW SAMPLE' : a.gate.r >= GATE ? 'pass' : h < GATE ? 'MATERIAL FAIL' : 'below 90% - within noise';
+                if (ad) adequate++;
+                if (ad && a.gate.r < GATE) below++;
+                if (cls === 'MATERIAL FAIL') material++;
+                console.log(`  ${iso(w).slice(11, 19)} | ${String(sub.length).padStart(5)} | ${String(a.gate.n).padStart(5)} | ${pct(at(a, 0).r).padStart(6)} | ${pct(at(a, 250).r).padStart(6)} | ${pct(at(a, 500).r).padStart(6)} | ${pct(at(a, 750).r).padStart(6)} | ${pct(a.best.r)} (${a.best.o} ms) | ${pct(a.gate.r)} | ${pct(l)}-${pct(h)} | ${cls}`);
+              }
+              const busy = tpm >= 2 * QUIET_TPM;
+              console.log(`${r} SUMMARY: adequately sampled windows ${adequate}, below 90% ${below}, material failures ${material} | sample ${busy ? 'BUSY' : 'NOT busy'} (${tpm.toFixed(1)} trades/min vs quiet ${QUIET_TPM}/min)`);
+              verdict[r] = { ...verdict[r], overall: all.gate.r, material, busy };
+              if (r === 'GC') {
+                check(busy, `GC: sample qualifies as busy (${tpm.toFixed(1)} trades/min >= ${2 * QUIET_TPM})`);
+                check(all.gate.r >= GATE, `GC: overall alignment ${pct(all.gate.r)} >= 90% (n=${all.gate.n})`);
+                check(material <= MAX_MATERIAL, `GC: material window failures ${material} <= ${MAX_MATERIAL}`);
+              } else console.log(`    CONTROL SI: overall ${pct(all.gate.r)}, material failures ${material}`);
+            }
+            console.log(`\nBUSY SESSION RESULT: ${fails ? `FAIL (${fails})` : 'PASS'}`);
+            process.exit(fails ? 1 : 0);
+          })();
+          JS
+          node busy.cjs
   depth:
     # Server-side IBKR depth history on PRODUCTION. Phase A records the running (old) gateway, this push's redeploy is the
     # controlled restart, then: restart survival, browser-independent collection, alignment, refresh, second device.

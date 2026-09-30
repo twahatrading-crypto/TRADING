@@ -811,6 +811,18 @@ class TestIbkrPullRelay(unittest.TestCase):
             self.run_(r.ingest("GC", body))  # same lastUpdate, status LIVE
         self.assertEqual((r.root_state("GC")[0], r.valid("GC")), ("LIVE", True))
 
+    def test_receive_lag_histogram_counts_every_new_update(self):
+        # Diagnostics only: gateway receive time - lastUpdate, per NEW update, cumulative in 10 ms buckets.
+        r = self.relay
+        for lag_ms in (40, 190, 200, 530):  # lastUpdate stays increasing (an older one is rejected as out of order)
+            self.run_(r.ingest("GC", depth_body("GC", age_s=time.time() - self.now + lag_ms / 1000)))
+            self.now += 0.5
+        h = r.status()["roots"]["GC"]["receiveLagHist"]
+        self.assertEqual((h["bucketMs"], h["n"]), (10, 4))
+        self.assertEqual(sum(h["counts"].values()), 4)
+        self.assertEqual(h["max"], r.status()["roots"]["GC"]["receiveLagMs"]["max"])
+        self.assertIn("p99", r.status()["roots"]["GC"]["receiveLagMs"])
+
     def test_a_frozen_feed_is_stale(self):
         r = self.relay
         self.run_(r.ingest("GC", depth_body("GC", age_s=time.time() - self.now + 700)))  # not one change for > 600 s
