@@ -677,6 +677,41 @@ jobs:
           })();
           JS
           node ibkr.cjs
+  capture:
+    # Read-only copy of real recorded GC depth + trades (public read-only endpoints) into the log (gzip + base64 chunks),
+    # so a renderer change can be checked locally on real data before it is deployed. Nothing is written anywhere.
+    if: ${{ contains(github.event.head_commit.message, '[capture]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Capture recorded GC depth matrix + trades (read only)
+        shell: bash
+        run: |
+          cat > cap.cjs <<'JS'
+          const zlib = require('zlib');
+          const base = 'https://twahatrading.com';
+          const j = async (p) => (await fetch(base + p, { headers: { 'User-Agent': 'tluxe-cloud-probe/1.0' } })).json();
+          const out = (name, obj) => {
+            const b = zlib.gzipSync(Buffer.from(JSON.stringify(obj))).toString('base64');
+            const n = Math.ceil(b.length / 60000);
+            for (let i = 0; i < n; i++) console.log(`CAPT ${name} ${i + 1}/${n} ${b.slice(i * 60000, (i + 1) * 60000)}`);
+            console.log(`captured ${name}: ${b.length} base64 chars`);
+          };
+          (async () => {
+            const now = Date.now();
+            for (const r of ['GC']) {
+              out(`${r}-m1000`, await j(`/api/ibkr/heatmap?root=${r}&from=${now - 45 * 60000}&to=${now}&bucket=1000`));
+              out(`${r}-m5000`, await j(`/api/ibkr/heatmap?root=${r}&from=${now - 4 * 3600000}&to=${now}&bucket=5000`));
+              out(`${r}-cov`, await j(`/api/ibkr/coverage?root=${r}&from=${now - 3600000}&to=${now}`));
+              const head = await j(`/api/databento/v1/trades/${r}?after=0&limit=1`);
+              const tr = await j(`/api/databento/v1/trades/${r}?after=${Math.max(0, head.lastIndex - 20000)}&limit=20000`);
+              out(`${r}-trades`, tr);
+              out(`${r}-book`, await j(`/api/ibkr/book?root=${r}`));
+            }
+            console.log('CAPTURE DONE', new Date(now).toISOString());
+          })();
+          JS
+          node cap.cjs
   busy:
     # Busy-session GC alignment (SI control) on PRODUCTION at 250 ms polling. The alignment formula is the depth job's
     # 250 ms formula, UNCHANGED. The decision rules below were fixed BEFORE the run (commit of 2026-09-30 06:xx UTC).
