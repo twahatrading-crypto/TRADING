@@ -117,7 +117,7 @@ function MapWorkspace() {
   const [view, setView] = useState<LiquidityMapView | null>(null);
   const [hover, setHover] = useState<HoverInfo | null>(null);
   const frameRef = useRef<MapFrame | null>(null);
-  frameRef.current = { cols, result, candles, book, lastPriceTick, showCandles: s.candles, showHeat: s.heat, showDepth: s.depth, strongOnly: s.strongOnly, showLabels: s.labels, gain: s.gain, strong, depthLive, version: (frameRef.current?.version ?? 0) + 1 };
+  frameRef.current = { cols, result, candles, book, bookUpdateMs: liveBook?.lastUpdateMs ?? null, lastPriceTick, showCandles: s.candles, showHeat: s.heat, showDepth: s.depth, strongOnly: s.strongOnly, showLabels: s.labels, gain: s.gain, strong, depthLive, version: (frameRef.current?.version ?? 0) + 1 };
   const hasData = isGc && (candles.length > 0 || cols.length > 0);
   useEffect(() => {
     const host = hostRef.current;

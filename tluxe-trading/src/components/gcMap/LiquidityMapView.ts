@@ -29,6 +29,8 @@ export interface MapFrame {
   candles: readonly MapCandle[];
   /** Current visible IBKR book (null = not LIVE / no valid book). */
   book: { bids: DepthRow[]; asks: DepthRow[] } | null;
+  /** IBKR lastUpdate of that book (ms) - diagnostics only. */
+  bookUpdateMs?: number | null;
   lastPriceTick: number | null;
   showCandles: boolean;
   showHeat: boolean;
@@ -340,7 +342,31 @@ export class LiquidityMapView implements ChartNavigable {
     return ((v.p1 - tick) / (v.p1 - v.p0)) * this.plotH();
   }
 
+  /**
+   * Read-only diagnostics of what this frame shows, as data attributes on the canvas (no values beyond what is drawn):
+   * the CURRENT DEPTH rows + their IBKR lastUpdate, the recorded heat extent and the uncovered (gap) intervals.
+   * Lets an external check compare the drawn profile with /api/ibkr/book and confirm gaps are not painted.
+   */
+  private diagnostics(f: MapFrame): void {
+    const ds = this.canvas.dataset;
+    const tk = this.opts.tickSize;
+    const px = (t: number) => Number((t * tk).toFixed(this.opts.decimals));
+    ds.depth = f.book ? JSON.stringify({ updateMs: f.bookUpdateMs ?? null, bids: f.book.bids.map((r) => [px(r.tick), r.size]), asks: f.book.asks.map((r) => [px(r.tick), r.size]) }) : 'none';
+    const r = f.result;
+    const last = f.cols[f.cols.length - 1];
+    ds.heatCols = String(f.cols.length);
+    ds.heatCells = String(r?.cells.length ?? 0);
+    ds.heatFirstMs = String(f.cols[0]?.t ?? '');
+    ds.heatLastMs = last ? String(last.valid.length ? last.valid[last.valid.length - 1]! : last.t + last.w) : '';
+    ds.bucketMs = String(last?.w ?? '');
+    const holes: [number, number][] = [];
+    const cov = r?.covered ?? [];
+    for (let i = 1; i < cov.length; i++) holes.push([cov[i - 1]![1], cov[i]![0]]);
+    ds.gaps = JSON.stringify(holes);
+  }
+
   draw(f: MapFrame): void {
+    if (this.vp) this.diagnostics(f);
     const g = this.ctx;
     if (!g || !this.vp || this.w < 20) return;
     this.index(f);

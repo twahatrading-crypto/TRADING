@@ -97,4 +97,11 @@ describe('GC Liquidity Map view', () => {
     const { rec } = draw(frame({ depthLive: true, book: { bids: [], asks: [] } }));
     expect(rec.texts.some((t) => /BUY|SELL|SUPPORT|RESISTANCE|%/i.test(t))).toBe(false);
   });
+  it('diagnostics on the canvas: drawn depth rows + gaps (read-only, what is drawn)', () => {
+    const { v } = draw(frame({ book: { bids: [{ tick: 999, size: 7 }], asks: [{ tick: 1000, size: 14 }] }, bookUpdateMs: 123, depthLive: true }));
+    const ds = (v as unknown as { canvas: HTMLCanvasElement }).canvas.dataset;
+    expect(JSON.parse(ds.depth!)).toEqual({ updateMs: 123, bids: [[99.9, 7]], asks: [[100, 14]] });
+    expect(JSON.parse(ds.gaps!)).toEqual([[T0 + 20_000, T0 + 50_000]]);
+    expect(ds.heatCols).toBe('40');
+  });
 });
