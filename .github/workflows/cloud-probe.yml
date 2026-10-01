@@ -1024,7 +1024,7 @@ jobs:
               const html = await (await fetch(base + '/', { headers: UA })).text();
               const m = html.match(/\/assets\/index-[^"']+\.js/);
               asset = m ? m[0] : '';
-              if (asset) { const js = await (await fetch(base + asset, { headers: UA })).text(); deployed = js.includes('250 ms RECORDED DEPTH NOT CURRENT') && js.includes('LIVE SESSION'); }
+              if (asset) { const js = await (await fetch(base + asset, { headers: UA })).text(); deployed = js.includes('250 ms RECORDED DEPTH NOT CURRENT') && js.includes('LIVE SESSION') && js.includes('LOADING RECORDED DEPTH'); }
               console.log(`deploy ${i}: bundle=${asset} new=${deployed}`);
               if (!deployed) await sleep(20000);
             }
