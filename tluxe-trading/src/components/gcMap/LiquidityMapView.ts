@@ -1,5 +1,6 @@
 import type { ChartNavigable } from '../chart/ChartStage';
-import { heatColor, intensityOf, isStrong, strongRunCells, type MapCell, type MapColumn, type MapResult, type StrongParams } from './liquidityMap';
+import { strongRunCells, type MapCell, type MapColumn, type MapResult, type StrongParams } from './liquidityMap';
+import { SESSION_MIN_SPAN_MS } from './viewRange';
 
 /* ============================================================================
  * GC Liquidity Map canvas (this page only). Draws, from data it is handed and never alters:
@@ -7,7 +8,10 @@ import { heatColor, intensityOf, isStrong, strongRunCells, type MapCell, type Ma
  *     intensity (never a side / direction / signal), only inside recorded-valid time; depth gaps are hatched;
  *   - real Databento candles (narrow), the current price line + tag;
  *   - a CURRENT DEPTH profile column from the live visible IBKR book only (bid / ask distinct);
- *   - compact labels for strong levels that are displayed NOW.
+ *   - the qualified STRONG LIQUIDITY NOW levels (handed in by the page, never computed here): their recorded band is
+ *     outlined back to where its run started and labelled at the live edge.
+ * The visible time window follows the page's choice (LIVE SESSION = the current continuous recorded-depth session,
+ * or a fixed span); wheel / drag change the view only.
  * ========================================================================== */
 
 export interface MapCandle {
@@ -41,8 +45,19 @@ export interface MapFrame {
   strong: StrongParams;
   /** End of confirmed recorded coverage when depth is not live (the NO DEPTH DATA region starts there). */
   depthLive: boolean;
+  /** STRONG LIQUIDITY NOW rows exactly as the page lists them (display only: outlined + labelled, never re-scored). */
+  strongNow?: readonly StrongNowRow[];
   version: number;
 }
+export interface StrongNowRow {
+  side: 'ASK' | 'BID';
+  tick: number;
+  size: number;
+  relative: number;
+  observedMs: number;
+}
+/** What the visible time window follows: the current depth session (start grows with it) or a fixed span to now. */
+export type ViewRange = { kind: 'session'; start: number } | { kind: 'span'; ms: number };
 export interface Viewport {
   t0: number;
   t1: number;
@@ -58,14 +73,48 @@ export interface HoverInfo {
 
 export const AXIS_RIGHT = 66;
 export const AXIS_BOTTOM = 22;
-/** CURRENT DEPTH column share of the drawing width (the chart keeps ~84 %). */
-export const PROFILE_SHARE = 0.16;
-export const DEFAULT_SPAN_MS = 6 * 3600_000;
+/** CURRENT DEPTH column share of the drawing width (the time chart keeps ~87 %). */
+export const PROFILE_SHARE = 0.13;
+export const DEFAULT_SPAN_MS = 3600_000;
 const DEFAULT_TICKS = 260;
 const ZOOM = 1.25;
 const FONT = '"Inter Variable", Inter, system-ui, sans-serif';
 const MONO = '"JetBrains Mono", ui-monospace, monospace';
 const BG = '#060a12';
+const ASK_RGB = '244,63,94';
+const BID_RGB = '16,185,129';
+
+/**
+ * Display colour scale of this page. ratio = displayed size / the reference size of the loaded window (its 99th
+ * percentile, from the analysis) x Intensity. Colour = displayed liquidity intensity ONLY (never side / direction):
+ * weak = dark subtle blue, moderate = blue / cyan, strong = yellow, very strong = orange, exceptional = red / white-hot.
+ */
+export const PALETTE: readonly (readonly [number, readonly [number, number, number], number])[] = [
+  [0, [12, 26, 64], 0.06],
+  [0.3, [28, 58, 160], 0.3],
+  [0.5, [37, 99, 235], 0.55],
+  [0.65, [34, 211, 238], 0.72],
+  [0.85, [250, 204, 21], 0.9],
+  [1.1, [249, 115, 22], 0.96],
+  [1.4, [239, 68, 68], 1],
+  [1.9, [255, 245, 235], 1],
+];
+export const PALETTE_MAX = 1.9;
+export const SCALE_NAMES: readonly (readonly [string, number])[] = [['Weak', 0], ['Moderate', 0.5], ['Strong', 0.85], ['Very strong', 1.1], ['Exceptional', 1.4]];
+/** Colour + opacity for a size ratio (pure). */
+export function paletteAt(ratio: number): { rgb: [number, number, number]; a: number } {
+  const r = Math.max(0, Math.min(PALETTE_MAX, ratio));
+  for (let i = 1; i < PALETTE.length; i++) {
+    const [x1, c1, a1] = PALETTE[i]!;
+    if (r <= x1) {
+      const [x0, c0, a0] = PALETTE[i - 1]!;
+      const k = (r - x0) / (x1 - x0);
+      return { rgb: [0, 1, 2].map((j) => Math.round(c0[j]! + (c1[j]! - c0[j]!) * k)) as [number, number, number], a: a0 + (a1 - a0) * k };
+    }
+  }
+  const last = PALETTE[PALETTE.length - 1]!;
+  return { rgb: [...last[1]] as [number, number, number], a: last[2] };
+}
 
 type Raf = { request(cb: () => void): number; cancel(id: number): void };
 const defaultRaf = (): Raf =>
@@ -74,6 +123,13 @@ const defaultRaf = (): Raf =>
 export class LiquidityMapView implements ChartNavigable {
   vp: Viewport | null = null;
   follow = true;
+  /** The page's window choice; `anchored` = still showing exactly it (false after a wheel zoom). */
+  private range: ViewRange = { kind: 'span', ms: DEFAULT_SPAN_MS };
+  /** Nothing is shown (or requested) until the page has chosen the window: one resolution request, not two. */
+  private rangeSet = false;
+  private anchored = true;
+  /** Span last reported to the page (a growing LIVE SESSION re-reports only after a 10 % change: resolution). */
+  private emittedSpan = 0;
   private autoPrice = true;
   private canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D | null;
@@ -89,6 +145,8 @@ export class LiquidityMapView implements ChartNavigable {
   private readonly raf: Raf;
   /** Labels drawn in the last frame (tests / diagnostics). */
   lastLabels: string[] = [];
+  /** Strong-now bands outlined in the last frame (tests / diagnostics). */
+  strongRuns: { side: 'ASK' | 'BID'; tick: number; start: number }[] = [];
   /** Per-column caches of the current analysis (mid tick, cells) - rebuilt when the analysis object changes. */
   private cacheFor: MapResult | null = null;
   private mids: (number | null)[] = [];
@@ -112,7 +170,7 @@ export class LiquidityMapView implements ChartNavigable {
   constructor(
     private readonly host: HTMLElement,
     private readonly frame: () => MapFrame,
-    private readonly opts: { tickSize: number; decimals: number; now?: () => number; raf?: Raf; onViewport?: (v: Viewport | null, plotPx: number) => void; onHover?: (h: HoverInfo | null) => void },
+    private readonly opts: { tickSize: number; decimals: number; now?: () => number; raf?: Raf; onViewport?: (v: Viewport | null, plotPx: number) => void; onHover?: (h: HoverInfo | null) => void; onReset?: () => void },
   ) {
     this.raf = opts.raf ?? defaultRaf();
     this.canvas = document.createElement('canvas');
@@ -187,7 +245,10 @@ export class LiquidityMapView implements ChartNavigable {
   private set(vp: Viewport | null, emit = true): void {
     this.vp = vp;
     this.dirty = true;
-    if (emit) this.opts.onViewport?.(vp, this.plotW());
+    if (emit) {
+      this.emittedSpan = vp ? vp.t1 - vp.t0 : 0;
+      this.opts.onViewport?.(vp, this.plotW());
+    }
   }
   private centreTick(): number | null {
     const f = this.frame();
@@ -195,16 +256,37 @@ export class LiquidityMapView implements ChartNavigable {
     const c = f.candles[f.candles.length - 1];
     return c ? Math.round(c.c / this.opts.tickSize) : null;
   }
+  /** Reset View: back to the page's default window (LIVE SESSION) - the page is told, then the window is applied. */
   resetView(): void {
-    this.follow = true;
-    this.autoPrice = true;
-    const c = this.centreTick();
-    if (c === null) return this.set(null);
-    const t1 = this.now() + lookAhead(DEFAULT_SPAN_MS);
-    this.set({ t0: t1 - DEFAULT_SPAN_MS, t1, p0: c - DEFAULT_TICKS / 2, p1: c + DEFAULT_TICKS / 2 });
+    this.opts.onReset?.();
+    this.applyRange();
   }
   fitView(): void {
-    this.resetView();
+    this.applyRange();
+  }
+  /** Report the current window to the page again (it re-requests recorded depth that did not arrive). */
+  reportViewport(): void {
+    if (this.vp) this.opts.onViewport?.(this.vp, this.plotW());
+  }
+  /** The page chose a window. `apply` = show it now (a click); otherwise only the live anchor moves (session update). */
+  setRange(r: ViewRange, apply: boolean): void {
+    this.range = r;
+    this.rangeSet = true;
+    if (apply || !this.vp) this.applyRange();
+  }
+  /** [t0, t1] of the chosen window at `now` (view only). */
+  windowOf(now: number): { t0: number; t1: number } {
+    const span = this.range.kind === 'span' ? this.range.ms : Math.max(SESSION_MIN_SPAN_MS, now - this.range.start);
+    return { t0: now - span, t1: now + lookAhead(span) };
+  }
+  private applyRange(): void {
+    this.follow = true;
+    this.autoPrice = true;
+    this.anchored = true;
+    const c = this.centreTick();
+    if (c === null) return this.set(null);
+    const { t0, t1 } = this.windowOf(this.now());
+    this.set({ t0, t1, p0: c - DEFAULT_TICKS / 2, p1: c + DEFAULT_TICKS / 2 });
   }
   /** Fix the view to a window (no live following until reset). View state only. */
   pin(vp: Viewport): void {
@@ -213,11 +295,11 @@ export class LiquidityMapView implements ChartNavigable {
     this.set({ ...vp });
   }
   zoomIn(): void {
-    if (!this.vp) this.resetView();
+    if (!this.vp) this.applyRange();
     this.zoomTime(1 / ZOOM, null);
   }
   zoomOut(): void {
-    if (!this.vp) this.resetView();
+    if (!this.vp) this.applyRange();
     this.zoomTime(ZOOM, null);
   }
   private zoomTime(f: number, anchor: number | null): void {
@@ -227,6 +309,7 @@ export class LiquidityMapView implements ChartNavigable {
     const next = Math.min(Math.max(span * f, 5 * 60_000), 10 * 86_400_000);
     const a = anchor ?? (this.follow ? v.t1 : (v.t0 + v.t1) / 2);
     const k = (a - v.t0) / span;
+    this.anchored = false;
     this.set({ ...v, t0: a - k * next, t1: a - k * next + next });
   }
   private zoomPrice(f: number, anchor: number | null): void {
@@ -239,7 +322,7 @@ export class LiquidityMapView implements ChartNavigable {
     this.autoPrice = false;
     this.set({ ...v, p0: a - k * next, p1: a - k * next + next });
   }
-  /** Auto price range: candles of the window (display only). */
+  /** Auto price range: candles of the window + the live book + the last price (display only). */
   private autoFit(): void {
     const v = this.vp;
     if (!v) return;
@@ -250,6 +333,15 @@ export class LiquidityMapView implements ChartNavigable {
       if (c.t + c.ms < v.t0 || c.t > v.t1) continue;
       lo = Math.min(lo, c.l / this.opts.tickSize);
       hi = Math.max(hi, c.h / this.opts.tickSize);
+    }
+    // The live book and the last price are always in view (CURRENT DEPTH must never sit off-screen).
+    for (const r of [...(f.book?.bids ?? []), ...(f.book?.asks ?? [])]) {
+      lo = Math.min(lo, r.tick);
+      hi = Math.max(hi, r.tick);
+    }
+    if (f.lastPriceTick !== null) {
+      lo = Math.min(lo, f.lastPriceTick);
+      hi = Math.max(hi, f.lastPriceTick);
     }
     if (!Number.isFinite(lo)) return;
     const pad = Math.max(10, (hi - lo) * 0.12);
@@ -320,10 +412,19 @@ export class LiquidityMapView implements ChartNavigable {
       this.lastVersion = f.version;
       this.dirty = true;
     }
-    if (!this.vp) this.resetView();
+    if (!this.vp && this.rangeSet) this.applyRange();
     if (this.vp && this.follow) {
-      const t1 = this.now() + lookAhead(this.vp.t1 - this.vp.t0);
-      if (Math.abs(t1 - this.vp.t1) > 1000) this.set({ ...this.vp, t0: this.vp.t0 + (t1 - this.vp.t1), t1 }, false);
+      if (this.anchored) {
+        // The chosen window, moved to now (LIVE SESSION keeps its start and grows with the session).
+        const w = this.windowOf(this.now());
+        if (Math.abs(w.t1 - this.vp.t1) > 1000 || Math.abs(w.t0 - this.vp.t0) > 1000) {
+          const span = w.t1 - w.t0;
+          this.set({ ...this.vp, ...w }, Math.abs(span - this.emittedSpan) > 0.1 * Math.max(1, this.emittedSpan));
+        }
+      } else {
+        const t1 = this.now() + lookAhead(this.vp.t1 - this.vp.t0);
+        if (Math.abs(t1 - this.vp.t1) > 1000) this.set({ ...this.vp, t0: this.vp.t0 + (t1 - this.vp.t1), t1 }, false);
+      }
     }
     if (this.autoPrice) this.autoFit();
     if (this.dirty) {
@@ -363,6 +464,18 @@ export class LiquidityMapView implements ChartNavigable {
     const cov = r?.covered ?? [];
     for (let i = 1; i < cov.length; i++) holes.push([cov[i - 1]![1], cov[i]![0]]);
     ds.gaps = JSON.stringify(holes);
+    // Viewport: the visible window and how much of it (up to now) has recorded-valid depth.
+    const v = this.vp!;
+    const end = Math.min(v.t1, this.now());
+    let rec = 0;
+    for (const [a, b] of r?.covered ?? []) rec += Math.max(0, Math.min(b, end) - Math.max(a, v.t0));
+    ds.vpT0 = String(Math.round(v.t0));
+    ds.vpT1 = String(Math.round(v.t1));
+    ds.range = this.range.kind === 'session' ? `session:${this.range.start}` : `span:${this.range.ms}`;
+    ds.recordedShare = end > v.t0 ? (rec / (end - v.t0)).toFixed(3) : '0';
+    ds.plotShare = (this.plotW() / Math.max(1, this.w)).toFixed(3);
+    ds.profileShare = (this.profileW() / Math.max(1, this.w)).toFixed(3);
+    ds.strongRuns = JSON.stringify(this.strongRuns);
   }
 
   draw(f: MapFrame): void {
@@ -381,6 +494,8 @@ export class LiquidityMapView implements ChartNavigable {
     g.clip();
     if (f.showHeat) this.drawHeat(g, f);
     this.drawGaps(g, f, H);
+    this.strongRuns = [];
+    if (f.showHeat) this.drawStrongBands(g, f);
     if (f.showCandles) this.drawCandles(g, f.candles);
     g.restore();
     this.drawPriceLine(g, f, W);
@@ -417,29 +532,74 @@ export class LiquidityMapView implements ChartNavigable {
   /** Recorded liquidity: one rectangle per (bucket, price), only inside the bucket's recorded-valid time. */
   private drawHeat(g: CanvasRenderingContext2D, f: MapFrame): void {
     const r = f.result;
-    if (!r) return;
+    if (!r || !(r.refSize > 0)) return;
     const v = this.vp!;
     const rowPx = Math.max(1, this.plotH() / (v.p1 - v.p0));
+    const gap = rowPx >= 5 ? 1 : 0; // a hair line between price rows once rows are tall enough to read one by one
     for (let ci = 0; ci < r.cells.length; ci++) {
       const cell = r.cells[ci]!;
       const col = f.cols[cell.c]!;
       if (col.t + col.w < v.t0 || col.t > v.t1 || cell.tick < v.p0 - 1 || cell.tick > v.p1 + 1) continue;
       if (f.strongOnly && !this.strongSet.has(ci)) continue;
-      const i = intensityOf(cell.size, r.refSize, f.gain);
-      if (i <= 0.02) continue;
-      const [cr, cg, cb] = heatColor(i);
+      const ratio = (cell.size / r.refSize) * f.gain;
+      if (ratio < 0.08) continue;
+      const { rgb, a } = paletteAt(ratio);
+      g.fillStyle = `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${a.toFixed(3)})`;
       const y0 = this.y(cell.tick + 0.5);
-      const hh = Math.max(1, rowPx);
+      const hh = Math.max(1, rowPx - gap);
       for (let k = 0; k < col.valid.length; k += 2) {
         const x0 = this.x(col.valid[k]!);
         const x1 = this.x(col.valid[k + 1]!);
-        const ww = Math.max(0.6, x1 - x0);
-        g.fillStyle = `rgba(${cr},${cg},${cb},${(0.06 + 0.94 * Math.pow(i, 1.3)).toFixed(3)})`;
-        g.fillRect(x0, y0, ww, hh);
-        if (i >= 0.93 && hh >= 3) {
-          g.fillStyle = 'rgba(255,255,255,0.75)'; // white-hot centre of an exceptional wall
-          g.fillRect(x0, y0 + hh * 0.35, ww, Math.max(1, hh * 0.3));
-        }
+        g.fillRect(x0, y0, Math.max(0.6, x1 - x0), hh);
+      }
+    }
+  }
+
+  /**
+   * STRONG LIQUIDITY NOW (rows from the page, unchanged): outline each level's recorded band from the start of its
+   * current run (the contiguous recorded run that reaches the latest bucket - never extended past real data).
+   */
+  private drawStrongBands(g: CanvasRenderingContext2D, f: MapFrame): void {
+    const rows = f.strongNow ?? [];
+    if (!rows.length || !f.cols.length || !f.depthLive) return;
+    const v = this.vp!;
+    const rowPx = Math.max(1, this.plotH() / (v.p1 - v.p0));
+    const lastC = f.cols.length - 1;
+    this.strongRuns = [];
+    for (const row of rows) {
+      const segs: [number, number][] = [];
+      let start: number | null = null;
+      for (let c = lastC; c >= 0; c--) {
+        const cell = (this.byCol[c] ?? []).find((x) => x.side === row.side && x.tick === row.tick);
+        if (!cell || (c < lastC && cell.end)) break; // the run ended there (or never reached this bucket)
+        const col = f.cols[c]!;
+        for (let k = 0; k < col.valid.length; k += 2) segs.push([col.valid[k]!, col.valid[k + 1]!]);
+        start = col.valid.length ? col.valid[0]! : col.t;
+      }
+      if (start === null) continue;
+      this.strongRuns.push({ side: row.side, tick: row.tick, start });
+      const y0 = this.y(row.tick + 0.5);
+      const y1 = y0 + Math.max(2, rowPx);
+      g.strokeStyle = `rgba(${row.side === 'ASK' ? ASK_RGB : BID_RGB},0.95)`;
+      g.lineWidth = 1.5;
+      g.beginPath();
+      for (const [a, b] of segs) {
+        const x0 = Math.max(0, this.x(a));
+        const x1 = Math.min(this.plotW(), this.x(b));
+        if (x1 <= x0) continue;
+        g.moveTo(x0, y0 - 1);
+        g.lineTo(x1, y0 - 1);
+        g.moveTo(x0, y1 + 1);
+        g.lineTo(x1, y1 + 1);
+      }
+      g.stroke();
+      // run start marker
+      const xs = this.x(start);
+      if (xs >= 0 && xs <= this.plotW()) {
+        g.beginPath();
+        g.moveTo(xs, y0 - 4);
+        g.lineTo(xs, y1 + 4);
+        g.stroke();
       }
     }
   }
@@ -522,8 +682,8 @@ export class LiquidityMapView implements ChartNavigable {
     if (p === null) return;
     const y = Math.round(this.y(p)) + 0.5;
     if (y < 0 || y > this.plotH()) return;
-    g.strokeStyle = 'rgba(226,232,240,0.6)';
-    g.setLineDash([5, 4]);
+    g.strokeStyle = 'rgba(250,250,250,0.75)';
+    g.setLineDash([6, 4]);
     g.lineWidth = 1;
     g.beginPath();
     g.moveTo(0, y);
@@ -537,12 +697,19 @@ export class LiquidityMapView implements ChartNavigable {
     const y = this.y(p);
     if (y < 0 || y > this.plotH()) return;
     const x = this.drawW();
-    g.fillStyle = '#f1f5f9';
-    g.fillRect(x, y - 10, AXIS_RIGHT, 20);
-    g.fillStyle = BG;
-    g.font = `700 11px ${MONO}`;
+    g.fillStyle = '#fbbf24';
+    g.beginPath();
+    g.moveTo(x - 6, y);
+    g.lineTo(x, y - 12);
+    g.lineTo(x + AXIS_RIGHT, y - 12);
+    g.lineTo(x + AXIS_RIGHT, y + 12);
+    g.lineTo(x, y + 12);
+    g.closePath();
+    g.fill();
+    g.fillStyle = '#0b0f19';
+    g.font = `800 12.5px ${MONO}`;
     g.textBaseline = 'middle';
-    g.fillText((p * this.opts.tickSize).toFixed(this.opts.decimals), x + 5, y);
+    g.fillText((p * this.opts.tickSize).toFixed(this.opts.decimals), x + 4, y + 0.5);
     g.textBaseline = 'alphabetic';
   }
 
@@ -569,42 +736,61 @@ export class LiquidityMapView implements ChartNavigable {
     const v = this.vp!;
     const rowPx = Math.max(2, this.plotH() / (v.p1 - v.p0));
     const max = Math.max(1, ...b.bids.map((r) => r.size), ...b.asks.map((r) => r.size));
-    const bar = (r: DepthRow, color: string) => {
+    const showSize = rowPx >= 7;
+    g.font = `600 ${Math.min(11, Math.max(8, rowPx - 1))}px ${MONO}`;
+    g.textBaseline = 'middle';
+    const bar = (r: DepthRow, rgb: string) => {
       const y = this.y(r.tick + 0.5);
       if (y > H || y + rowPx < 18) return;
-      const len = ((pw - 12) * r.size) / max;
-      g.fillStyle = color;
+      const len = ((pw - 30) * r.size) / max;
+      g.fillStyle = `rgba(${rgb},0.88)`;
       g.fillRect(x0 + pw - 2 - len, y + 0.5, len, Math.max(1, rowPx - 1));
+      if (showSize) {
+        g.fillStyle = 'rgba(226,232,240,0.9)';
+        g.textAlign = 'right';
+        g.fillText(fmtSize(r.size), x0 + pw - 6 - len, y + rowPx / 2);
+        g.textAlign = 'left';
+      }
     };
-    for (const r of b.asks) bar(r, 'rgba(244,63,94,0.85)');
-    for (const r of b.bids) bar(r, 'rgba(16,185,129,0.85)');
+    for (const r of b.asks) bar(r, ASK_RGB);
+    for (const r of b.bids) bar(r, BID_RGB);
+    g.textBaseline = 'alphabetic';
   }
 
-  /** Compact labels for strong levels displayed NOW (latest bucket, depth live): "4200.0  SIZE 384  4.8×  AGE 03:42". */
+  /** Labels of the STRONG LIQUIDITY NOW rows at the live edge of their band: "ASK 4198.0  SIZE 16  3.2×  AGE 00:45". */
   private drawLabels(g: CanvasRenderingContext2D, f: MapFrame): void {
-    const r = f.result;
-    if (!r || !f.depthLive || !f.cols.length) return;
-    const lastC = f.cols.length - 1;
-    const mid = this.mids[lastC] ?? null;
-    const now = (this.byCol[lastC] ?? []).filter((c) => isStrong(c, mid, f.strong)).sort((a, b) => b.size - a.size).slice(0, 8);
+    if (!f.depthLive) return;
     const used: [number, number][] = [];
-    for (const c of now) {
-      const y = this.y(c.tick);
-      if (y < 10 || y > this.plotH() - 10 || used.some(([a, b]) => y > a - 4 && y < b + 4)) continue;
-      const text = `${(c.tick * this.opts.tickSize).toFixed(this.opts.decimals)}  SIZE ${fmtSize(c.size)}  ${c.relative.toFixed(1)}×  AGE ${fmtAge(c.observedMs)}`;
-      g.font = `700 10.5px ${FONT}`;
-      const w = g.measureText(text).width + 12;
-      const x = 6;
-      const [cr, cg, cb] = heatColor(intensityOf(c.size, r.refSize, f.gain));
-      g.fillStyle = 'rgba(6,10,18,0.88)';
-      g.fillRect(x, y - 9, w, 18);
-      g.fillStyle = `rgb(${cr},${cg},${cb})`;
-      g.fillRect(x, y - 9, 3, 18);
-      g.fillStyle = '#e2e8f0';
+    const rows = [...(f.strongNow ?? [])].sort((a, b) => b.size - a.size);
+    for (const c of rows) {
+      const yc = this.y(c.tick);
+      if (yc < 12 || yc > this.plotH() - 12) continue;
+      let y = yc;
+      while (used.some(([a, b]) => y > a - 2 && y < b + 2)) y += c.side === 'ASK' ? -22 : 22;
+      if (y < 12 || y > this.plotH() - 12) continue;
+      const text = `${c.side} ${(c.tick * this.opts.tickSize).toFixed(this.opts.decimals)}   SIZE ${fmtSize(c.size)}   ${c.relative.toFixed(1)}×   AGE ${fmtAge(c.observedMs)}`;
+      g.font = `700 11px ${FONT}`;
+      const w = g.measureText(text).width + 16;
+      const x = Math.max(4, this.plotW() - w - 8);
+      const rgb = c.side === 'ASK' ? ASK_RGB : BID_RGB;
+      g.fillStyle = 'rgba(6,10,18,0.92)';
+      g.fillRect(x, y - 10, w, 20);
+      g.strokeStyle = `rgba(${rgb},0.95)`;
+      g.lineWidth = 1;
+      g.strokeRect(x + 0.5, y - 9.5, w - 1, 19);
+      g.fillStyle = `rgb(${rgb})`;
+      g.fillRect(x, y - 10, 4, 20);
+      if (y !== yc) {
+        g.beginPath();
+        g.moveTo(x + w / 2, y + (y < yc ? 10 : -10));
+        g.lineTo(x + w / 2, yc);
+        g.stroke();
+      }
+      g.fillStyle = '#f1f5f9';
       g.textBaseline = 'middle';
-      g.fillText(text, x + 8, y);
+      g.fillText(text, x + 10, y + 0.5);
       g.textBaseline = 'alphabetic';
-      used.push([y - 9, y + 9]);
+      used.push([y - 10, y + 10]);
       this.lastLabels.push(text);
     }
   }

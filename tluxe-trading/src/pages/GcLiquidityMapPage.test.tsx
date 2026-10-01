@@ -75,12 +75,30 @@ describe('GC Liquidity Map - a separate, read-only page', () => {
     const heat = () => urls.filter((u) => u.startsWith('/api/ibkr/heatmap?root=GC')).map((u) => new URL(u, 'http://x').searchParams.get('bucket'));
     expect(heat().length).toBeGreaterThan(0);
     const before = heat();
-    fireEvent.click(screen.getByRole('tab', { name: '1H' }));
-    fireEvent.click(screen.getByRole('tab', { name: '1m' }));
+    const tfs = screen.getByRole('tablist', { name: 'Candle timeframe' });
+    fireEvent.click(within(tfs).getByRole('tab', { name: '1H' }));
+    fireEvent.click(within(tfs).getByRole('tab', { name: '1m' }));
     await flush();
     expect(heat().slice(0, before.length)).toEqual(before);
     expect(new Set(heat()).size).toBe(1); // one bucket size - chosen from the viewport, not the candle timeframe
     expect(urls.every((u) => u.startsWith('/api/ibkr/heatmap?') || u.startsWith('/api/'))).toBe(true);
+  });
+
+  it('history window: LIVE SESSION by default, then 1H .. 24H; the session start is read from recorded coverage of the last 24 h', async () => {
+    await open();
+    const w = screen.getByRole('tablist', { name: 'History window' });
+    expect(within(w).getAllByRole('tab').map((t) => t.textContent)).toEqual(['LIVE SESSION', '1H', '3H', '6H', '12H', '24H']);
+    expect(within(w).getByRole('tab', { name: 'LIVE SESSION' })).toHaveAttribute('aria-selected', 'true');
+    const probe = urls.map((u) => new URL(u, 'http://x').searchParams).find((q) => q.get('bucket') === '300000');
+    expect(Number(probe!.get('to')) - Number(probe!.get('from'))).toBeGreaterThanOrEqual(86_400_000 - 1000);
+    await act(() => new Promise((r) => setTimeout(r, 1100))); // the page reads the store on its 1 s tick
+    await flush();
+    // nothing recorded (empty matrix): said so - no session is invented
+    expect(screen.getByTestId('gcmap-window').textContent).toMatch(/no recorded depth session found in the last 24 h/);
+    fireEvent.click(within(w).getByRole('tab', { name: '6H' }));
+    await flush();
+    expect(within(w).getByRole('tab', { name: '6H' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByTestId('gcmap-window').textContent).toMatch(/DEPTH GAP, never filled/);
   });
 
   it('labels describe depth only: no signals, no S&R, no prediction; the IBKR limitation is stated', async () => {
@@ -113,7 +131,7 @@ describe('GC Liquidity Map - a separate, read-only page', () => {
 
   it('isolation: no collector / provider / connection / recorder / polling of its own; no synthetic source; no other page imported', () => {
     const src = import.meta.glob(['/src/pages/GcLiquidityMapPage.tsx', '/src/components/gcMap/*.{ts,tsx}', '!/src/**/*.test.{ts,tsx}'], { query: '?raw', import: 'default', eager: true }) as Record<string, string>;
-    expect(Object.keys(src).length).toBe(4);
+    expect(Object.keys(src).length).toBe(5);
     for (const [f, s] of Object.entries(src)) {
       expect(s, f).not.toMatch(/new (DatabentoFeed|IbkrDepthProvider|DatabentoBridgeClient|WebSocket|EventSource|MarketDataService|OrderFlowService)\b/);
       expect(s, f).not.toMatch(/connectServices|createServices|DepthRecorder|setEngineSettings|\bfetch\(/);

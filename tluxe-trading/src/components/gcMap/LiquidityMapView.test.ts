@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { analyzeMap, DEFAULT_STRONG, type MapColumn } from './liquidityMap';
-import { AXIS_RIGHT, LiquidityMapView, PROFILE_SHARE, type MapCandle, type MapFrame } from './LiquidityMapView';
+import { AXIS_RIGHT, LiquidityMapView, paletteAt, PROFILE_SHARE, type MapCandle, type MapFrame } from './LiquidityMapView';
+import { SESSION_MIN_SPAN_MS } from './viewRange';
 
 /* TEST DATA ONLY: hand-built recorded-depth columns and candles. */
 function recorder() {
@@ -75,17 +76,33 @@ describe('GC Liquidity Map view', () => {
     const none = draw(frame({ book: null })).rec;
     expect(none.texts).toEqual(expect.arrayContaining(['CURRENT DEPTH', 'NO DEPTH DATA']));
     const live = draw(frame({ book: { bids: [{ tick: 999, size: 7 }], asks: [{ tick: 1000, size: 14 }] }, depthLive: true })).rec;
-    const bars = live.fills.filter((q) => /^rgba\((244,63,94|16,185,129),0\.85\)$/.test(q.style));
+    const bars = live.fills.filter((q) => /^rgba\((244,63,94|16,185,129),0\.88\)$/.test(q.style));
     expect(bars).toHaveLength(2);
     const ask = bars.find((q) => q.style.startsWith('rgba(244'))!;
     const bid = bars.find((q) => q.style.startsWith('rgba(16'))!;
     expect(ask.w).toBeCloseTo(2 * bid.w, 5); // bar length proportional to the displayed size (14 vs 7)
   });
-  it('strong labels only while depth is live, with the real size / relative / age', () => {
-    const { v } = draw(frame({ depthLive: true, book: { bids: [], asks: [] } }));
-    expect(v.lastLabels).toHaveLength(1);
-    expect(v.lastLabels[0]).toMatch(/^100\.4 {2}SIZE 40 {2}10\.0× {2}AGE 00:20$/);
-    expect(draw(frame({ depthLive: false })).v.lastLabels).toEqual([]);
+  it('STRONG LIQUIDITY NOW rows (from the page, unchanged) are labelled at the live edge, only while depth is live', () => {
+    const row = { side: 'ASK' as const, tick: 1004, size: 40, relative: 10, observedMs: 20_000 };
+    const { v } = draw(frame({ depthLive: true, book: { bids: [], asks: [] }, strongNow: [row] }));
+    expect(v.lastLabels).toEqual(['ASK 100.4   SIZE 40   10.0×   AGE 00:20']);
+    expect(draw(frame({ depthLive: false, strongNow: [row] })).v.lastLabels).toEqual([]);
+    expect(draw(frame({ depthLive: true, book: { bids: [], asks: [] }, strongNow: [] })).v.lastLabels).toEqual([]); // nothing qualifies: nothing invented
+  });
+  it('the band of a strong level is outlined from where its CURRENT run started - never back across a depth gap', () => {
+    const row = { side: 'ASK' as const, tick: 1004, size: 40, relative: 10, observedMs: 20_000 };
+    const { v } = draw(frame({ depthLive: true, book: { bids: [], asks: [] }, strongNow: [row] }));
+    expect(v.strongRuns).toEqual([{ side: 'ASK', tick: 1004, start: T0 + 50_000 }]);
+  });
+  it('colour scale: weak = dark subtle blue, moderate = blue / cyan, strong = yellow, very strong = orange, exceptional = red / white-hot', () => {
+    expect(paletteAt(0.2).rgb[2]).toBeGreaterThan(paletteAt(0.2).rgb[0]);
+    expect(paletteAt(0.2).a).toBeLessThan(0.3);
+    expect(paletteAt(0.65).rgb).toEqual([34, 211, 238]);
+    expect(paletteAt(0.85).rgb).toEqual([250, 204, 21]);
+    expect(paletteAt(1.1).rgb).toEqual([249, 115, 22]);
+    expect(paletteAt(1.4).rgb).toEqual([239, 68, 68]);
+    expect(paletteAt(5).rgb).toEqual([255, 245, 235]);
+    for (let r = 0.1; r < 1.9; r += 0.1) expect(paletteAt(r + 0.1).a).toBeGreaterThanOrEqual(paletteAt(r).a); // never brighter for less size
   });
   it('Strong Only hides the ordinary depth and keeps the strong level', () => {
     const all = heatFills(draw(frame()).rec.fills).length;
@@ -103,5 +120,26 @@ describe('GC Liquidity Map view', () => {
     expect(JSON.parse(ds.depth!)).toEqual({ updateMs: 123, bids: [[99.9, 7]], asks: [[100, 14]] });
     expect(JSON.parse(ds.gaps!)).toEqual([[T0 + 20_000, T0 + 50_000]]);
     expect(ds.heatCols).toBe('40');
+  });
+  it('window: LIVE SESSION starts at the session start and grows with it; a fixed span is a span; Reset returns to the page default', () => {
+    const f = frame();
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(recorder().ctx as never);
+    const host = document.createElement('div');
+    host.getBoundingClientRect = () => ({ width: SIZE.w, height: SIZE.h, left: 0, top: 0, right: SIZE.w, bottom: SIZE.h, x: 0, y: 0, toJSON() {} });
+    let now = T0 + 3_600_000;
+    let resets = 0;
+    const v = new LiquidityMapView(host, () => f, { tickSize: 0.1, decimals: 1, now: () => now, raf: { request: () => 0, cancel: () => {} }, onReset: () => resets++ });
+    v.setRange({ kind: 'session', start: T0 }, true);
+    expect(v.vp!.t0).toBe(T0);
+    expect(v.vp!.t1).toBeGreaterThan(now);
+    now += 600_000;
+    expect(v.windowOf(now).t0).toBe(T0); // the start stays, the window grows
+    v.setRange({ kind: 'session', start: now - 60_000 }, true);
+    expect(v.vp!.t0).toBe(now - SESSION_MIN_SPAN_MS); // a just-started session still shows a minimum span
+    v.setRange({ kind: 'span', ms: 6 * 3_600_000 }, true);
+    expect(v.vp!.t0).toBe(now - 6 * 3_600_000);
+    v.resetView();
+    expect(resets).toBe(1);
+    v.destroy();
   });
 });

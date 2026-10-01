@@ -13,9 +13,10 @@ import { DepthHistory } from '../components/orderFlow/depthHistory';
 import { IbkrDepthPill } from '../components/orderFlow/IbkrSession';
 import { Pill } from '../components/orderFlow/OrderFlowPanels';
 import { TradeTape } from '../components/orderFlow/tradeDots';
-import { analyzeMap, HEAT_STOPS, type StrongParams } from '../components/gcMap/liquidityMap';
+import { analyzeMap, type StrongParams } from '../components/gcMap/liquidityMap';
 import { DEFAULT_MAP_SETTINGS, isMapSettings, isMapTf, MAP_TFS, MIN_DEPTH_BUCKET_MS, TF_LABEL, TF_MS, type MapSettings, type MapTf } from '../components/gcMap/mapSettings';
-import { fmtAge, fmtSize, LiquidityMapView, type DepthRow, type HoverInfo, type MapCandle, type MapFrame, type Viewport } from '../components/gcMap/LiquidityMapView';
+import { fmtAge, fmtSize, LiquidityMapView, PALETTE, PALETTE_MAX, SCALE_NAMES, type DepthRow, type HoverInfo, type MapCandle, type MapFrame, type StrongNowRow, type ViewRange, type Viewport } from '../components/gcMap/LiquidityMapView';
+import { latestSession, MAP_RANGES, RANGE_LABEL, RANGE_MS, SESSION_BREAK_MS, SESSION_LOOKBACK_MS, type MapRange, type SessionInfo } from '../components/gcMap/viewRange';
 import { ibkrBook } from '../providers/ibkr/IbkrDepthProvider';
 import { useIbkrRootState } from '../providers/ibkr/ibkrView';
 import '../components/sr/sr.css';
@@ -104,6 +105,39 @@ function MapWorkspace() {
   const cols = useMemo(() => (history ? history.columns : []), [history, histVer]); // eslint-disable-line react-hooks/exhaustive-deps
   const result = useMemo(() => (cols.length ? analyzeMap(cols, prints) : null), [cols, prints]);
 
+  // Visible time window (VIEW ONLY). LIVE SESSION starts where the current continuous recorded-depth session starts:
+  // first read from the last 24 h of recorded coverage, then kept current from whatever the page has loaded (a new
+  // session - a hole >= SESSION_BREAK_MS followed by depth again - moves it). Nothing is deleted or filled.
+  const [range, setRange] = useState<MapRange>('LIVE');
+  const [session, setSession] = useState<SessionInfo | null | undefined>(undefined);
+  const probeFrom = useRef(0);
+  useEffect(() => {
+    if (!history) return;
+    probeFrom.current = Date.now() - SESSION_LOOKBACK_MS;
+    history.ensure(probeFrom.current, Date.now(), 1200);
+    const t = setTimeout(() => setSession((x) => (x === undefined ? null : x)), 12_000); // no answer: no session known
+    return () => clearTimeout(t);
+  }, [history]);
+  useEffect(() => {
+    if (!history) return;
+    if (session === undefined) {
+      if (history.error) return setSession(null);
+      if (history.version < 2) return; // the 24 h coverage has not arrived yet
+      const s = latestSession(history.columns);
+      // Recording continuous since before the look-back: the session start is the look-back itself (LIVE = 24 h max).
+      return setSession(s && s.prevEnd === null && s.start - probeFrom.current < SESSION_BREAK_MS ? { ...s, start: probeFrom.current } : s);
+    }
+    const s = latestSession(cols);
+    // A break inside what is loaded = a newer session (only then is the start known from these columns).
+    if (s && s.prevEnd !== null && (!session || s.start > session.start)) setSession(s);
+    else if (!session && s) setSession(s);
+  }, [history, histVer, cols, session]);
+  const viewRange: ViewRange | null = useMemo(() => {
+    if (session === undefined) return null;
+    if (range !== 'LIVE') return { kind: 'span', ms: RANGE_MS[range] };
+    return session ? { kind: 'session', start: session.start } : { kind: 'span', ms: RANGE_MS['1H'] };
+  }, [range, session]);
+
   const book = useMemo(() => {
     if (!liveBook || ibkrState !== 'LIVE') return null;
     const rows = (r: { price: number; size: number }[]): DepthRow[] => r.filter((x) => x.size > 0).map((x) => ({ tick: Math.round(x.price / tick), size: x.size }));
@@ -112,13 +146,29 @@ function MapWorkspace() {
   const depthLive = !!book;
   const lastPriceTick = prints.length ? prints[prints.length - 1]!.tick : null;
 
+  // STRONG LIQUIDITY NOW: levels in the LIVE visible book whose recorded run qualifies (age = continuously observed).
+  const strongNow = useMemo(() => {
+    if (!book || !result || !cols.length) return { asks: [] as StrongNowRow[], bids: [] as StrongNowRow[] };
+    const lastC = cols.length - 1;
+    const age = new Map(result.cells.filter((c) => c.c === lastC).map((c) => [`${c.side}${c.tick}`, c.observedMs]));
+    const best = book.bids.length && book.asks.length ? (Math.max(...book.bids.map((r) => r.tick)) + Math.min(...book.asks.map((r) => r.tick))) / 2 : null;
+    const side = (rows: DepthRow[], sd: 'BID' | 'ASK') =>
+      rows
+        .map((r) => {
+          const rel = r.size / Math.max(1e-9, median(rows.filter((x) => x !== r).map((x) => x.size)));
+          return { side: sd, tick: r.tick, size: r.size, relative: rel, observedMs: age.get(`${sd}${r.tick}`) ?? 0 };
+        })
+        .filter((x) => x.size >= strong.minSize && x.relative >= strong.minRelative && x.observedMs >= strong.minPersistMs && (best === null || Math.abs(x.tick - best) <= strong.maxDistanceTicks))
+        .sort((a, b) => b.tick - a.tick);
+    return { asks: side(book.asks, 'ASK'), bids: side(book.bids, 'BID') };
+  }, [book, result, cols, strong]);
   // Chart.
   const hostRef = useRef<HTMLDivElement | null>(null);
   const [view, setView] = useState<LiquidityMapView | null>(null);
   const [hover, setHover] = useState<HoverInfo | null>(null);
   const frameRef = useRef<MapFrame | null>(null);
-  frameRef.current = { cols, result, candles, book, bookUpdateMs: liveBook?.lastUpdateMs ?? null, lastPriceTick, showCandles: s.candles, showHeat: s.heat, showDepth: s.depth, strongOnly: s.strongOnly, showLabels: s.labels, gain: s.gain, strong, depthLive, version: (frameRef.current?.version ?? 0) + 1 };
-  const hasData = isGc && (candles.length > 0 || cols.length > 0);
+  frameRef.current = { cols, result, candles, book, bookUpdateMs: liveBook?.lastUpdateMs ?? null, lastPriceTick, showCandles: s.candles, showHeat: s.heat, showDepth: s.depth, strongOnly: s.strongOnly, showLabels: s.labels, gain: s.gain, strong, depthLive, strongNow: [...strongNow.asks, ...strongNow.bids], version: (frameRef.current?.version ?? 0) + 1 };
+  const hasData = isGc && (candles.length > 0 || cols.length > 0) && viewRange !== null;
   useEffect(() => {
     const host = hostRef.current;
     if (!host || !hasData || !history) return;
@@ -126,6 +176,7 @@ function MapWorkspace() {
       tickSize: tick,
       decimals: d,
       onHover: setHover,
+      onReset: () => setRange('LIVE'),
       onViewport: (vp: Viewport | null, plotPx: number) => vp && history.ensure(vp.t0, vp.t1, plotPx),
     });
     setView(v);
@@ -134,26 +185,24 @@ function MapWorkspace() {
       setView(null);
     };
   }, [hasData, history, tick, d]);
+  // The chosen window: a click applies it; a session update only moves the LIVE anchor (user zoom / pan kept).
+  const applied = useRef<{ view: LiquidityMapView | null; range: MapRange | null }>({ view: null, range: null });
   useEffect(() => {
-    if (history && !view) history.ensure(Date.now() - 6 * 3600_000, Date.now(), 1200);
-  }, [history, view]);
+    if (!view || !viewRange) return;
+    const a = applied.current;
+    view.setRange(viewRange, a.view !== view || a.range !== range);
+    applied.current = { view, range };
+  }, [view, viewRange, range]);
+  // A window whose recorded depth never arrived (a resolution change while a load was in flight) is asked for again,
+  // at most every 5 s - the same request the view makes, through the same store; nothing else is fetched.
+  const kicked = useRef(0);
+  useEffect(() => {
+    if (!view || !history || history.columns.length || Date.now() - kicked.current < 5000) return;
+    kicked.current = Date.now();
+    view.reportViewport();
+  }, [view, history, histVer]);
+  const utc = (t: number) => new Date(t).toISOString().replace('T', ' ').slice(0, 19);
 
-  // STRONG LIQUIDITY NOW: levels in the LIVE visible book whose recorded run qualifies (age = continuously observed).
-  const strongNow = useMemo(() => {
-    if (!book || !result || !cols.length) return { asks: [], bids: [] };
-    const lastC = cols.length - 1;
-    const age = new Map(result.cells.filter((c) => c.c === lastC).map((c) => [`${c.side}${c.tick}`, c.observedMs]));
-    const best = book.bids.length && book.asks.length ? (Math.max(...book.bids.map((r) => r.tick)) + Math.min(...book.asks.map((r) => r.tick))) / 2 : null;
-    const side = (rows: DepthRow[], sd: 'BID' | 'ASK') =>
-      rows
-        .map((r) => {
-          const rel = r.size / Math.max(1e-9, median(rows.filter((x) => x !== r).map((x) => x.size)));
-          return { tick: r.tick, size: r.size, relative: rel, observedMs: age.get(`${sd}${r.tick}`) ?? 0 };
-        })
-        .filter((x) => x.size >= strong.minSize && x.relative >= strong.minRelative && x.observedMs >= strong.minPersistMs && (best === null || Math.abs(x.tick - best) <= strong.maxDistanceTicks))
-        .sort((a, b) => b.tick - a.tick);
-    return { asks: side(book.asks, 'ASK'), bids: side(book.bids, 'BID') };
-  }, [book, result, cols, strong]);
   const [nowOpen, setNowOpen] = useState(true);
 
   const last = lastPriceTick !== null ? lastPriceTick * tick : (quote.last ?? null);
@@ -186,6 +235,11 @@ function MapWorkspace() {
         <div className="gcmap__grid">
           <section className="panel gcmap__chart" aria-label="GC liquidity map chart">
             <div className="gcmap__toolbar">
+              <div className="seg gcmap__range" role="tablist" aria-label="History window" data-testid="gcmap-range">
+                {MAP_RANGES.map((x) => (
+                  <button key={x} type="button" role="tab" className="seg__btn" aria-selected={x === range} onClick={() => setRange(x)}>{RANGE_LABEL[x]}</button>
+                ))}
+              </div>
               <div className="seg" role="tablist" aria-label="Candle timeframe">
                 {MAP_TFS.map((x) => (
                   <button key={x} type="button" role="tab" className="seg__btn" aria-selected={x === tf} onClick={() => setTf(x)}>{TF_LABEL[x]}</button>
@@ -204,6 +258,22 @@ function MapWorkspace() {
               <div className="gcmap__nodata" role="status" data-testid="gcmap-nodata">
                 <strong>NO DEPTH DATA</strong> IBKR {ibkrState.replace(/_/g, ' ')}
                 {history?.lastObservedMs ? ` · last recorded depth ${new Date(history.lastObservedMs).toISOString().replace('T', ' ').slice(0, 19)} UTC` : ''} — recorded history ends there; nothing is drawn through the gap.
+              </div>
+            )}
+            {isGc && session !== undefined && (
+              <div className="gcmap__window" data-testid="gcmap-window">
+                {range === 'LIVE' ? (
+                  session ? (
+                    <>
+                      <strong>LIVE SESSION</strong> continuous recorded depth since {utc(session.start)} UTC
+                      {session.prevEnd !== null ? ` · previous recording ended ${utc(session.prevEnd)} UTC (DEPTH GAP before it - choose a longer window to see it)` : ' · no earlier recorded depth in the last 24 h (choose 24H to see the gap)'}
+                    </>
+                  ) : (
+                    <><strong>LIVE SESSION</strong> no recorded depth session found in the last 24 h — showing the last hour</>
+                  )
+                ) : (
+                  <><strong>{RANGE_LABEL[range]}</strong> last {RANGE_LABEL[range].toLowerCase()} · time without recorded depth is hatched DEPTH GAP, never filled</>
+                )}
               </div>
             )}
             <ChartStage containerRef={hostRef} controller={view} hasBars={hasData}>
@@ -230,9 +300,10 @@ function MapWorkspace() {
               </div>
             )}
             <div className="gcmap__legend" aria-label="Intensity legend">
-              <span>Low</span>
-              <i style={{ background: `linear-gradient(90deg, ${HEAT_STOPS.map(([p, c]) => `rgb(${c.join(',')}) ${p * 100}%`).join(', ')})` }} />
-              <span>High</span>
+              <span>Weak</span>
+              <i style={{ background: `linear-gradient(90deg, ${PALETTE.map(([p, c]) => `rgb(${c.join(',')}) ${((p / PALETTE_MAX) * 100).toFixed(1)}%`).join(', ')})` }} />
+              <span>Exceptional</span>
+              <span className="gcmap__scale">{SCALE_NAMES.map(([n]) => n).join(' · ')}</span>
               <em>colour = displayed liquidity intensity (not buy / sell, not support / resistance)</em>
             </div>
           </section>

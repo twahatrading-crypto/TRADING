@@ -45,3 +45,15 @@
   .gcmap__grid { grid-template-columns: minmax(0, 1fr); height: auto; }
   .gcmap__chart { min-height: 64vh; }
 }
+
+/* Viewport / readability (this page only). */
+.gcmap__range .seg__btn { white-space: nowrap; }
+.gcmap__window { padding: 4px 10px; font-size: 11px; color: var(--text-3); border-bottom: 1px solid var(--border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gcmap__window strong { color: #fbbf24; letter-spacing: 0.06em; margin-right: 6px; }
+.gcmap__scale { color: var(--text-4); }
+.gcmap__side > [data-testid='gcmap-now'] { padding: 12px 14px; }
+[data-testid='gcmap-now'] .gcmap__h { font-size: 13.5px; }
+[data-testid='gcmap-now'] .gcmap__tbl h3 { font-size: 12px; margin-top: 10px; }
+[data-testid='gcmap-now'] .gcmap__tbl table { font-size: 13px; }
+[data-testid='gcmap-now'] .gcmap__tbl td { padding: 3px 3px; }
+[data-testid='gcmap-now'] .gcmap__muted { font-size: 12px; }
