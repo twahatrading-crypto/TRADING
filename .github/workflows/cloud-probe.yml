@@ -711,6 +711,27 @@ jobs:
               for (const tf of ['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1']) out(`${r}-candles-${tf}`, await j(`/api/databento/v1/candles/${r}?timeframe=${tf}&limit=5000`));
             }
             out('ibkr-status', await j('/api/ibkr/status'));
+            // Recorded GC depth of the last live hour before the IBKR outage (2026-09-30 05:45 - 06:45:30 UTC) at the
+            // server's own buckets, its coverage, and every Databento trade of that window - read only.
+            const F = Date.UTC(2026, 8, 30, 5, 45), T = Date.UTC(2026, 8, 30, 6, 45, 30);
+            out('W-m250', await j(`/api/ibkr/heatmap?root=GC&from=${Date.UTC(2026, 8, 30, 6, 30)}&to=${T}&bucket=250`));
+            for (const b of [1000, 2000, 5000, 10000, 15000, 30000]) out(`W-m${b}`, await j(`/api/ibkr/heatmap?root=GC&from=${F}&to=${T}&bucket=${b}`));
+            out('W-m60000', await j(`/api/ibkr/heatmap?root=GC&from=${Date.UTC(2026, 8, 29, 22, 45)}&to=${T}&bucket=60000`));
+            out('W-cov', await j(`/api/ibkr/coverage?root=GC&from=${Date.UTC(2026, 8, 30, 4, 45, 30)}&to=${T}`));
+            {
+              const head = await j('/api/databento/v1/trades/GC?after=0&limit=1');
+              let hi = head.lastIndex, all = [];
+              for (let k = 0; k < 60; k++) {
+                const after = Math.max(0, hi - 20000);
+                const tr = await j(`/api/databento/v1/trades/GC?after=${after}&limit=20000`);
+                all = tr.trades.concat(all);
+                const oldest = tr.trades.length ? tr.trades[0].tsEventNs / 1e6 : null;
+                if (after === 0 || oldest === null || oldest <= F) break;
+                hi = after;
+              }
+              const w = all.filter((x) => x.tsEventNs / 1e6 >= F - 60000 && x.tsEventNs / 1e6 < T);
+              out('W-trades', { trades: w, oldestLoaded: all.length ? all[0].tsEventNs / 1e6 : null });
+            }
             console.log('CAPTURE DONE', new Date(now).toISOString());
           })();
           JS
