@@ -736,6 +736,83 @@ jobs:
           })();
           JS
           node cap.cjs
+  mapval:
+    # Live IBKR validation for the GC Liquidity Map (READ ONLY, public read-only endpoints): consecutive live book
+    # samples, recording counts, the outage gap / reconnect boundary, the latest 250 ms matrix, candles + trades.
+    if: ${{ contains(github.event.head_commit.message, '[mapval]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Live IBKR depth + recording + outage boundary (read only)
+        shell: bash
+        run: |
+          cat > mv.cjs <<'JS'
+          const zlib = require('zlib');
+          const base = 'https://twahatrading.com';
+          const j = async (p) => (await fetch(base + p, { headers: { 'User-Agent': 'tluxe-cloud-probe/1.0' } })).json();
+          const out = (name, obj) => {
+            const b = zlib.gzipSync(Buffer.from(JSON.stringify(obj))).toString('base64');
+            const n = Math.ceil(b.length / 60000);
+            for (let i = 0; i < n; i++) console.log(`CAPT ${name} ${i + 1}/${n} ${b.slice(i * 60000, (i + 1) * 60000)}`);
+          };
+          const iso = (t) => (t ? new Date(Number(t)).toISOString() : '-');
+          const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+          const OUTAGE = Date.UTC(2026, 8, 30, 6, 45, 0, 819); // last depth before the outage (earlier probes)
+          const OBS_AT_OUTAGE = 867458; // GC observations while OFFLINE (depth job b84c567)
+          (async () => {
+            // 1. consecutive live samples
+            const samples = [];
+            for (let i = 0; i < 20; i++) {
+              const [st, bk] = await Promise.all([j('/api/ibkr/status'), j('/api/ibkr/book?root=GC')]);
+              const r = st.roots?.GC ?? {};
+              const bids = (bk.rows?.bids ?? []).map((x) => [x.price, x.size]);
+              const asks = (bk.rows?.asks ?? []).map((x) => [x.price, x.size]);
+              samples.push({ at: Date.now(), state: bk.state, statusState: r.state, contract: bk.contract?.localSymbol, lastUpdateMs: bk.lastUpdateMs, depthSeq: bk.depthSeq, bids, asks });
+              console.log(`SAMPLE ${i + 1} ${iso(Date.now())} state=${bk.state} contract=${bk.contract?.localSymbol} lastUpdate=${iso(bk.lastUpdateMs)} seq=${bk.depthSeq} rows=${bids.length}x${asks.length} bid=${JSON.stringify(bids.slice(0, 3))} ask=${JSON.stringify(asks.slice(0, 3))}`);
+              await sleep(1000);
+            }
+            const key = (s, side) => JSON.stringify(s[side]);
+            let bidCh = 0, askCh = 0, tsAdv = 0;
+            for (let i = 1; i < samples.length; i++) {
+              if (key(samples[i], 'bids') !== key(samples[i - 1], 'bids')) bidCh++;
+              if (key(samples[i], 'asks') !== key(samples[i - 1], 'asks')) askCh++;
+              if (samples[i].lastUpdateMs > samples[i - 1].lastUpdateMs) tsAdv++;
+            }
+            console.log(`LIVE SUMMARY: ${samples.length} samples, lastUpdate advanced ${tsAdv}/19, bid rows changed ${bidCh}/19, ask rows changed ${askCh}/19, states ${[...new Set(samples.map((s) => s.state))]}, contracts ${[...new Set(samples.map((s) => s.contract))]}, rows ${[...new Set(samples.map((s) => s.bids.length + 'x' + s.asks.length))]}, max age at read ${Math.max(...samples.map((s) => s.at - s.lastUpdateMs))} ms`);
+            out('MV-samples', samples);
+            // 2. recording
+            const h1 = await j('/api/ibkr/history');
+            const status = await j('/api/ibkr/status');
+            out('MV-history', h1);
+            out('MV-status', status);
+            // 3. outage boundary: find the first recorded coverage after the outage (2 h windows forward from the outage)
+            let firstAfter = null, beforeEnd = null;
+            const pre = await j(`/api/ibkr/coverage?root=GC&from=${OUTAGE - 3600000}&to=${OUTAGE + 3600000}`);
+            out('MV-cov-outage', pre);
+            beforeEnd = Math.max(...(pre.union ?? []).map((u) => u[1]).filter((x) => x <= OUTAGE + 1000));
+            for (let f = OUTAGE + 1000; f < Date.now() && !firstAfter; f += 2 * 3600000) {
+              const c = await j(`/api/ibkr/coverage?root=GC&from=${f}&to=${Math.min(f + 2 * 3600000, Date.now())}`);
+              if (c.union && c.union.length) { firstAfter = c.union[0][0]; out('MV-cov-resume', c); }
+            }
+            const h2 = await (async () => { await sleep(30000); return j('/api/ibkr/history'); })();
+            const g1 = h1.roots?.GC ? Object.values(h1.roots.GC)[0] : null, g2 = h2.roots?.GC ? Object.values(h2.roots.GC)[0] : null;
+            console.log(`RECORDING last before outage ${iso(beforeEnd)} | first after reconnect ${iso(firstAfter)} | gap ${firstAfter && beforeEnd ? ((firstAfter - beforeEnd) / 3600000).toFixed(2) + ' h' : '-'}`);
+            console.log(`RECORDING GC history now: ${JSON.stringify(g2).slice(0, 400)}`);
+            console.log(`RECORDING observations: at outage ${OBS_AT_OUTAGE} -> now ${g2?.observations} (+${g2 ? g2.observations - OBS_AT_OUTAGE : '-'}); +${g1 && g2 ? g2.observations - g1.observations : '-'} in 30 s`);
+            out('MV-history2', h2);
+            // 4. matrices: outage boundary at 60 s, latest 15 min at 250 ms
+            const now = Date.now();
+            out('MV-m60000', await j(`/api/ibkr/heatmap?root=GC&from=${OUTAGE - 3 * 3600000}&to=${Math.min(now, OUTAGE - 3 * 3600000 + 3800 * 60000)}&bucket=60000`));
+            if (firstAfter) out('MV-m1000-resume', await j(`/api/ibkr/heatmap?root=GC&from=${firstAfter - 600000}&to=${firstAfter + 1800000}&bucket=1000`));
+            out('MV-m250', await j(`/api/ibkr/heatmap?root=GC&from=${now - 15 * 60000}&to=${now}&bucket=250`));
+            out('MV-book-end', await j('/api/ibkr/book?root=GC'));
+            for (const tf of ['M1', 'M5', 'M15', 'M30', 'H1']) out(`MV-candles-${tf}`, await j(`/api/databento/v1/candles/GC?timeframe=${tf}&limit=3000`));
+            const head = await j('/api/databento/v1/trades/GC?after=0&limit=1');
+            out('MV-trades', await j(`/api/databento/v1/trades/GC?after=${Math.max(0, head.lastIndex - 20000)}&limit=20000`));
+            console.log('MAPVAL DONE', iso(Date.now()));
+          })();
+          JS
+          node mv.cjs
   busy:
     # Busy-session GC alignment (SI control) on PRODUCTION at 250 ms polling. The alignment formula is the depth job's
     # 250 ms formula, UNCHANGED. The decision rules below were fixed BEFORE the run (commit of 2026-09-30 06:xx UTC).
