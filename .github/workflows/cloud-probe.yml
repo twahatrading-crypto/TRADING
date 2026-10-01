@@ -707,7 +707,10 @@ jobs:
               const tr = await j(`/api/databento/v1/trades/${r}?after=${Math.max(0, head.lastIndex - 20000)}&limit=20000`);
               out(`${r}-trades`, tr);
               out(`${r}-book`, await j(`/api/ibkr/book?root=${r}`));
+              // Real Databento candles of every S&R timeframe (existing read-only candles endpoint).
+              for (const tf of ['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1']) out(`${r}-candles-${tf}`, await j(`/api/databento/v1/candles/${r}?timeframe=${tf}&limit=5000`));
             }
+            out('ibkr-status', await j('/api/ibkr/status'));
             console.log('CAPTURE DONE', new Date(now).toISOString());
           })();
           JS
