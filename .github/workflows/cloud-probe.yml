@@ -950,6 +950,44 @@ jobs:
           })();
           JS
           node mp.cjs
+  livecap:
+    # Read-only capture of the CURRENT live depth session at every bucket the GC Liquidity Map can request (public
+    # read-only endpoints, gzip + base64 into the log) for a local viewport check on real data. Nothing is written.
+    if: ${{ contains(github.event.head_commit.message, '[livecap]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Capture current live GC depth session (read only)
+        shell: bash
+        run: |
+          cat > lc.cjs <<'JS'
+          const zlib = require('zlib');
+          const base = 'https://twahatrading.com';
+          const j = async (p) => (await fetch(base + p, { headers: { 'User-Agent': 'tluxe-cloud-probe/1.0' } })).json();
+          const out = (name, obj) => {
+            const b = zlib.gzipSync(Buffer.from(JSON.stringify(obj))).toString('base64');
+            const n = Math.ceil(b.length / 60000);
+            for (let i = 0; i < n; i++) console.log(`CAPT ${name} ${i + 1}/${n} ${b.slice(i * 60000, (i + 1) * 60000)}`);
+            console.log(`captured ${name}: ${b.length} base64 chars`);
+          };
+          (async () => {
+            const now = Date.now();
+            console.log('CAPTURE AT', now, new Date(now).toISOString());
+            out('LV-book', await j('/api/ibkr/book?root=GC'));
+            for (const b of [250, 500, 1000, 2000, 5000, 10000, 15000, 30000, 60000, 120000, 300000]) {
+              const r = await j(`/api/ibkr/heatmap?root=GC&from=${now - Math.min(26 * 3600000, b * 3800)}&to=${now}&bucket=${b}`);
+              console.log(`m${b}: ${r.columns?.length} columns ${r.from}..${r.to}`);
+              out(`LV-m${b}`, r);
+            }
+            for (const tf of ['M1', 'M5', 'M15', 'M30', 'H1']) out(`LV-candles-${tf}`, await j(`/api/databento/v1/candles/GC?timeframe=${tf}&limit=3000`));
+            const head = await j('/api/databento/v1/trades/GC?after=0&limit=1');
+            out('LV-trades', await j(`/api/databento/v1/trades/GC?after=${Math.max(0, head.lastIndex - 20000)}&limit=20000`));
+            out('LV-status', await j('/api/ibkr/status'));
+            out('LV-book-end', await j('/api/ibkr/book?root=GC'));
+            console.log('LIVECAP DONE', new Date().toISOString());
+          })();
+          JS
+          node lc.cjs
   busy:
     # Busy-session GC alignment (SI control) on PRODUCTION at 250 ms polling. The alignment formula is the depth job's
     # 250 ms formula, UNCHANGED. The decision rules below were fixed BEFORE the run (commit of 2026-09-30 06:xx UTC).
