@@ -1040,8 +1040,12 @@ jobs:
             check(!!live, 'IBKR GC depth LIVE on production');
             // the outage gap is still in the recording (nothing filled): no recorded column between the two
             const hm = await j(`/api/ibkr/heatmap?root=GC&from=${OUT - 3600000}&to=${BACK + 3600000}&bucket=300000`);
-            const inGap = (hm.columns || []).filter((c) => c[0] + 300000 > OUT + 1000 && c[0] < BACK - 300000);
-            check(inGap.length === 0, `recorded history: no depth between ${iso(OUT)} and ${iso(BACK)} (${inGap.length} columns) - the 25 h outage gap is intact`);
+            // recorded-valid segments of every bucket (a bucket may hold depth only before / after the outage)
+            const segs = (hm.columns || []).flatMap((c) => (c[4] && c[4].length ? c[4] : [[c[0], c[0] + 300000]]));
+            const inGap = segs.filter(([a, z]) => z > OUT + 1 && a < BACK - 1);
+            const lastBefore = Math.max(...segs.filter(([, z]) => z <= OUT + 1).map(([, z]) => z));
+            const firstAfter = Math.min(...segs.filter(([a]) => a >= BACK - 1).map(([a]) => a));
+            check(inGap.length === 0, `recorded history: no recorded-valid depth between ${iso(OUT)} and ${iso(BACK)} (last before ${iso(lastBefore)}, first after ${iso(firstAfter)}, ${inGap.length} segments inside) - the 25 h outage gap is intact`);
             const b = await chromium.launch();
             const ctx = await b.newContext({ viewport: { width: 1680, height: 960 } });
             await ctx.addInitScript(() => { try { localStorage.setItem('tluxe.instrument.v1', 'GC'); } catch {} });
@@ -1053,7 +1057,7 @@ jobs:
             await p.waitForSelector('canvas.gcmap__canvas', { timeout: 120000 });
             for (let i = 0; i < 30; i++) { const ok = await p.evaluate(() => { const c = document.querySelector('canvas.gcmap__canvas'); const n = document.querySelector('[data-testid="gcmap-now"]'); return c && Number(c.dataset.heatCols) > 0 && c.dataset.depth !== 'none' && n && n.dataset.fineLast; }); if (ok) break; await p.waitForTimeout(3000); }
             await p.waitForTimeout(4000);
-            const ds = () => p.evaluate(() => { const c = document.querySelector('canvas.gcmap__canvas'); const n = document.querySelector('[data-testid="gcmap-now"]'); return { ...c.dataset, rows: n.dataset.rows, fineSince: n.dataset.fineSince, fineLast: n.dataset.fineLast, now: Date.now(), panel: n.innerText.replace(/\n+/g, ' | '), sel: document.querySelector('[data-testid="gcmap-range"] [aria-selected="true"]')?.textContent, caption: document.querySelector('[data-testid="gcmap-window"]')?.textContent }; });
+            const ds = () => p.evaluate(() => { const c = document.querySelector('canvas.gcmap__canvas'); const n = document.querySelector('[data-testid="gcmap-now"]'); return { ...c.dataset, rows: n.dataset.rows, levels: n.dataset.fineLevels, fineSince: n.dataset.fineSince, fineLast: n.dataset.fineLast, now: Date.now(), panel: n.innerText.replace(/\n+/g, ' | '), sel: document.querySelector('[data-testid="gcmap-range"] [aria-selected="true"]')?.textContent, caption: document.querySelector('[data-testid="gcmap-window"]')?.textContent }; });
             const d0 = await ds();
             console.log(`DEFAULT: selected="${d0.sel}" range=${d0.range} vp=${iso(d0.vpT0)}..${iso(d0.vpT1)} bucket=${d0.bucketMs} recordedShare=${d0.recordedShare} plotShare=${d0.plotShare} profileShare=${d0.profileShare} gaps=${d0.gaps}`);
             console.log(`CAPTION: ${d0.caption}`);
@@ -1075,11 +1079,13 @@ jobs:
             const snaps = [{ w: 'LIVE SESSION', ...d0 }];
             for (const w of seq) {
               await p.getByRole('tablist', { name: 'History window' }).getByRole('tab', { name: w, exact: true }).click();
-              await p.waitForTimeout(1500);
-              const d = await ds();
+              const tc = Date.now();
+              let d = await ds();
+              for (let k = 0; k < 40 && !(Number(d.heatCols) > 0 && d.loading === '0' && d.range === (w === 'LIVE SESSION' ? d.range : d.range)); k++) { await p.waitForTimeout(500); d = await ds(); }
+              console.log(`  ${w}: chart loaded in ${((Date.now() - tc) / 1000).toFixed(1)} s (bucket ${d.bucketMs}, ${d.heatCols} columns, loading=${d.loading})`);
               snaps.push({ w, ...d });
               if (w === '6H' || w === '24H') out(`MP2-${w}`, await p.screenshot());
-              if (w === '24H') { console.log(`24H: vp=${iso(d.vpT0)}..${iso(d.vpT1)} bucket=${d.bucketMs} heat=${iso(d.heatFirstMs)}..${iso(d.heatLastMs)} recordedShare=${d.recordedShare}`); check(Number(d.vpT0) < BACK && Number(d.heatFirstMs) >= BACK - 300000 && Number(d.recordedShare) < 0.5, `24H shows the old gap hatched before ${iso(BACK)} (no heat before it; ${(Number(d.recordedShare) * 100).toFixed(0)} % of the window recorded)`); }
+              if (w === '24H') { console.log(`24H: vp=${iso(d.vpT0)}..${iso(d.vpT1)} bucket=${d.bucketMs} heat=${iso(d.heatFirstMs)}..${iso(d.heatLastMs)} recordedShare=${d.recordedShare} gaps=${d.gaps}`); check(Number(d.heatCols) > 0 && Number(d.vpT0) < BACK && Number(d.heatFirstMs) >= BACK - 300000 && Number(d.recordedShare) < 0.5, `24H: heat only from the reconnect on - window ${iso(d.vpT0)}.. is hatched DEPTH GAP up to ${iso(BACK)} (${(Number(d.recordedShare) * 100).toFixed(0)} % of the window recorded)`); }
             }
             let consistent = true;
             for (let i = 0; i < snaps.length; i++) {
@@ -1089,6 +1095,11 @@ jobs:
               if (i === 0) continue;
               const prev = JSON.parse(snaps[i - 1].rows || '[]');
               const dt = Number(s.fineLast) - Number(snaps[i - 1].fineLast);
+              for (const q of prev) {
+                if (rows.some((r) => r.side === q.side && r.price === q.price && r.runStart === q.runStart)) continue;
+                const lv = JSON.parse(s.levels || '[]').find((x) => x.side === q.side && x.price === q.price);
+                console.log(`  LEFT ${q.side} ${q.price} (run ${iso(q.runStart)}): at this read the 250 ms level is ${lv ? `size ${lv.size}, run ${iso(lv.runStart)} age ${(lv.ageMs / 1000).toFixed(2)} s${lv.runStart !== q.runStart ? ' - the run ENDED and restarted in the 250 ms data' : ' - same run (size / relative / distance now below the threshold in the live book)'}` : 'NOT in the latest 250 ms bucket - the run ended in the 250 ms data'}`);
+              }
               for (const r of rows) {
                 const q = prev.find((x) => x.side === r.side && x.price === r.price && x.runStart === r.runStart);
                 if (!q) continue;
