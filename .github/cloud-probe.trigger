@@ -18,3 +18,4 @@ busy-session validation run 2026-09-30T13:4x UTC (COMEX active)
 capture 2026-10-01T07:01:02Z real GC candles for the local S&R UI check (read only)
 capture 2026-10-01T07:20:50Z recorded GC depth of the last live hour for the local Liquidity Map check (read only)
 mapval 2026-10-01T07:51:31Z live IBKR validation for GC Liquidity Map (read only)
+2026-10-01T08:02:37Z mapprod: GC Liquidity Map production verification

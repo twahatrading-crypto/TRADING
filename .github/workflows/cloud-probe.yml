@@ -813,6 +813,143 @@ jobs:
           })();
           JS
           node mv.cjs
+  mapprod:
+    # GC Liquidity Map on the PRODUCTION domain (READ ONLY): waits for the deployed bundle, opens the page in Chromium,
+    # compares the drawn CURRENT DEPTH (canvas diagnostics) with /api/ibkr/book, follows the live heat edge, reads
+    # the pills / Strong Liquidity Now panel, and writes screenshots to the log (gzip + base64). Nothing is written anywhere.
+    if: ${{ contains(github.event.head_commit.message, '[mapprod]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: GC Liquidity Map production verification (read only)
+        shell: bash
+        run: |
+          npm init -y >/dev/null && npm i -s playwright@1 >/dev/null && npx playwright install --with-deps chromium >/dev/null 2>&1
+          cat > mp.cjs <<'JS'
+          const zlib = require('zlib');
+          const { chromium } = require('playwright');
+          const base = 'https://twahatrading.com';
+          const UA = { 'User-Agent': 'tluxe-cloud-probe/1.0' };
+          const j = async (p) => (await fetch(base + p, { headers: UA })).json();
+          const iso = (t) => (t ? new Date(Number(t)).toISOString() : '-');
+          const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+          const out = (name, buf) => {
+            const b = zlib.gzipSync(buf).toString('base64');
+            const n = Math.ceil(b.length / 60000);
+            for (let i = 0; i < n; i++) console.log(`CAPT ${name} ${i + 1}/${n} ${b.slice(i * 60000, (i + 1) * 60000)}`);
+          };
+          let fails = 0;
+          const check = (ok, m) => { console.log(`    ${ok ? 'OK  ' : 'FAIL'} ${m}`); if (!ok) fails++; };
+          (async () => {
+            const cfg = await j('/api/config');
+            if (cfg.authRequired) { console.log('OWNER AUTH ACTIVE - credential-free check not possible.'); process.exit(0); }
+            // 1. wait for the deployed bundle that contains the new route
+            let deployed = false, asset = '';
+            for (let i = 0; i < 60 && !deployed; i++) {
+              const html = await (await fetch(base + '/', { headers: UA })).text();
+              const m = html.match(/\/assets\/index-[^"']+\.js/);
+              asset = m ? m[0] : '';
+              if (asset) deployed = (await (await fetch(base + asset, { headers: UA })).text()).includes('gc-liquidity-map');
+              console.log(`deploy ${i}: bundle=${asset} hasRoute=${deployed}`);
+              if (!deployed) await sleep(20000);
+            }
+            check(deployed, `production bundle ${asset} serves /engines/gc-liquidity-map`);
+            if (!deployed) process.exit(1);
+            // 2. IBKR depth LIVE again after the gateway redeploy
+            let live = null;
+            for (let i = 0; i < 40; i++) {
+              const bk = await j('/api/ibkr/book?root=GC');
+              console.log(`ibkr ${i}: ${iso(Date.now())} state=${bk.state} contract=${bk.contract?.localSymbol} lastUpdate=${iso(bk.lastUpdateMs)} rows=${bk.rows?.bids?.length}x${bk.rows?.asks?.length}`);
+              if (bk.state === 'LIVE' && Date.now() - bk.lastUpdateMs < 5000) { live = bk; break; }
+              await sleep(15000);
+            }
+            check(!!live, 'IBKR GC depth LIVE on production before the page check');
+            const db = await j('/api/databento/status?root=GC');
+            console.log(`databento GC: contract=${db.activeContract} freshness=${db.freshness} verified=${db.verifiedByRealData} lastTrade=${JSON.stringify(db.lastTrade)}`);
+            // 3. the page
+            const b = await chromium.launch();
+            const ctx = await b.newContext({ viewport: { width: 1680, height: 960 } });
+            await ctx.addInitScript(() => { try { localStorage.setItem('tluxe.instrument.v1', 'GC'); } catch {} });
+            const p = await ctx.newPage();
+            const errs = [], reqs = new Set();
+            p.on('pageerror', (e) => errs.push(String(e).slice(0, 200)));
+            p.on('request', (r) => { const u = new URL(r.url()); if (/localhost|127\.0\.0\.1|:876\d|:4001/.test(r.url())) errs.push('LOCAL ' + r.url()); if (u.pathname.startsWith('/api/')) reqs.add(u.pathname); });
+            await p.goto(base + '/#/engines/gc-liquidity-map');
+            await p.waitForSelector('[data-testid="gcmap"]', { timeout: 60000 });
+            await p.waitForSelector('canvas.gcmap__canvas', { timeout: 120000 }).catch(() => {});
+            for (let i = 0; i < 24; i++) {
+              const d = await p.evaluate(() => document.querySelector('canvas.gcmap__canvas')?.dataset.depth || 'none');
+              if (d !== 'none') break;
+              await p.waitForTimeout(5000);
+            }
+            await p.waitForTimeout(10000);
+            const ui = await p.evaluate(() => {
+              const t = (sel) => (document.querySelector(sel)?.textContent || '').replace(/\s+/g, ' ').trim();
+              return { title: t('.gcmap__title'), sub: t('.gcmap__sub'), feeds: t('.gcmap__feeds'), bar: t('.gcmap__bar'), header: (document.querySelector('header')?.innerText || '').replace(/\s+/g, ' ').slice(0, 400),
+                       now: t('[data-testid="gcmap-now"]'), nodata: t('[data-testid="gcmap-nodata"]'), limit: t('[data-testid="gcmap-limit"]'), legend: t('.gcmap__legend'),
+                       nav: [...document.querySelectorAll('nav[aria-label="Main navigation"] a')].map((a) => a.textContent.trim()), overflowX: document.documentElement.scrollWidth - innerWidth };
+            });
+            console.log(`UI: ${JSON.stringify(ui)}`);
+            check(ui.title === 'GC Liquidity Map', 'page title GC Liquidity Map');
+            check(/GCZ6/.test(ui.sub) && /GC/.test(ui.header), `contract on page: "${ui.sub}"`);
+            check(/DATABENTO\s*·?\s*LIVE|DATABENTO LIVE/i.test(ui.feeds), `Databento pill LIVE: "${ui.feeds}"`);
+            check(/IBKR LIVE/i.test(ui.feeds), `IBKR depth pill LIVE: "${ui.feeds}"`);
+            check(!ui.nodata, `no NO DEPTH DATA banner while live ("${ui.nodata}")`);
+            const ni = ui.nav.indexOf('GC Liquidity Map');
+            check(ni > 0 && ui.nav[ni - 1] === 'Liquidity Heatmap' && ui.nav[ni + 1] === 'Volume Profile', `nav order ${ui.nav.slice(Math.max(0, ni - 1), ni + 2).join(' -> ')}`);
+            check(!/XAUUSD|XAGUSD/.test(ui.bar + ui.now), 'no spot/CFD relabel');
+            // 4. CURRENT DEPTH drawn == /api/ibkr/book (same lastUpdate), sampled repeatedly
+            let same = 0, exact = 0, lagMax = 0, edges = [];
+            for (let i = 0; i < 30; i++) {
+              const r = await p.evaluate(async () => {
+                const bk = await (await fetch('/api/ibkr/book?root=GC', { credentials: 'same-origin' })).json();
+                const c = document.querySelector('canvas.gcmap__canvas');
+                return { at: Date.now(), bk: { state: bk.state, c: bk.contract?.localSymbol, u: bk.lastUpdateMs, bids: (bk.rows?.bids ?? []).map((x) => [x.price, x.size]), asks: (bk.rows?.asks ?? []).map((x) => [x.price, x.size]) },
+                         d: c && c.dataset.depth !== 'none' ? JSON.parse(c.dataset.depth) : null, heatLast: Number(c?.dataset.heatLastMs), heatFirst: Number(c?.dataset.heatFirstMs), cols: Number(c?.dataset.heatCols), cells: Number(c?.dataset.heatCells), bucket: Number(c?.dataset.bucketMs), gaps: c?.dataset.gaps };
+              });
+              const eq = r.d && r.d.updateMs === r.bk.u;
+              const rowsEq = r.d && JSON.stringify(r.d.bids) === JSON.stringify(r.bk.bids) && JSON.stringify(r.d.asks) === JSON.stringify(r.bk.asks);
+              if (eq) { same++; if (rowsEq) exact++; }
+              if (r.d) lagMax = Math.max(lagMax, r.bk.u - r.d.updateMs);
+              edges.push([r.at, r.heatLast]);
+              console.log(`DEPTH ${i + 1} ${iso(r.at)} api=${r.bk.state} ${r.bk.c} u=${iso(r.bk.u)} drawn u=${iso(r.d?.updateMs)} sameUpdate=${eq} rowsEqual=${rowsEq} bid=${JSON.stringify(r.bk.bids.slice(0, 3))} ask=${JSON.stringify(r.bk.asks.slice(0, 3))} drawnBid=${JSON.stringify(r.d?.bids.slice(0, 3))} drawnAsk=${JSON.stringify(r.d?.asks.slice(0, 3))} rows=${r.d?.bids.length}x${r.d?.asks.length} | heat ${iso(r.heatFirst)}..${iso(r.heatLast)} cols=${r.cols} cells=${r.cells} bucket=${r.bucket} gaps=${r.gaps}`);
+              if (i === 29 || (same >= 5 && i >= 19)) break;
+              await p.waitForTimeout(1500);
+            }
+            check(same > 0 && exact === same, `drawn CURRENT DEPTH == /api/ibkr/book rows (price + size) on every sample with the same lastUpdate (${exact}/${same}); max drawn lag ${lagMax} ms`);
+            const adv = edges.filter((e, i) => i && e[1] > edges[i - 1][1]).length;
+            check(adv > 0, `live heat edge advances in real time (${adv}/${edges.length - 1} samples; ${iso(edges[0][1])} -> ${iso(edges[edges.length - 1][1])})`);
+            out('MP-shot-15m', await p.screenshot());
+            // 5. wider view (1H candles) to show history + the outage gap: report gaps the page leaves unpainted
+            await p.getByRole('tab', { name: '1H' }).click();
+            await p.waitForTimeout(15000);
+            const g = await p.evaluate(() => { const c = document.querySelector('canvas.gcmap__canvas'); return { gaps: c?.dataset.gaps, first: Number(c?.dataset.heatFirstMs), last: Number(c?.dataset.heatLastMs), cols: Number(c?.dataset.heatCols), bucket: Number(c?.dataset.bucketMs) }; });
+            const gaps = JSON.parse(g.gaps || '[]');
+            console.log(`1H view: heat ${iso(g.first)}..${iso(g.last)} cols=${g.cols} bucket=${g.bucket} gaps=${gaps.map((x) => `${iso(x[0])}..${iso(x[1])}`).join(', ')}`);
+            const OUT = Date.UTC(2026, 8, 30, 6, 45, 0, 844), BACK = Date.UTC(2026, 9, 1, 7, 48, 3, 341);
+            const og = gaps.find((x) => x[0] <= OUT + 60000 && x[1] >= BACK - 60000);
+            if (g.first < OUT) check(!!og, `outage ${iso(OUT)} -> ${iso(BACK)} left unpainted as a gap (${og ? iso(og[0]) + '..' + iso(og[1]) : 'not found'})`);
+            else console.log('    (the 1H viewport starts after the outage; outage gap verified from the API matrices instead)');
+            out('MP-shot-1h', await p.screenshot());
+            // 6. Strong Only (defaults) - what the panel says
+            await p.getByRole('tab', { name: '15m' }).click();
+            await p.getByLabel('Strong Only').check();
+            await p.waitForTimeout(8000);
+            const strong = await p.evaluate(() => (document.querySelector('[data-testid="gcmap-now"]')?.innerText || '').replace(/\n+/g, ' | '));
+            const st = await p.evaluate(() => JSON.parse(localStorage.getItem('tluxe.gcmap.settings.v1') || '{}'));
+            console.log(`STRONG ONLY settings=${JSON.stringify(st)} panel="${strong}"`);
+            out('MP-shot-strong', await p.screenshot());
+            const bkEnd = await j('/api/ibkr/book?root=GC');
+            console.log(`BOOK END ${iso(Date.now())} state=${bkEnd.state} lastUpdate=${iso(bkEnd.lastUpdateMs)} bid=${JSON.stringify((bkEnd.rows?.bids ?? []).slice(0, 10).map((x) => [x.price, x.size]))} ask=${JSON.stringify((bkEnd.rows?.asks ?? []).slice(0, 10).map((x) => [x.price, x.size]))}`);
+            console.log(`API paths requested by the page: ${[...reqs].sort().join(' ')}`);
+            check(errs.length === 0, `no page errors / localhost / port 4001 requests ${JSON.stringify(errs).slice(0, 300)}`);
+            check(ui.overflowX <= 0, `no horizontal overflow (${ui.overflowX})`);
+            await b.close();
+            console.log(`\nMAPPROD RESULT: ${fails ? `FAIL (${fails})` : 'PASS'}`);
+            process.exit(fails ? 1 : 0);
+          })();
+          JS
+          node mp.cjs
   busy:
     # Busy-session GC alignment (SI control) on PRODUCTION at 250 ms polling. The alignment formula is the depth job's
     # 250 ms formula, UNCHANGED. The decision rules below were fixed BEFORE the run (commit of 2026-09-30 06:xx UTC).
