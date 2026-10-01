@@ -1024,7 +1024,7 @@ jobs:
               const html = await (await fetch(base + '/', { headers: UA })).text();
               const m = html.match(/\/assets\/index-[^"']+\.js/);
               asset = m ? m[0] : '';
-              if (asset) { const js = await (await fetch(base + asset, { headers: UA })).text(); deployed = js.includes('250 ms RECORDED DEPTH NOT CURRENT') && js.includes('LIVE SESSION') && js.includes('LOADING RECORDED DEPTH'); }
+              if (asset) { const js = await (await fetch(base + asset, { headers: UA })).text(); deployed = asset !== '/assets/index-Cc0vhVaD.js' && js.includes('250 ms RECORDED DEPTH NOT CURRENT') && js.includes('LIVE SESSION') && js.includes('LOADING RECORDED DEPTH'); }
               console.log(`deploy ${i}: bundle=${asset} new=${deployed}`);
               if (!deployed) await sleep(20000);
             }
@@ -1055,7 +1055,7 @@ jobs:
             p.on('request', (r) => { if (/localhost|127\.0\.0\.1|:876\d|:4001/.test(r.url())) errs.push('LOCAL ' + r.url()); });
             await p.goto(base + '/#/engines/gc-liquidity-map');
             await p.waitForSelector('canvas.gcmap__canvas', { timeout: 120000 });
-            for (let i = 0; i < 30; i++) { const ok = await p.evaluate(() => { const c = document.querySelector('canvas.gcmap__canvas'); const n = document.querySelector('[data-testid="gcmap-now"]'); return c && Number(c.dataset.heatCols) > 0 && c.dataset.depth !== 'none' && n && n.dataset.fineLast; }); if (ok) break; await p.waitForTimeout(3000); }
+            for (let i = 0; i < 30; i++) { const ok = await p.evaluate(() => { const c = document.querySelector('canvas.gcmap__canvas'); const n = document.querySelector('[data-testid="gcmap-now"]'); return c && Number(c.dataset.heatCols) > 0 && c.dataset.loading === '0' && c.dataset.depth !== 'none' && n && n.dataset.fineLast; }); if (ok) break; await p.waitForTimeout(1000); }
             await p.waitForTimeout(4000);
             const ds = () => p.evaluate(() => { const c = document.querySelector('canvas.gcmap__canvas'); const n = document.querySelector('[data-testid="gcmap-now"]'); return { ...c.dataset, rows: n.dataset.rows, levels: n.dataset.fineLevels, fineSince: n.dataset.fineSince, fineLast: n.dataset.fineLast, now: Date.now(), panel: n.innerText.replace(/\n+/g, ' | '), sel: document.querySelector('[data-testid="gcmap-range"] [aria-selected="true"]')?.textContent, caption: document.querySelector('[data-testid="gcmap-window"]')?.textContent }; });
             const d0 = await ds();
@@ -1080,8 +1080,10 @@ jobs:
             for (const w of seq) {
               await p.getByRole('tablist', { name: 'History window' }).getByRole('tab', { name: w, exact: true }).click();
               const tc = Date.now();
+              await p.waitForTimeout(2500); // the new window's bucket is requested and marked LOADING first
               let d = await ds();
-              for (let k = 0; k < 40 && !(Number(d.heatCols) > 0 && d.loading === '0' && d.range === (w === 'LIVE SESSION' ? d.range : d.range)); k++) { await p.waitForTimeout(500); d = await ds(); }
+              while (!(Number(d.heatCols) > 0 && d.loading === '0') && Date.now() - tc < 30000) { await p.waitForTimeout(250); d = await ds(); }
+              check(Number(d.heatCols) > 0 && d.loading === '0', `${w}: the window's recorded depth loaded (bucket ${d.bucketMs})`);
               console.log(`  ${w}: chart loaded in ${((Date.now() - tc) / 1000).toFixed(1)} s (bucket ${d.bucketMs}, ${d.heatCols} columns, loading=${d.loading})`);
               snaps.push({ w, ...d });
               if (w === '6H' || w === '24H') out(`MP2-${w}`, await p.screenshot());

@@ -23,3 +23,4 @@ mapval 2026-10-01T07:51:31Z live IBKR validation for GC Liquidity Map (read only
 2026-10-01T13:20:33Z mapprod2: viewport + 250 ms Strong persistence production verification
 2026-10-01T13:33:52Z mapprod2: rerun after loading-state fix
 2026-10-01T13:34:06Z mapprod2: wait for the e7e557a bundle
+2026-10-01T13:49:59Z mapprod2: verify the loading-retry build
