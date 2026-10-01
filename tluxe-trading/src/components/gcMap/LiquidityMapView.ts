@@ -1,5 +1,6 @@
 import type { ChartNavigable } from '../chart/ChartStage';
-import { strongRunCells, type MapCell, type MapColumn, type MapResult, type StrongParams } from './liquidityMap';
+import type { MapCell, MapColumn, MapResult, StrongParams } from './liquidityMap';
+import type { StrongInterval, StrongNowRow } from './fineStrong';
 import { SESSION_MIN_SPAN_MS } from './viewRange';
 
 /* ============================================================================
@@ -47,15 +48,12 @@ export interface MapFrame {
   depthLive: boolean;
   /** STRONG LIQUIDITY NOW rows exactly as the page lists them (display only: outlined + labelled, never re-scored). */
   strongNow?: readonly StrongNowRow[];
+  /** Strong intervals (qualified .. run end) from the 250 ms series: Strong Only shows a chart cell only if its time
+   *  overlaps one of its own price / side - the chart bucket never decides qualification. */
+  strongIntervals?: readonly StrongInterval[];
   version: number;
 }
-export interface StrongNowRow {
-  side: 'ASK' | 'BID';
-  tick: number;
-  size: number;
-  relative: number;
-  observedMs: number;
-}
+export type { StrongNowRow };
 /** What the visible time window follows: the current depth session (start grows with it) or a fixed span to now. */
 export type ViewRange = { kind: 'session'; start: number } | { kind: 'span'; ms: number };
 export interface Viewport {
@@ -149,21 +147,33 @@ export class LiquidityMapView implements ChartNavigable {
   strongRuns: { side: 'ASK' | 'BID'; tick: number; start: number }[] = [];
   /** Per-column caches of the current analysis (mid tick, cells) - rebuilt when the analysis object changes. */
   private cacheFor: MapResult | null = null;
-  private mids: (number | null)[] = [];
   private byCol: MapCell[][] = [];
-  private strongFor: StrongParams | null = null;
+  private strongFor: readonly StrongInterval[] | null | undefined = null;
   private strongSet = new Set<number>();
+  private strongCellsFor: MapResult | null = null;
   private index(f: MapFrame): void {
     if (this.cacheFor !== f.result) {
       this.cacheFor = f.result;
       this.strongFor = null;
-      this.mids = f.cols.map((_, i) => midTickOf(f, i));
       this.byCol = f.cols.map(() => []);
       for (const c of f.result?.cells ?? []) this.byCol[c.c]?.push(c);
     }
-    if (this.strongFor !== f.strong) {
-      this.strongFor = f.strong;
-      this.strongSet = strongRunCells(f.result?.cells ?? [], this.mids, f.strong);
+    if (this.strongFor !== f.strongIntervals || this.strongCellsFor !== f.result) {
+      this.strongFor = f.strongIntervals;
+      this.strongCellsFor = f.result;
+      const byKey = new Map<string, StrongInterval[]>();
+      for (const iv of f.strongIntervals ?? []) {
+        const k = `${iv.side}${iv.tick}`;
+        const l = byKey.get(k);
+        if (l) l.push(iv);
+        else byKey.set(k, [iv]);
+      }
+      this.strongSet = new Set();
+      (f.result?.cells ?? []).forEach((c, i) => {
+        const l = byKey.get(`${c.side}${c.tick}`);
+        const col = f.cols[c.c];
+        if (l && col && l.some((iv) => iv.from < col.t + col.w && iv.to > col.t)) this.strongSet.add(i);
+      });
     }
   }
 
@@ -556,51 +566,43 @@ export class LiquidityMapView implements ChartNavigable {
   }
 
   /**
-   * STRONG LIQUIDITY NOW (rows from the page, unchanged): outline each level's recorded band from the start of its
-   * current run (the contiguous recorded run that reaches the latest bucket - never extended past real data).
+   * STRONG LIQUIDITY NOW: outline each level's recorded band from its 250 ms run start to the latest recorded time
+   * (the run is continuous at 250 ms - any gap or absence would have ended it), with a mark at its qualification time.
    */
   private drawStrongBands(g: CanvasRenderingContext2D, f: MapFrame): void {
     const rows = f.strongNow ?? [];
-    if (!rows.length || !f.cols.length || !f.depthLive) return;
+    const cov = f.result?.covered ?? [];
+    const lastCov = cov[cov.length - 1];
+    if (!rows.length || !lastCov || !f.depthLive) return;
     const v = this.vp!;
     const rowPx = Math.max(1, this.plotH() / (v.p1 - v.p0));
-    const lastC = f.cols.length - 1;
-    this.strongRuns = [];
     for (const row of rows) {
-      const segs: [number, number][] = [];
-      let start: number | null = null;
-      for (let c = lastC; c >= 0; c--) {
-        const cell = (this.byCol[c] ?? []).find((x) => x.side === row.side && x.tick === row.tick);
-        if (!cell || (c < lastC && cell.end)) break; // the run ended there (or never reached this bucket)
-        const col = f.cols[c]!;
-        for (let k = 0; k < col.valid.length; k += 2) segs.push([col.valid[k]!, col.valid[k + 1]!]);
-        start = col.valid.length ? col.valid[0]! : col.t;
-      }
-      if (start === null) continue;
-      this.strongRuns.push({ side: row.side, tick: row.tick, start });
+      if (row.runStart === null) continue;
+      const a = Math.max(row.runStart, lastCov[0]);
+      const b = lastCov[1];
+      if (b <= a) continue;
+      this.strongRuns.push({ side: row.side, tick: row.tick, start: row.runStart });
       const y0 = this.y(row.tick + 0.5);
       const y1 = y0 + Math.max(2, rowPx);
+      const x0 = Math.max(0, this.x(a));
+      const x1 = Math.min(this.plotW(), this.x(b));
       g.strokeStyle = `rgba(${row.side === 'ASK' ? ASK_RGB : BID_RGB},0.95)`;
       g.lineWidth = 1.5;
       g.beginPath();
-      for (const [a, b] of segs) {
-        const x0 = Math.max(0, this.x(a));
-        const x1 = Math.min(this.plotW(), this.x(b));
-        if (x1 <= x0) continue;
+      if (x1 > x0) {
         g.moveTo(x0, y0 - 1);
         g.lineTo(x1, y0 - 1);
         g.moveTo(x0, y1 + 1);
         g.lineTo(x1, y1 + 1);
       }
-      g.stroke();
-      // run start marker
-      const xs = this.x(start);
-      if (xs >= 0 && xs <= this.plotW()) {
-        g.beginPath();
-        g.moveTo(xs, y0 - 4);
-        g.lineTo(xs, y1 + 4);
-        g.stroke();
+      for (const t of [row.runStart, row.qualifiedAt]) {
+        if (t === null) continue;
+        const x = this.x(t);
+        if (x < 0 || x > this.plotW()) continue;
+        g.moveTo(x, y0 - 4);
+        g.lineTo(x, y1 + 4);
       }
+      g.stroke();
     }
   }
 
@@ -768,7 +770,7 @@ export class LiquidityMapView implements ChartNavigable {
       let y = yc;
       while (used.some(([a, b]) => y > a - 2 && y < b + 2)) y += c.side === 'ASK' ? -22 : 22;
       if (y < 12 || y > this.plotH() - 12) continue;
-      const text = `${c.side} ${(c.tick * this.opts.tickSize).toFixed(this.opts.decimals)}   SIZE ${fmtSize(c.size)}   ${c.relative.toFixed(1)}×   AGE ${fmtAge(c.observedMs)}`;
+      const text = `${c.side} ${(c.tick * this.opts.tickSize).toFixed(this.opts.decimals)}   SIZE ${fmtSize(c.size)}   ${c.relative.toFixed(1)}×   AGE ${c.lowerBound ? '≥' : ''}${fmtAge(c.observedMs)}`;
       g.font = `700 11px ${FONT}`;
       const w = g.measureText(text).width + 16;
       const x = Math.max(4, this.plotW() - w - 8);
@@ -852,15 +854,6 @@ const lookAhead = (span: number) => Math.max(15_000, span * 0.03);
 function validAt(c: MapColumn, t: number): boolean {
   for (let i = 0; i < c.valid.length; i += 2) if (t >= c.valid[i]! && t < c.valid[i + 1]!) return true;
   return false;
-}
-function midTickOf(f: MapFrame, ci: number): number | null {
-  const c = f.cols[ci];
-  if (!c) return null;
-  let bb = -Infinity;
-  let ba = Infinity;
-  for (let i = 0; i < c.bidTicks.length; i++) if (c.bidSizes[i]! > 0) bb = Math.max(bb, c.bidTicks[i]!);
-  for (let i = 0; i < c.askTicks.length; i++) if (c.askSizes[i]! > 0) ba = Math.min(ba, c.askTicks[i]!);
-  return Number.isFinite(bb) && Number.isFinite(ba) ? (bb + ba) / 2 : null;
 }
 export const fmtSize = (x: number) => (Number.isInteger(x) ? String(x) : x.toFixed(1));
 export function fmtAge(ms: number): string {

@@ -83,16 +83,33 @@ describe('GC Liquidity Map view', () => {
     expect(ask.w).toBeCloseTo(2 * bid.w, 5); // bar length proportional to the displayed size (14 vs 7)
   });
   it('STRONG LIQUIDITY NOW rows (from the page, unchanged) are labelled at the live edge, only while depth is live', () => {
-    const row = { side: 'ASK' as const, tick: 1004, size: 40, relative: 10, observedMs: 20_000 };
+    const row = { side: 'ASK' as const, tick: 1004, size: 40, relative: 10, observedMs: 20_000, runStart: T0 + 50_000, qualifiedAt: T0 + 60_000, lowerBound: false };
     const { v } = draw(frame({ depthLive: true, book: { bids: [], asks: [] }, strongNow: [row] }));
     expect(v.lastLabels).toEqual(['ASK 100.4   SIZE 40   10.0×   AGE 00:20']);
+    expect(draw(frame({ depthLive: true, book: { bids: [], asks: [] }, strongNow: [{ ...row, lowerBound: true }] })).v.lastLabels).toEqual(['ASK 100.4   SIZE 40   10.0×   AGE ≥00:20']);
     expect(draw(frame({ depthLive: false, strongNow: [row] })).v.lastLabels).toEqual([]);
     expect(draw(frame({ depthLive: true, book: { bids: [], asks: [] }, strongNow: [] })).v.lastLabels).toEqual([]); // nothing qualifies: nothing invented
   });
-  it('the band of a strong level is outlined from where its CURRENT run started - never back across a depth gap', () => {
-    const row = { side: 'ASK' as const, tick: 1004, size: 40, relative: 10, observedMs: 20_000 };
+  it('the band of a strong level is outlined from its 250 ms run start - never back across a depth gap', () => {
+    const row = { side: 'ASK' as const, tick: 1004, size: 40, relative: 10, observedMs: 20_000, runStart: T0 + 50_000, qualifiedAt: T0 + 60_000, lowerBound: false };
     const { v } = draw(frame({ depthLive: true, book: { bids: [], asks: [] }, strongNow: [row] }));
     expect(v.strongRuns).toEqual([{ side: 'ASK', tick: 1004, start: T0 + 50_000 }]);
+    // an (impossible) start before the gap is clipped to the recorded interval it is in: nothing drawn through the gap
+    const lines: number[][] = [];
+    const rec = recorder();
+    (rec.ctx as unknown as { moveTo: (x: number, y: number) => void }).moveTo = (x, y) => lines.push([x, y]);
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(rec.ctx as never);
+    const host = document.createElement('div');
+    host.getBoundingClientRect = () => ({ width: SIZE.w, height: SIZE.h, left: 0, top: 0, right: SIZE.w, bottom: SIZE.h, x: 0, y: 0, toJSON() {} });
+    const f = frame({ depthLive: true, book: { bids: [], asks: [] }, strongNow: [{ ...row, runStart: T0 }] });
+    const w = new LiquidityMapView(host, () => f, { tickSize: 0.1, decimals: 1, now: () => T0 + 70_000, raf: { request: () => 0, cancel: () => {} } });
+    w.pin({ ...VP });
+    lines.length = 0;
+    w.draw(f);
+    const yTop = ((VP.p1 - 1004.5) / (VP.p1 - VP.p0)) * (SIZE.h - 22) - 1; // the band's top edge
+    const xs = lines.filter((l) => Math.abs(l[1]! - yTop) < 0.01).map((l) => l[0]!);
+    expect(xs.length).toBeGreaterThan(0);
+    expect(Math.min(...xs)).toBeGreaterThanOrEqual(xOf(T0 + 50_000) - 1e-6);
   });
   it('colour scale: weak = dark subtle blue, moderate = blue / cyan, strong = yellow, very strong = orange, exceptional = red / white-hot', () => {
     expect(paletteAt(0.2).rgb[2]).toBeGreaterThan(paletteAt(0.2).rgb[0]);
@@ -106,7 +123,8 @@ describe('GC Liquidity Map view', () => {
   });
   it('Strong Only hides the ordinary depth and keeps the strong level', () => {
     const all = heatFills(draw(frame()).rec.fills).length;
-    const strong = heatFills(draw(frame({ strongOnly: true })).rec.fills);
+    const strong = heatFills(draw(frame({ strongOnly: true, strongIntervals: [{ side: 'ASK', tick: 1004, from: T0 + 60_000, to: T0 + 70_000 }] })).rec.fills);
+    expect(heatFills(draw(frame({ strongOnly: true, strongIntervals: [] })).rec.fills)).toEqual([]); // the chart bucket alone never qualifies anything
     expect(strong.length).toBeGreaterThan(0);
     expect(strong.length).toBeLessThan(all);
   });

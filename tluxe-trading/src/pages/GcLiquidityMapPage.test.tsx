@@ -80,7 +80,9 @@ describe('GC Liquidity Map - a separate, read-only page', () => {
     fireEvent.click(within(tfs).getByRole('tab', { name: '1m' }));
     await flush();
     expect(heat().slice(0, before.length)).toEqual(before);
-    expect(new Set(heat()).size).toBe(1); // one bucket size - chosen from the viewport, not the candle timeframe
+    // the chart's bucket (from the viewport, not the candle timeframe) + the fixed 250 ms series used for Strong persistence
+    expect(new Set(heat().filter((b) => b !== '250')).size).toBeLessThanOrEqual(1);
+    expect(heat()).toContain('250');
     expect(urls.every((u) => u.startsWith('/api/ibkr/heatmap?') || u.startsWith('/api/'))).toBe(true);
   });
 
@@ -131,7 +133,7 @@ describe('GC Liquidity Map - a separate, read-only page', () => {
 
   it('isolation: no collector / provider / connection / recorder / polling of its own; no synthetic source; no other page imported', () => {
     const src = import.meta.glob(['/src/pages/GcLiquidityMapPage.tsx', '/src/components/gcMap/*.{ts,tsx}', '!/src/**/*.test.{ts,tsx}'], { query: '?raw', import: 'default', eager: true }) as Record<string, string>;
-    expect(Object.keys(src).length).toBe(5);
+    expect(Object.keys(src).length).toBe(6);
     for (const [f, s] of Object.entries(src)) {
       expect(s, f).not.toMatch(/new (DatabentoFeed|IbkrDepthProvider|DatabentoBridgeClient|WebSocket|EventSource|MarketDataService|OrderFlowService)\b/);
       expect(s, f).not.toMatch(/connectServices|createServices|DepthRecorder|setEngineSettings|\bfetch\(/);

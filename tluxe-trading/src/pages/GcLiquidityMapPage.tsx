@@ -14,6 +14,7 @@ import { IbkrDepthPill } from '../components/orderFlow/IbkrSession';
 import { Pill } from '../components/orderFlow/OrderFlowPanels';
 import { TradeTape } from '../components/orderFlow/tradeDots';
 import { analyzeMap, type StrongParams } from '../components/gcMap/liquidityMap';
+import { FINE_BUCKET_MS, FINE_STALE_MS, FineStrong, strongNowRows, type StrongInterval } from '../components/gcMap/fineStrong';
 import { DEFAULT_MAP_SETTINGS, isMapSettings, isMapTf, MAP_TFS, MIN_DEPTH_BUCKET_MS, TF_LABEL, TF_MS, type MapSettings, type MapTf } from '../components/gcMap/mapSettings';
 import { fmtAge, fmtSize, LiquidityMapView, PALETTE, PALETTE_MAX, SCALE_NAMES, type DepthRow, type HoverInfo, type MapCandle, type MapFrame, type StrongNowRow, type ViewRange, type Viewport } from '../components/gcMap/LiquidityMapView';
 import { latestSession, MAP_RANGES, RANGE_LABEL, RANGE_MS, SESSION_BREAK_MS, SESSION_LOOKBACK_MS, type MapRange, type SessionInfo } from '../components/gcMap/viewRange';
@@ -30,12 +31,7 @@ import '../components/gcMap/gcMap.css';
  * a signal. Independently removable: this file, components/gcMap, one route, one nav item.
  * ========================================================================== */
 
-const median = (v: number[]) => {
-  if (!v.length) return 0;
-  const s = [...v].sort((a, b) => a - b);
-  const m = s.length >> 1;
-  return s.length % 2 ? s[m]! : (s[m - 1]! + s[m]!) / 2;
-};
+const EMPTY_IV: StrongInterval[] = [];
 
 export function GcLiquidityMapPage() {
   const def = useActiveInstrument();
@@ -94,6 +90,24 @@ function MapWorkspace() {
     };
   }, [isGc, tick]);
 
+  // STRONG persistence source: the same recorded-depth store / endpoint, fixed at the finest recorded bucket (250 ms)
+  // and never tied to the chart - so the chart's bucket, timeframe, zoom or window cannot change Strong results.
+  const [fine, setFine] = useState<DepthHistory | null>(null);
+  const [fineVer, setFineVer] = useState(0);
+  useEffect(() => {
+    if (!isGc) return;
+    const h = new DepthHistory('GC', tick, () => FINE_BUCKET_MS);
+    setFine(h);
+    h.start();
+    h.ensure(Date.now() - 12 * 60_000, Date.now(), 100_000); // 15 min of 250 ms buckets (server limit 3900 columns)
+    const t = setInterval(() => setFineVer(h.version), 1000);
+    return () => {
+      clearInterval(t);
+      h.destroy();
+      setFine(null);
+    };
+  }, [isGc, tick]);
+
   // Real executed trades (existing order-flow recording) - only to tell TRADED from PULLED at a band end.
   const tapeRef = useRef(new TradeTape(tick));
   const prints = useMemo(() => {
@@ -146,28 +160,30 @@ function MapWorkspace() {
   const depthLive = !!book;
   const lastPriceTick = prints.length ? prints[prints.length - 1]!.tick : null;
 
-  // STRONG LIQUIDITY NOW: levels in the LIVE visible book whose recorded run qualifies (age = continuously observed).
-  const strongNow = useMemo(() => {
-    if (!book || !result || !cols.length) return { asks: [] as StrongNowRow[], bids: [] as StrongNowRow[] };
-    const lastC = cols.length - 1;
-    const age = new Map(result.cells.filter((c) => c.c === lastC).map((c) => [`${c.side}${c.tick}`, c.observedMs]));
-    const best = book.bids.length && book.asks.length ? (Math.max(...book.bids.map((r) => r.tick)) + Math.min(...book.asks.map((r) => r.tick))) / 2 : null;
-    const side = (rows: DepthRow[], sd: 'BID' | 'ASK') =>
-      rows
-        .map((r) => {
-          const rel = r.size / Math.max(1e-9, median(rows.filter((x) => x !== r).map((x) => x.size)));
-          return { side: sd, tick: r.tick, size: r.size, relative: rel, observedMs: age.get(`${sd}${r.tick}`) ?? 0 };
-        })
-        .filter((x) => x.size >= strong.minSize && x.relative >= strong.minRelative && x.observedMs >= strong.minPersistMs && (best === null || Math.abs(x.tick - best) <= strong.maxDistanceTicks))
-        .sort((a, b) => b.tick - a.tick);
-    return { asks: side(book.asks, 'ASK'), bids: side(book.bids, 'BID') };
-  }, [book, result, cols, strong]);
+  // 250 ms Strong state (persistence, age, run start / end, qualification time) - window-independent.
+  const trackerRef = useRef<FineStrong | null>(null);
+  const fineState = useMemo(() => {
+    if (!fine || !fine.columns.length) return null;
+    if (!trackerRef.current) trackerRef.current = new FineStrong();
+    const tr = trackerRef.current;
+    const keep = tr.update(fine.columns, strong);
+    if (keep !== null && fine.columns.length && fine.columns[0]!.t < keep) fine.columns = fine.columns.filter((c) => c.t >= keep); // memory only
+    return { levels: tr.levels, intervals: tr.intervals(), since: tr.since, lastEnd: tr.lastEnd };
+  }, [fine, fineVer, strong]); // eslint-disable-line react-hooks/exhaustive-deps -- fineVer signals new 250 ms columns
+  const fineCurrent = !!fineState && fineState.lastEnd !== null && Date.now() - fineState.lastEnd <= FINE_STALE_MS;
+
+  // STRONG LIQUIDITY NOW: levels in the LIVE visible book (size / relative / distance from the book, as before) whose
+  // continuous persistence - measured ONLY on the 250 ms recorded series - meets the threshold.
+  const strongNow = useMemo(
+    () => (book && fineState && fineCurrent ? strongNowRows(book, fineState.levels, strong) : { asks: [] as StrongNowRow[], bids: [] as StrongNowRow[] }),
+    [book, fineState, fineCurrent, strong],
+  );
   // Chart.
   const hostRef = useRef<HTMLDivElement | null>(null);
   const [view, setView] = useState<LiquidityMapView | null>(null);
   const [hover, setHover] = useState<HoverInfo | null>(null);
   const frameRef = useRef<MapFrame | null>(null);
-  frameRef.current = { cols, result, candles, book, bookUpdateMs: liveBook?.lastUpdateMs ?? null, lastPriceTick, showCandles: s.candles, showHeat: s.heat, showDepth: s.depth, strongOnly: s.strongOnly, showLabels: s.labels, gain: s.gain, strong, depthLive, strongNow: [...strongNow.asks, ...strongNow.bids], version: (frameRef.current?.version ?? 0) + 1 };
+  frameRef.current = { cols, result, candles, book, bookUpdateMs: liveBook?.lastUpdateMs ?? null, lastPriceTick, showCandles: s.candles, showHeat: s.heat, showDepth: s.depth, strongOnly: s.strongOnly, showLabels: s.labels, gain: s.gain, strong, depthLive, strongNow: [...strongNow.asks, ...strongNow.bids], strongIntervals: fineState?.intervals ?? EMPTY_IV, version: (frameRef.current?.version ?? 0) + 1 };
   const hasData = isGc && (candles.length > 0 || cols.length > 0) && viewRange !== null;
   useEffect(() => {
     const host = hostRef.current;
@@ -274,6 +290,7 @@ function MapWorkspace() {
                 ) : (
                   <><strong>{RANGE_LABEL[range]}</strong> last {RANGE_LABEL[range].toLowerCase()} · time without recorded depth is hatched DEPTH GAP, never filled</>
                 )}
+                {s.strongOnly && fineState?.since ? ` · Strong Only: qualified from 250 ms recorded depth (available since ${utc(fineState.since)} UTC)` : ''}
               </div>
             )}
             <ChartStage containerRef={hostRef} controller={view} hasBars={hasData}>
@@ -309,13 +326,15 @@ function MapWorkspace() {
           </section>
 
           <aside className="gcmap__side">
-            <section className="panel gcmap__panel" aria-label="Strong liquidity now" data-testid="gcmap-now">
+            <section className="panel gcmap__panel" aria-label="Strong liquidity now" data-testid="gcmap-now" data-rows={JSON.stringify([...strongNow.asks, ...strongNow.bids].map((r) => ({ side: r.side, price: Number((r.tick * tick).toFixed(d)), size: r.size, relative: Number(r.relative.toFixed(3)), ageMs: r.observedMs, ageLowerBound: r.lowerBound, runStart: r.runStart, qualifiedAt: r.qualifiedAt })))} data-fine-since={fineState?.since ?? ''} data-fine-last={fineState?.lastEnd ?? ''}>
               <button type="button" className="gcmap__h" aria-expanded={nowOpen} onClick={() => setNowOpen((o) => !o)}>
                 {nowOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />} STRONG LIQUIDITY NOW
               </button>
               {nowOpen &&
                 (!depthLive ? (
                   <p className="gcmap__muted">NO DEPTH DATA — no current levels.</p>
+                ) : !fineCurrent ? (
+                  <p className="gcmap__muted" data-testid="gcmap-fine-stale">250 ms RECORDED DEPTH NOT CURRENT — persistence cannot be measured, no level is shown.</p>
                 ) : (
                   <>
                     <NowTable title="ASK" rows={strongNow.asks} tick={tick} d={d} />
@@ -343,7 +362,7 @@ function MapWorkspace() {
   );
 }
 
-function NowTable({ title, rows, tick, d }: { title: 'ASK' | 'BID'; rows: { tick: number; size: number; relative: number; observedMs: number }[]; tick: number; d: number }) {
+function NowTable({ title, rows, tick, d }: { title: 'ASK' | 'BID'; rows: StrongNowRow[]; tick: number; d: number }) {
   return (
     <div className={`gcmap__tbl gcmap__tbl--${title.toLowerCase()}`}>
       <h3>{title}</h3>
@@ -360,7 +379,7 @@ function NowTable({ title, rows, tick, d }: { title: 'ASK' | 'BID'; rows: { tick
                 <td className="num">{formatPrice(r.tick * tick, d)}</td>
                 <td className="num">{fmtSize(r.size)}</td>
                 <td className="num">{r.relative.toFixed(1)}×</td>
-                <td className="num">{fmtAge(r.observedMs)}</td>
+                <td className="num" title={`Continuous at 250 ms since ${r.runStart ? new Date(r.runStart).toISOString().slice(11, 23) : '—'} UTC${r.qualifiedAt ? ` · qualified ${new Date(r.qualifiedAt).toISOString().slice(11, 23)} UTC` : ''}${r.lowerBound ? ' · started before the loaded 250 ms history' : ''}`}>{r.lowerBound ? '≥' : ''}{fmtAge(r.observedMs)}</td>
               </tr>
             ))}
           </tbody>
