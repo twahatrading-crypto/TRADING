@@ -77,17 +77,21 @@ function MapWorkspace() {
   );
 
   // Recorded IBKR depth history (existing store + endpoint), bucket chosen from the viewport only.
-  const history = useMemo(() => (isGc ? new DepthHistory('GC', tick, () => MIN_DEPTH_BUCKET_MS) : null), [isGc, tick]);
+  // Created inside the effect: a destroyed instance is never reused (StrictMode / HMR re-run the effect).
+  const [history, setHistory] = useState<DepthHistory | null>(null);
   const [histVer, setHistVer] = useState(0);
   useEffect(() => {
-    if (!history) return;
-    history.start();
-    const t = setInterval(() => setHistVer(history.version), 1000);
+    if (!isGc) return;
+    const h = new DepthHistory('GC', tick, () => MIN_DEPTH_BUCKET_MS);
+    setHistory(h);
+    h.start();
+    const t = setInterval(() => setHistVer(h.version), 1000);
     return () => {
       clearInterval(t);
-      history.destroy();
+      h.destroy();
+      setHistory(null);
     };
-  }, [history]);
+  }, [isGc, tick]);
 
   // Real executed trades (existing order-flow recording) - only to tell TRADED from PULLED at a band end.
   const tapeRef = useRef(new TradeTape(tick));

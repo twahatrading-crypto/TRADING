@@ -176,10 +176,28 @@ export function analyzeMap(cols: readonly MapColumn[], prints: readonly Print[] 
   return { cells, covered, refSize };
 }
 
-/** Intensity 0..1 of a displayed size against the reference; `gain` is the Intensity control (1 = neutral). */
+/** Curve exponent at Intensity 1.0: ordinary depth stays faint, only large displayed size turns hot. */
+export const INTENSITY_EXPONENT = 1.6;
+/** Intensity 0..1 of a displayed size against the reference; `gain` is the Intensity control (1 = default). */
 export function intensityOf(size: number, refSize: number, gain = 1): number {
   if (!(size > 0) || !(refSize > 0)) return 0;
-  return Math.max(0, Math.min(1, Math.pow(size / refSize, 1 / Math.max(0.25, gain))));
+  return Math.max(0, Math.min(1, Math.pow(size / refSize, INTENSITY_EXPONENT / Math.max(0.25, gain))));
+}
+
+/**
+ * Strong Only, per continuous run: a run is shown from the first bucket at which it qualifies until it ends (never
+ * before - not back-dated). Returns the set of qualifying cell indexes (cells are in column order).
+ */
+export function strongRunCells(cells: readonly MapCell[], mids: readonly (number | null)[], p: StrongParams): Set<number> {
+  const out = new Set<number>();
+  const on = new Set<string>();
+  cells.forEach((c, i) => {
+    const k = `${c.side}${c.tick}`;
+    if (!on.has(k) && isStrong(c, mids[c.c] ?? null, p)) on.add(k);
+    if (on.has(k)) out.add(i);
+    if (c.end) on.delete(k);
+  });
+  return out;
 }
 
 /** Heat colour stops by intensity (DISPLAYED LIQUIDITY INTENSITY only - never side, direction or signal). */

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { analyzeMap, heatColor, intensityOf, isStrong, type MapColumn, type Print } from './liquidityMap';
+import { analyzeMap, heatColor, intensityOf, isStrong, strongRunCells, type MapColumn, type Print } from './liquidityMap';
 
 /* TEST DATA ONLY: hand-built recorded-depth columns (10 contiguous rows per side), 250 ms buckets. */
 const W = 250;
@@ -109,5 +109,19 @@ describe('intensity / strong', () => {
     expect(isStrong({ size: 30, relative: 2, observedMs: 2000, tick: 1004 }, 999.5, p)).toBe(false);
     expect(isStrong({ size: 30, relative: 5, observedMs: 2000, tick: 1020 }, 999.5, p)).toBe(false);
     expect(isStrong({ size: 5, relative: 5, observedMs: 2000, tick: 1004 }, 999.5, p)).toBe(false);
+  });
+});
+
+describe('Strong Only per run', () => {
+  it('a run shows from the bucket it qualifies until it ends - never back-dated, no flicker on a dip', () => {
+    const sizes = [12, 12, 30, 30, 9, 30, 30, 0, 30];
+    const cols = run(9, (t, i) => col(t, 1000, { [WALL]: sizes[i]! }));
+    const r = analyzeMap(cols);
+    const p = { minSize: 10, minRelative: 2.5, minPersistMs: 750, maxDistanceTicks: 60 };
+    const set = strongRunCells(r.cells, cols.map(() => 999.5), p);
+    const shown = r.cells.map((c, i) => [c, i] as const).filter(([c]) => c.tick === WALL).map(([c, i]) => [cols[c.c]!.t, set.has(i)]);
+    // qualifies at bucket 2 (30 lots, 7.5x, 750 ms observed); the 9-lot dip at 4 stays shown; the run ends at 6;
+    // after the absence (bucket 7) the new run at 8 is new evidence and has not qualified yet.
+    expect(shown).toEqual([[at(0), false], [at(1), false], [at(2), true], [at(3), true], [at(4), true], [at(5), true], [at(6), true], [at(8), false]]);
   });
 });

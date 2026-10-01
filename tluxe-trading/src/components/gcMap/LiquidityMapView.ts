@@ -1,5 +1,5 @@
 import type { ChartNavigable } from '../chart/ChartStage';
-import { heatColor, intensityOf, isStrong, type MapCell, type MapColumn, type MapResult, type StrongParams } from './liquidityMap';
+import { heatColor, intensityOf, isStrong, strongRunCells, type MapCell, type MapColumn, type MapResult, type StrongParams } from './liquidityMap';
 
 /* ============================================================================
  * GC Liquidity Map canvas (this page only). Draws, from data it is handed and never alters:
@@ -91,12 +91,20 @@ export class LiquidityMapView implements ChartNavigable {
   private cacheFor: MapResult | null = null;
   private mids: (number | null)[] = [];
   private byCol: MapCell[][] = [];
+  private strongFor: StrongParams | null = null;
+  private strongSet = new Set<number>();
   private index(f: MapFrame): void {
-    if (this.cacheFor === f.result) return;
-    this.cacheFor = f.result;
-    this.mids = f.cols.map((_, i) => midTickOf(f, i));
-    this.byCol = f.cols.map(() => []);
-    for (const c of f.result?.cells ?? []) this.byCol[c.c]?.push(c);
+    if (this.cacheFor !== f.result) {
+      this.cacheFor = f.result;
+      this.strongFor = null;
+      this.mids = f.cols.map((_, i) => midTickOf(f, i));
+      this.byCol = f.cols.map(() => []);
+      for (const c of f.result?.cells ?? []) this.byCol[c.c]?.push(c);
+    }
+    if (this.strongFor !== f.strong) {
+      this.strongFor = f.strong;
+      this.strongSet = strongRunCells(f.result?.cells ?? [], this.mids, f.strong);
+    }
   }
 
   constructor(
@@ -190,7 +198,7 @@ export class LiquidityMapView implements ChartNavigable {
     this.autoPrice = true;
     const c = this.centreTick();
     if (c === null) return this.set(null);
-    const t1 = this.now() + 5 * 60_000;
+    const t1 = this.now() + lookAhead(DEFAULT_SPAN_MS);
     this.set({ t0: t1 - DEFAULT_SPAN_MS, t1, p0: c - DEFAULT_TICKS / 2, p1: c + DEFAULT_TICKS / 2 });
   }
   fitView(): void {
@@ -312,8 +320,8 @@ export class LiquidityMapView implements ChartNavigable {
     }
     if (!this.vp) this.resetView();
     if (this.vp && this.follow) {
-      const t1 = this.now() + 5 * 60_000;
-      if (t1 - this.vp.t1 > 1000) this.set({ ...this.vp, t0: this.vp.t0 + (t1 - this.vp.t1), t1 }, false);
+      const t1 = this.now() + lookAhead(this.vp.t1 - this.vp.t0);
+      if (Math.abs(t1 - this.vp.t1) > 1000) this.set({ ...this.vp, t0: this.vp.t0 + (t1 - this.vp.t1), t1 }, false);
     }
     if (this.autoPrice) this.autoFit();
     if (this.dirty) {
@@ -386,11 +394,11 @@ export class LiquidityMapView implements ChartNavigable {
     if (!r) return;
     const v = this.vp!;
     const rowPx = Math.max(1, this.plotH() / (v.p1 - v.p0));
-    for (const cell of r.cells) {
+    for (let ci = 0; ci < r.cells.length; ci++) {
+      const cell = r.cells[ci]!;
       const col = f.cols[cell.c]!;
       if (col.t + col.w < v.t0 || col.t > v.t1 || cell.tick < v.p0 - 1 || cell.tick > v.p1 + 1) continue;
-      const strong = isStrong(cell, this.mids[cell.c] ?? null, f.strong);
-      if (f.strongOnly && !strong) continue;
+      if (f.strongOnly && !this.strongSet.has(ci)) continue;
       const i = intensityOf(cell.size, r.refSize, f.gain);
       if (i <= 0.02) continue;
       const [cr, cg, cb] = heatColor(i);
@@ -400,7 +408,7 @@ export class LiquidityMapView implements ChartNavigable {
         const x0 = this.x(col.valid[k]!);
         const x1 = this.x(col.valid[k + 1]!);
         const ww = Math.max(0.6, x1 - x0);
-        g.fillStyle = `rgba(${cr},${cg},${cb},${(0.18 + 0.82 * i).toFixed(3)})`;
+        g.fillStyle = `rgba(${cr},${cg},${cb},${(0.06 + 0.94 * Math.pow(i, 1.3)).toFixed(3)})`;
         g.fillRect(x0, y0, ww, hh);
         if (i >= 0.93 && hh >= 3) {
           g.fillStyle = 'rgba(255,255,255,0.75)'; // white-hot centre of an exceptional wall
@@ -615,7 +623,7 @@ export class LiquidityMapView implements ChartNavigable {
       const col = ci >= 0 ? f.cols[ci]! : null;
       const inValid = col ? validAt(col, t) : false;
       const cell = col && inValid ? ((this.byCol[ci] ?? []).find((c) => c.tick === tick) ?? null) : null;
-      if (cell && col && (!f.strongOnly || isStrong(cell, this.mids[ci] ?? null, f.strong))) {
+      if (cell && col && (!f.strongOnly || this.strongSet.has(f.result.cells.indexOf(cell)))) {
         info = { x: p.x, y: p.y, cell, col };
         g.strokeStyle = 'rgba(255,255,255,0.8)';
         g.lineWidth = 1;
@@ -627,6 +635,8 @@ export class LiquidityMapView implements ChartNavigable {
   }
 }
 
+/** Empty space right of "now" while following live (never filled with data): 3 % of the span, at least 15 s. */
+const lookAhead = (span: number) => Math.max(15_000, span * 0.03);
 function validAt(c: MapColumn, t: number): boolean {
   for (let i = 0; i < c.valid.length; i += 2) if (t >= c.valid[i]! && t < c.valid[i + 1]!) return true;
   return false;
