@@ -51,6 +51,8 @@ export interface MapFrame {
   /** Strong intervals (qualified .. run end) from the 250 ms series: Strong Only shows a chart cell only if its time
    *  overlaps one of its own price / side - the chart bucket never decides qualification. */
   strongIntervals?: readonly StrongInterval[];
+  /** The recorded depth of a newly chosen window has not arrived yet: nothing is claimed missing while loading. */
+  loading?: boolean;
   version: number;
 }
 export type { StrongNowRow };
@@ -474,6 +476,7 @@ export class LiquidityMapView implements ChartNavigable {
     const cov = r?.covered ?? [];
     for (let i = 1; i < cov.length; i++) holes.push([cov[i - 1]![1], cov[i]![0]]);
     ds.gaps = JSON.stringify(holes);
+    ds.loading = f.loading ? '1' : '0';
     // Viewport: the visible window and how much of it (up to now) has recorded-valid depth.
     const v = this.vp!;
     const end = Math.min(v.t1, this.now());
@@ -609,6 +612,14 @@ export class LiquidityMapView implements ChartNavigable {
   /** Time with no recorded-valid depth (inside the window, up to now): hatched, never painted as liquidity. */
   private drawGaps(g: CanvasRenderingContext2D, f: MapFrame, H: number): void {
     const v = this.vp!;
+    if (f.loading) {
+      g.fillStyle = 'rgba(148,163,184,0.8)';
+      g.font = `700 10px ${FONT}`;
+      g.textAlign = 'center';
+      g.fillText('LOADING RECORDED DEPTH…', this.plotW() / 2, 16);
+      g.textAlign = 'left';
+      return;
+    }
     const end = Math.min(v.t1, this.now());
     const cov = f.result?.covered ?? [];
     const holes: [number, number, string][] = [];

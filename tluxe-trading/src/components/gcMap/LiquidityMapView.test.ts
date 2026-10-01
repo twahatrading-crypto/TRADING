@@ -64,6 +64,13 @@ describe('GC Liquidity Map view', () => {
     expect(rec.texts).toContain('DEPTH GAP');
     expect(rec.texts).toContain('NO DEPTH DATA');
   });
+  it('while a new window is still loading nothing is hatched or claimed missing', () => {
+    const { rec, v } = draw(frame({ cols: [], result: null, loading: true, book: { bids: [], asks: [] }, depthLive: true }));
+    expect(rec.texts).toContain('LOADING RECORDED DEPTH…');
+    expect(rec.texts).not.toContain('NO DEPTH DATA');
+    expect((v as unknown as { canvas: HTMLCanvasElement }).canvas.dataset.loading).toBe('1');
+    expect(draw(frame({ cols: [], result: null, book: { bids: [], asks: [] }, depthLive: true })).rec.texts).toContain('NO DEPTH DATA'); // loaded and empty: said so
+  });
   it('the candle timeframe does not change the liquidity drawn (same rectangles with 1m or 1H candles)', () => {
     const m1: MapCandle[] = Array.from({ length: 2 }, (_, i) => ({ t: T0 + i * 60_000, ms: 60_000, o: 100, h: 100.4, l: 99.6, c: 100.2 }));
     const h1: MapCandle[] = [{ t: T0 - 3_600_000 + 3_600_000, ms: 3_600_000, o: 100, h: 100.8, l: 99.3, c: 100.1 }];

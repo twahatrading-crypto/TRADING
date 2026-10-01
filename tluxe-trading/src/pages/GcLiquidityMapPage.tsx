@@ -183,7 +183,11 @@ function MapWorkspace() {
   const [view, setView] = useState<LiquidityMapView | null>(null);
   const [hover, setHover] = useState<HoverInfo | null>(null);
   const frameRef = useRef<MapFrame | null>(null);
-  frameRef.current = { cols, result, candles, book, bookUpdateMs: liveBook?.lastUpdateMs ?? null, lastPriceTick, showCandles: s.candles, showHeat: s.heat, showDepth: s.depth, strongOnly: s.strongOnly, showLabels: s.labels, gain: s.gain, strong, depthLive, strongNow: [...strongNow.asks, ...strongNow.bids], strongIntervals: fineState?.intervals ?? EMPTY_IV, version: (frameRef.current?.version ?? 0) + 1 };
+  // A new chart bucket starts empty until its first answer: that is LOADING, never "no depth data".
+  const bucketSeen = useRef<{ b: number; v: number }>({ b: -1, v: -1 });
+  if (history && history.bucketMs !== bucketSeen.current.b) bucketSeen.current = { b: history.bucketMs, v: history.version };
+  const chartLoading = !!history && !history.error && history.columns.length === 0 && history.version === bucketSeen.current.v;
+  frameRef.current = { loading: chartLoading, cols, result, candles, book, bookUpdateMs: liveBook?.lastUpdateMs ?? null, lastPriceTick, showCandles: s.candles, showHeat: s.heat, showDepth: s.depth, strongOnly: s.strongOnly, showLabels: s.labels, gain: s.gain, strong, depthLive, strongNow: [...strongNow.asks, ...strongNow.bids], strongIntervals: fineState?.intervals ?? EMPTY_IV, version: (frameRef.current?.version ?? 0) + 1 };
   const hasData = isGc && (candles.length > 0 || cols.length > 0) && viewRange !== null;
   useEffect(() => {
     const host = hostRef.current;
@@ -326,7 +330,7 @@ function MapWorkspace() {
           </section>
 
           <aside className="gcmap__side">
-            <section className="panel gcmap__panel" aria-label="Strong liquidity now" data-testid="gcmap-now" data-rows={JSON.stringify([...strongNow.asks, ...strongNow.bids].map((r) => ({ side: r.side, price: Number((r.tick * tick).toFixed(d)), size: r.size, relative: Number(r.relative.toFixed(3)), ageMs: r.observedMs, ageLowerBound: r.lowerBound, runStart: r.runStart, qualifiedAt: r.qualifiedAt })))} data-fine-since={fineState?.since ?? ''} data-fine-last={fineState?.lastEnd ?? ''}>
+            <section className="panel gcmap__panel" aria-label="Strong liquidity now" data-testid="gcmap-now" data-rows={JSON.stringify([...strongNow.asks, ...strongNow.bids].map((r) => ({ side: r.side, price: Number((r.tick * tick).toFixed(d)), size: r.size, relative: Number(r.relative.toFixed(3)), ageMs: r.observedMs, ageLowerBound: r.lowerBound, runStart: r.runStart, qualifiedAt: r.qualifiedAt })))} data-fine-levels={JSON.stringify(fineState ? [...fineState.levels.values()].map((l) => ({ side: l.side, price: Number((l.tick * tick).toFixed(d)), size: Number(l.size.toFixed(2)), ageMs: l.observedMs, runStart: l.runStart, qualifiedAt: l.qualifiedAt })) : [])} data-fine-since={fineState?.since ?? ''} data-fine-last={fineState?.lastEnd ?? ''}>
               <button type="button" className="gcmap__h" aria-expanded={nowOpen} onClick={() => setNowOpen((o) => !o)}>
                 {nowOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />} STRONG LIQUIDITY NOW
               </button>
