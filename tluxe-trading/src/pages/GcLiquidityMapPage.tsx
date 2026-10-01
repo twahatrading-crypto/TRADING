@@ -220,7 +220,12 @@ function MapWorkspace() {
                 <span>Displayed: {fmtSize(hover.cell.size)}{hover.col.w > 250 ? ' (time-weighted over the bucket)' : ''}</span>
                 <span>Relative: {hover.cell.relative.toFixed(1)}× nearby</span>
                 <span>Observed: {fmtAge(hover.cell.observedMs)}</span>
-                {hover.cell.end && <span>Band end: {hover.cell.end.replace(/_/g, ' ')}</span>}
+                {hover.cell.end && (
+                  <span>
+                    Band end: {hover.cell.end.replace(/_/g, ' ')}
+                    {hover.cell.removedSize !== undefined ? ` · removed ${fmtSize(hover.cell.removedSize)}, executed at price ${fmtSize(hover.cell.endVolume ?? 0)}` : ''}
+                  </span>
+                )}
                 <span>Source: IBKR Level-2 (recorded)</span>
               </div>
             )}

@@ -88,6 +88,15 @@ describe('disappearance: PULLED_CONFIRMED vs OUT_OF_VISIBLE_BOOK vs TRADED', () 
     expect(ends(cols, [{ t: at(2) - 10, tick: WALL, size: 2 }])).toEqual(['PULLED_CONFIRMED']);
     expect(ends(cols, [{ t: at(2) - 10, tick: WALL - 1, size: 40 }])).toEqual(['PULLED_CONFIRMED']);
   });
+  it('real pattern (GCZ6 BID 4195.1, 2026-10-01 07:48:21-22): 18 lots shrink to 3.6 then vanish with only 3 lots traded -> PULLED_CONFIRMED, not TRADED', () => {
+    const sizes = [18, 18, 15, 3.6, 0];
+    const cols = run(5, (t, i) => col(t, 1000, { [WALL]: sizes[i]! }));
+    const r = analyzeMap(cols, [{ t: at(4) + 2, tick: WALL, size: 3 }]);
+    const end = r.cells.find((c) => c.tick === WALL && c.end)!;
+    expect([end.end, end.endVolume, end.removedSize]).toEqual(['PULLED_CONFIRMED', 3, 18]);
+    const traded = analyzeMap(cols, [{ t: at(4) + 2, tick: WALL, size: 12 }]).cells.find((c) => c.tick === WALL && c.end)!;
+    expect(traded.end).toBe('TRADED');
+  });
   it('coarse buckets (> 1 s) merge several books: the reason is not claimed', () => {
     const cols = Array.from({ length: 4 }, (_, i) => col(T0 + i * 5000, 1000, { [WALL]: i < 2 ? 30 : 0 }, 5000));
     expect(ends(cols)).toEqual(['UNDETERMINED']);

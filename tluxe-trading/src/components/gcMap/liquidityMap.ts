@@ -14,7 +14,9 @@
  *   FEED_GAP             the next bucket has no recorded-valid depth (or a hole inside the bucket)
  *   OUT_OF_VISIBLE_BOOK  the price is outside the next bucket's displayed range - unknown, never assumed cancelled
  *   TRADED               still inside the displayed range and gone, with Databento executions at that price around the
- *                        removal of >= TRADED_SHARE of its last size
+ *                        removal of >= TRADED_SHARE of the removed size (the largest displayed size within
+ *                        TRADE_TOLERANCE_MS before the removal - a level that first shrinks and then disappears is
+ *                        compared with what it held, not with its last, already reduced bucket)
  *   PULLED_CONFIRMED     inside the displayed range and gone without enough executions at the price
  *   UNDETERMINED         buckets coarser than CLASSIFY_MAX_BUCKET_MS merge several books - the reason is not claimed
  * ========================================================================== */
@@ -48,6 +50,10 @@ export interface MapCell {
   observedMs: number;
   /** Set on the last cell of a continuous run (the band ends here); null while the run continues. */
   end: RunEnd | null;
+  /** At a TRADED / PULLED_CONFIRMED end: executions at the price around the removal, and the size that was removed
+   *  (the largest displayed size within TRADE_TOLERANCE_MS before the removal - not the already-shrunk last bucket). */
+  endVolume?: number;
+  removedSize?: number;
 }
 export interface MapResult {
   cells: MapCell[];
@@ -129,7 +135,7 @@ export function analyzeMap(cols: readonly MapColumn[], prints: readonly Print[] 
   const covered: [number, number][] = [];
   const all: number[] = [];
   // open run per side:tick -> index of its last cell + run start
-  let open = new Map<string, { cell: number; start: number }>();
+  let open = new Map<string, { cell: number; start: number; recent: { t: number; size: number }[] }>();
   let prev: MapColumn | null = null;
   const endRuns = (reason: (key: string, cell: MapCell) => RunEnd) => {
     for (const [k, r] of open) cells[r.cell]!.end = reason(k, cells[r.cell]!);
@@ -157,7 +163,10 @@ export function analyzeMap(cols: readonly MapColumn[], prints: readonly Print[] 
       else {
         const pc = cols[cell.c]!;
         const vol = volumeAt(prints, cell.tick, pc.t - TRADE_TOLERANCE_MS, e + TRADE_TOLERANCE_MS);
-        cell.end = vol > 0 && vol >= TRADED_SHARE * cell.size ? 'TRADED' : 'PULLED_CONFIRMED';
+        const removed = Math.max(...r.recent.filter((x) => x.t >= pc.t + pc.w - TRADE_TOLERANCE_MS).map((x) => x.size), cell.size);
+        cell.endVolume = vol;
+        cell.removedSize = removed;
+        cell.end = vol > 0 && vol >= TRADED_SHARE * removed ? 'TRADED' : 'PULLED_CONFIRMED';
       }
       open.delete(k);
     }
@@ -165,7 +174,8 @@ export function analyzeMap(cols: readonly MapColumn[], prints: readonly Print[] 
       const r = open.get(k);
       const start = r ? r.start : s;
       cells.push({ c: ci, side: x.side, tick: x.tick, size: x.size, relative: x.relative, observedMs: e - start, end: null });
-      open.set(k, { cell: cells.length - 1, start });
+      const recent = [...(r?.recent ?? []), { t: c.t, size: x.size }].filter((q) => q.t >= c.t + c.w - 2 * TRADE_TOLERANCE_MS);
+      open.set(k, { cell: cells.length - 1, start, recent });
       all.push(x.size);
     }
     if (holeInside(c)) endRuns(() => 'FEED_GAP');
