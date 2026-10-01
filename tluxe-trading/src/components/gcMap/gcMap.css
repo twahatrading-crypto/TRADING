@@ -1,0 +1,47 @@
+/* GC Liquidity Map - this page only (no other page's styles changed or depended on beyond shared base classes). */
+.gcmap { gap: 8px; padding: 8px clamp(10px, 1vw, 16px) 12px; }
+.gcmap__bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 22px; padding: 8px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel); }
+.gcmap__brand { display: flex; align-items: center; gap: 10px; margin-right: 6px; }
+.gcmap__title { margin: 0; font-size: 17px; font-weight: 700; }
+.gcmap__sub { margin: 0; font-size: 11px; color: var(--text-3); }
+.gcmap__feeds { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
+
+.gcmap__grid { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 8px; height: max(600px, calc(100vh - 175px)); }
+.gcmap__grid > * { min-height: 0; }
+.gcmap__chart { position: relative; display: flex; flex-direction: column; padding: 0; overflow: hidden; background: #060a12; }
+.gcmap__chart .srchart__stage { flex: 1 1 auto; min-height: 0; position: relative; }
+.gcmap__chart .chart-canvas { position: absolute; inset: 0; }
+.gcmap__canvas { display: block; touch-action: none; cursor: crosshair; }
+.gcmap__toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 7px 10px; border-bottom: 1px solid var(--border); }
+.gcmap__toggles { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-right: auto; }
+.gcmap__check { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-2); cursor: pointer; user-select: none; }
+.gcmap__check input { accent-color: #3b82f6; width: 14px; height: 14px; }
+.gcmap__nodata { position: absolute; z-index: 3; top: 52px; left: 50%; transform: translateX(-50%); max-width: 80%; padding: 6px 14px; border: 1px solid rgba(251, 191, 36, 0.45); border-radius: 6px; background: rgba(6, 10, 18, 0.9); font-size: 11px; color: var(--text-2); text-align: center; pointer-events: none; }
+.gcmap__nodata strong { color: #fbbf24; letter-spacing: 0.06em; margin-right: 6px; }
+.gcmap__tip { position: absolute; z-index: 4; display: flex; flex-direction: column; gap: 1px; padding: 7px 10px; max-width: 300px; border: 1px solid rgba(148, 163, 184, 0.35); border-radius: 6px; background: rgba(6, 10, 18, 0.95); font-size: 11px; color: var(--text-2); pointer-events: none; }
+.gcmap__tip strong { color: var(--text); font-size: 12px; }
+.gcmap__legend { display: flex; align-items: center; gap: 8px; padding: 5px 10px; font-size: 10.5px; color: var(--text-3); border-top: 1px solid var(--border); }
+.gcmap__legend i { display: inline-block; width: 160px; height: 7px; border-radius: 4px; }
+.gcmap__legend em { font-style: normal; margin-left: auto; color: var(--text-4); }
+
+.gcmap__side { display: flex; flex-direction: column; gap: 8px; min-height: 0; overflow: auto; }
+.gcmap__panel { padding: 10px 12px; font-size: 12px; }
+.gcmap__h { display: flex; align-items: center; gap: 4px; width: 100%; padding: 0; border: 0; background: transparent; color: var(--text); font-size: 12px; font-weight: 700; letter-spacing: 0.06em; cursor: pointer; }
+.gcmap__h2 { margin: 0; font-size: 13px; font-weight: 700; }
+.gcmap__setsHead { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.gcmap__muted { margin: 4px 0; font-size: 11px; color: var(--text-4); }
+.gcmap__tbl h3 { margin: 8px 0 3px; font-size: 10.5px; letter-spacing: 0.08em; }
+.gcmap__tbl--ask h3 { color: #fb7185; }
+.gcmap__tbl--bid h3 { color: #34d399; }
+.gcmap__tbl table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+.gcmap__tbl th { font-weight: 500; font-size: 10px; color: var(--text-4); text-align: right; padding: 1px 3px; }
+.gcmap__tbl th:first-child, .gcmap__tbl td:first-child { text-align: left; }
+.gcmap__tbl td { text-align: right; padding: 2px 3px; border-top: 1px solid rgba(148, 163, 184, 0.08); }
+.gcmap__slider { display: grid; grid-template-columns: 120px 1fr 48px; align-items: center; gap: 6px; margin: 4px 0; font-size: 11.5px; color: var(--text-2); }
+.gcmap__slider input { width: 100%; accent-color: #3b82f6; }
+.gcmap__slider em { font-style: normal; text-align: right; color: var(--text); }
+
+@media (max-width: 1000px) {
+  .gcmap__grid { grid-template-columns: minmax(0, 1fr); height: auto; }
+  .gcmap__chart { min-height: 64vh; }
+}

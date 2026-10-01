@@ -26,6 +26,8 @@ export const HLE_ROUTE = '/engines/high-low-engine';
 
 /** Trading Strategy → Liquidity Heatmap (order flow; exchange Level-2 + time & sales only). */
 export const HEATMAP_ROUTE = '/engines/liquidity-heatmap';
+/** Trading Strategy → GC Liquidity Map (separate read-only page: recorded + current IBKR GC resting liquidity over Databento candles). */
+export const GC_MAP_ROUTE = '/engines/gc-liquidity-map';
 /** SMC Engine page (Smart Money Concepts market analysis; its own engine, service and UI). */
 export const SMC_ROUTE = '/engines/smc';
 /** Volume Profile page (POC / value area / HVN-LVN from real candle volume; analysis only). */

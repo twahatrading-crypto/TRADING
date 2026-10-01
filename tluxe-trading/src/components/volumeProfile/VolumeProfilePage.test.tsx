@@ -70,7 +70,7 @@ beforeEach(() => {
 });
 
 describe('Volume Profile page', () => {
-  it('is in the sidebar after Liquidity Heatmap and before Volume Footprint', async () => {
+  it('is in the sidebar after Liquidity Heatmap / GC Liquidity Map and before Volume Footprint', async () => {
     window.location.hash = '#/';
     renderWithServices(<App />);
     await flush();
@@ -78,7 +78,8 @@ describe('Volume Profile page', () => {
     expect(link.getAttribute('href')).toBe('#/engines/volume-profile');
     const labels = screen.getAllByRole('link').map((a) => a.textContent ?? '');
     const i = labels.findIndex((t) => /Volume Profile/.test(t));
-    expect(labels.findIndex((t) => /Liquidity Heatmap/.test(t))).toBe(i - 1);
+    expect(labels.findIndex((t) => /GC Liquidity Map/.test(t))).toBe(i - 1);
+    expect(labels.findIndex((t) => /Liquidity Heatmap/.test(t))).toBe(i - 2);
     expect(labels.findIndex((t) => /Volume Footprint/.test(t))).toBe(i + 1);
   });
 
