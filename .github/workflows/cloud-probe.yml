@@ -988,6 +988,137 @@ jobs:
           })();
           JS
           node lc.cjs
+  mapprod2:
+    # GC Liquidity Map viewport + 250 ms Strong persistence on the PRODUCTION domain (READ ONLY): LIVE SESSION default,
+    # recorded share of the window, short gaps hatched, the old outage gap in 24H, CURRENT DEPTH == /api/ibkr/book,
+    # Strong Liquidity Now unchanged by window switches, ages advancing with real 250 ms observations. Nothing written.
+    if: ${{ contains(github.event.head_commit.message, '[mapprod2]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: GC Liquidity Map viewport + Strong persistence production verification (read only)
+        shell: bash
+        run: |
+          npm init -y >/dev/null && npm i -s playwright@1 >/dev/null && npx playwright install --with-deps chromium >/dev/null 2>&1
+          cat > mp2.cjs <<'JS'
+          const zlib = require('zlib');
+          const { chromium } = require('playwright');
+          const base = 'https://twahatrading.com';
+          const UA = { 'User-Agent': 'tluxe-cloud-probe/1.0' };
+          const j = async (p) => (await fetch(base + p, { headers: UA })).json();
+          const iso = (t) => (t ? new Date(Number(t)).toISOString() : '-');
+          const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+          const out = (name, buf) => {
+            const b = zlib.gzipSync(buf).toString('base64');
+            const n = Math.ceil(b.length / 60000);
+            for (let i = 0; i < n; i++) console.log(`CAPT ${name} ${i + 1}/${n} ${b.slice(i * 60000, (i + 1) * 60000)}`);
+          };
+          let fails = 0;
+          const check = (ok, m) => { console.log(`    ${ok ? 'OK  ' : 'FAIL'} ${m}`); if (!ok) fails++; };
+          const OUT = Date.UTC(2026, 8, 30, 6, 45, 0, 844), BACK = Date.UTC(2026, 9, 1, 7, 48, 3, 341);
+          (async () => {
+            const cfg = await j('/api/config');
+            if (cfg.authRequired) { console.log('OWNER AUTH ACTIVE - credential-free check not possible.'); process.exit(0); }
+            let deployed = false, asset = '';
+            for (let i = 0; i < 60 && !deployed; i++) {
+              const html = await (await fetch(base + '/', { headers: UA })).text();
+              const m = html.match(/\/assets\/index-[^"']+\.js/);
+              asset = m ? m[0] : '';
+              if (asset) { const js = await (await fetch(base + asset, { headers: UA })).text(); deployed = js.includes('250 ms RECORDED DEPTH NOT CURRENT') && js.includes('LIVE SESSION'); }
+              console.log(`deploy ${i}: bundle=${asset} new=${deployed}`);
+              if (!deployed) await sleep(20000);
+            }
+            check(deployed, `production bundle ${asset} carries the viewport + 250 ms Strong persistence build`);
+            if (!deployed) process.exit(1);
+            let live = null;
+            for (let i = 0; i < 40; i++) {
+              const bk = await j('/api/ibkr/book?root=GC');
+              console.log(`ibkr ${i}: ${iso(Date.now())} state=${bk.state} contract=${bk.contract?.localSymbol} lastUpdate=${iso(bk.lastUpdateMs)} rows=${bk.rows?.bids?.length}x${bk.rows?.asks?.length}`);
+              if (bk.state === 'LIVE' && Date.now() - bk.lastUpdateMs < 5000) { live = bk; break; }
+              await sleep(15000);
+            }
+            check(!!live, 'IBKR GC depth LIVE on production');
+            // the outage gap is still in the recording (nothing filled): no recorded column between the two
+            const hm = await j(`/api/ibkr/heatmap?root=GC&from=${OUT - 3600000}&to=${BACK + 3600000}&bucket=300000`);
+            const inGap = (hm.columns || []).filter((c) => c[0] + 300000 > OUT + 1000 && c[0] < BACK - 300000);
+            check(inGap.length === 0, `recorded history: no depth between ${iso(OUT)} and ${iso(BACK)} (${inGap.length} columns) - the 25 h outage gap is intact`);
+            const b = await chromium.launch();
+            const ctx = await b.newContext({ viewport: { width: 1680, height: 960 } });
+            await ctx.addInitScript(() => { try { localStorage.setItem('tluxe.instrument.v1', 'GC'); } catch {} });
+            const p = await ctx.newPage();
+            const errs = [];
+            p.on('pageerror', (e) => errs.push(String(e).slice(0, 200)));
+            p.on('request', (r) => { if (/localhost|127\.0\.0\.1|:876\d|:4001/.test(r.url())) errs.push('LOCAL ' + r.url()); });
+            await p.goto(base + '/#/engines/gc-liquidity-map');
+            await p.waitForSelector('canvas.gcmap__canvas', { timeout: 120000 });
+            for (let i = 0; i < 30; i++) { const ok = await p.evaluate(() => { const c = document.querySelector('canvas.gcmap__canvas'); const n = document.querySelector('[data-testid="gcmap-now"]'); return c && Number(c.dataset.heatCols) > 0 && c.dataset.depth !== 'none' && n && n.dataset.fineLast; }); if (ok) break; await p.waitForTimeout(3000); }
+            await p.waitForTimeout(4000);
+            const ds = () => p.evaluate(() => { const c = document.querySelector('canvas.gcmap__canvas'); const n = document.querySelector('[data-testid="gcmap-now"]'); return { ...c.dataset, rows: n.dataset.rows, fineSince: n.dataset.fineSince, fineLast: n.dataset.fineLast, now: Date.now(), panel: n.innerText.replace(/\n+/g, ' | '), sel: document.querySelector('[data-testid="gcmap-range"] [aria-selected="true"]')?.textContent, caption: document.querySelector('[data-testid="gcmap-window"]')?.textContent }; });
+            const d0 = await ds();
+            console.log(`DEFAULT: selected="${d0.sel}" range=${d0.range} vp=${iso(d0.vpT0)}..${iso(d0.vpT1)} bucket=${d0.bucketMs} recordedShare=${d0.recordedShare} plotShare=${d0.plotShare} profileShare=${d0.profileShare} gaps=${d0.gaps}`);
+            console.log(`CAPTION: ${d0.caption}`);
+            check(d0.sel === 'LIVE SESSION' && /^session:/.test(d0.range), 'LIVE SESSION is the default window');
+            check(Number(d0.recordedShare) >= 0.9, `actual recorded depth fills the LIVE SESSION window (${(Number(d0.recordedShare) * 100).toFixed(1)} % recorded, plot ${(Number(d0.plotShare) * 100).toFixed(0)} % of the canvas)`);
+            const gaps = JSON.parse(d0.gaps || '[]');
+            console.log(`  short real gaps inside the session (hatched, never painted): ${gaps.map((g) => `${iso(g[0])}..${iso(g[1])} (${((g[1] - g[0]) / 1000).toFixed(1)} s)`).join(', ') || 'none'}`);
+            out('MP2-live', await p.screenshot());
+            // CURRENT DEPTH == /api/ibkr/book
+            let same = 0, exact = 0;
+            for (let i = 0; i < 20 && same < 6; i++) {
+              const r = await p.evaluate(async () => { const bk = await (await fetch('/api/ibkr/book?root=GC', { credentials: 'same-origin' })).json(); const c = document.querySelector('canvas.gcmap__canvas'); return { u: bk.lastUpdateMs, bids: (bk.rows?.bids ?? []).map((x) => [x.price, x.size]), asks: (bk.rows?.asks ?? []).map((x) => [x.price, x.size]), d: c.dataset.depth !== 'none' ? JSON.parse(c.dataset.depth) : null }; });
+              if (r.d && r.d.updateMs === r.u) { same++; if (JSON.stringify(r.d.bids) === JSON.stringify(r.bids) && JSON.stringify(r.d.asks) === JSON.stringify(r.asks)) exact++; else console.log(`  MISMATCH api=${JSON.stringify(r.bids.slice(0, 3))} drawn=${JSON.stringify(r.d.bids.slice(0, 3))}`); }
+              await p.waitForTimeout(1200);
+            }
+            check(same > 0 && exact === same, `CURRENT DEPTH drawn == /api/ibkr/book on every same-update sample (${exact}/${same})`);
+            // Strong Liquidity Now across window switches (same real observations): runs identified by side/price/runStart/qualifiedAt
+            const seq = ['1H', '3H', '6H', '12H', '24H', 'LIVE SESSION', '6H', '1H', 'LIVE SESSION'];
+            const snaps = [{ w: 'LIVE SESSION', ...d0 }];
+            for (const w of seq) {
+              await p.getByRole('tablist', { name: 'History window' }).getByRole('tab', { name: w, exact: true }).click();
+              await p.waitForTimeout(1500);
+              const d = await ds();
+              snaps.push({ w, ...d });
+              if (w === '6H' || w === '24H') out(`MP2-${w}`, await p.screenshot());
+              if (w === '24H') { console.log(`24H: vp=${iso(d.vpT0)}..${iso(d.vpT1)} bucket=${d.bucketMs} heat=${iso(d.heatFirstMs)}..${iso(d.heatLastMs)} recordedShare=${d.recordedShare}`); check(Number(d.vpT0) < BACK && Number(d.heatFirstMs) >= BACK - 300000 && Number(d.recordedShare) < 0.5, `24H shows the old gap hatched before ${iso(BACK)} (no heat before it; ${(Number(d.recordedShare) * 100).toFixed(0)} % of the window recorded)`); }
+            }
+            let consistent = true;
+            for (let i = 0; i < snaps.length; i++) {
+              const s = snaps[i];
+              const rows = JSON.parse(s.rows || '[]');
+              console.log(`STRONG ${s.w.padEnd(12)} chartBucket=${String(s.bucketMs).padStart(6)} fine250=${iso(s.fineSince)}..${iso(s.fineLast)} rows=${JSON.stringify(rows)}`);
+              if (i === 0) continue;
+              const prev = JSON.parse(snaps[i - 1].rows || '[]');
+              const dt = Number(s.fineLast) - Number(snaps[i - 1].fineLast);
+              for (const r of rows) {
+                const q = prev.find((x) => x.side === r.side && x.price === r.price && x.runStart === r.runStart);
+                if (!q) continue;
+                const dAge = r.ageMs - q.ageMs;
+                if (q.qualifiedAt !== r.qualifiedAt || Math.abs(dAge - dt) > 1) { consistent = false; console.log(`  CHANGED ${s.w}: ${JSON.stringify(q)} -> ${JSON.stringify(r)} (250 ms series advanced ${dt} ms)`); }
+              }
+            }
+            check(consistent, 'Strong Liquidity Now: switching windows never changes a level\'s run start, qualification time or age beyond the real 250 ms observations that arrived between reads');
+            // ages advance with real 250 ms observations, not chart buckets
+            const a0 = await ds();
+            await p.waitForTimeout(15000);
+            const a1 = await ds();
+            const adv = Number(a1.fineLast) - Number(a0.fineLast);
+            check(adv > 5000, `250 ms persistence series advances in real time (${iso(a0.fineLast)} -> ${iso(a1.fineLast)}, +${(adv / 1000).toFixed(2)} s; chart bucket ${a1.bucketMs} ms)`);
+            const r0 = JSON.parse(a0.rows || '[]'), r1 = JSON.parse(a1.rows || '[]');
+            const cont = r1.map((r) => [r, r0.find((x) => x.side === r.side && x.price === r.price && x.runStart === r.runStart)]).filter(([, q]) => q);
+            for (const [r, q] of cont) console.log(`  AGE ${r.side} ${r.price}: ${(q.ageMs / 1000).toFixed(2)} s -> ${(r.ageMs / 1000).toFixed(2)} s (series +${(adv / 1000).toFixed(2)} s) runStart ${iso(r.runStart)} qualified ${iso(r.qualifiedAt)}`);
+            if (cont.length) check(cont.every(([r, q]) => r.ageMs - q.ageMs === adv), 'Strong ages advanced exactly with the 250 ms observations');
+            else console.log('    (no level stayed strong across the 15 s age sample; the 250 ms series advance above is the age clock)');
+            console.log(`PANEL: ${a1.panel}`);
+            out('MP2-final', await p.screenshot());
+            const bkEnd = await j('/api/ibkr/book?root=GC');
+            console.log(`BOOK END ${iso(Date.now())} state=${bkEnd.state} lastUpdate=${iso(bkEnd.lastUpdateMs)} bid=${JSON.stringify((bkEnd.rows?.bids ?? []).slice(0, 5).map((x) => [x.price, x.size]))} ask=${JSON.stringify((bkEnd.rows?.asks ?? []).slice(0, 5).map((x) => [x.price, x.size]))}`);
+            check(errs.length === 0, `no page errors / localhost / port 4001 requests ${JSON.stringify(errs).slice(0, 300)}`);
+            await b.close();
+            console.log(`\nMAPPROD2 RESULT: ${fails ? `FAIL (${fails})` : 'PASS'}`);
+            process.exit(fails ? 1 : 0);
+          })();
+          JS
+          node mp2.cjs
   busy:
     # Busy-session GC alignment (SI control) on PRODUCTION at 250 ms polling. The alignment formula is the depth job's
     # 250 ms formula, UNCHANGED. The decision rules below were fixed BEFORE the run (commit of 2026-09-30 06:xx UTC).
