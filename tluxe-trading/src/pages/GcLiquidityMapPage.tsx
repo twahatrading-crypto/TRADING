@@ -187,6 +187,18 @@ function MapWorkspace() {
   const bucketSeen = useRef<{ b: number; v: number }>({ b: -1, v: -1 });
   if (history && history.bucketMs !== bucketSeen.current.b) bucketSeen.current = { b: history.bucketMs, v: history.version };
   const chartLoading = !!history && !history.error && history.columns.length === 0 && history.version === bucketSeen.current.v;
+  // A window whose recorded depth has not arrived (the shared store drops a load that was in flight when the bucket
+  // changed) is asked for again every second while it is still LOADING - the same request through the same store,
+  // and a request already in flight is never duplicated by it.
+  const loadingRef = useRef(false);
+  loadingRef.current = chartLoading;
+  useEffect(() => {
+    if (!view || !history) return;
+    const t = setInterval(() => {
+      if (loadingRef.current) view.reportViewport();
+    }, 1000);
+    return () => clearInterval(t);
+  }, [view, history]);
   frameRef.current = { loading: chartLoading, cols, result, candles, book, bookUpdateMs: liveBook?.lastUpdateMs ?? null, lastPriceTick, showCandles: s.candles, showHeat: s.heat, showDepth: s.depth, strongOnly: s.strongOnly, showLabels: s.labels, gain: s.gain, strong, depthLive, strongNow: [...strongNow.asks, ...strongNow.bids], strongIntervals: fineState?.intervals ?? EMPTY_IV, version: (frameRef.current?.version ?? 0) + 1 };
   const hasData = isGc && (candles.length > 0 || cols.length > 0) && viewRange !== null;
   useEffect(() => {
@@ -213,14 +225,7 @@ function MapWorkspace() {
     view.setRange(viewRange, a.view !== view || a.range !== range);
     applied.current = { view, range };
   }, [view, viewRange, range]);
-  // A window whose recorded depth never arrived (a resolution change while a load was in flight) is asked for again,
-  // at most every 5 s - the same request the view makes, through the same store; nothing else is fetched.
-  const kicked = useRef(0);
-  useEffect(() => {
-    if (!view || !history || history.columns.length || Date.now() - kicked.current < 5000) return;
-    kicked.current = Date.now();
-    view.reportViewport();
-  }, [view, history, histVer]);
+
   const utc = (t: number) => new Date(t).toISOString().replace('T', ' ').slice(0, 19);
 
   const [nowOpen, setNowOpen] = useState(true);
