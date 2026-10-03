@@ -1194,6 +1194,55 @@ jobs:
           })();
           JS
           node sc.cjs
+  trcap:
+    # Read-only: real Databento GC trades reaching back to a given moment (existing trades endpoint, paged by index).
+    if: ${{ contains(github.event.head_commit.message, '[trcap]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Capture Databento GC trades back to the end of the last recorded depth session (read only)
+        shell: bash
+        run: |
+          cat > tc.cjs <<'JS'
+          const zlib = require('zlib');
+          const base = 'https://twahatrading.com';
+          const j = async (p) => {
+            for (let k = 0; ; k++) {
+              try {
+                const r = await fetch(base + p, { headers: { 'User-Agent': 'tluxe-cloud-probe/1.0' } });
+                if (r.ok && (r.headers.get('content-type') || '').includes('json')) return await r.json();
+                if (k >= 12) throw new Error(`${p}: HTTP ${r.status}`);
+              } catch (e) { if (k >= 12) throw e; }
+              await new Promise((res) => setTimeout(res, 10000));
+            }
+          };
+          const out = (name, obj) => {
+            const b = zlib.gzipSync(Buffer.from(JSON.stringify(obj))).toString('base64');
+            const n = Math.ceil(b.length / 60000);
+            for (let i = 0; i < n; i++) console.log(`CAPT ${name} ${i + 1}/${n} ${b.slice(i * 60000, (i + 1) * 60000)}`);
+            console.log(`captured ${name}: ${b.length} base64 chars`);
+          };
+          (async () => {
+            await new Promise((res) => setTimeout(res, 240000)); // let the redeploy caused by this push finish
+            const T = 1790923500035; // 2026-10-02 06:45:00.035 UTC - last recorded IBKR depth
+            const head = await j('/api/databento/v1/trades/GC?after=0&limit=1');
+            let hi = head.lastIndex, oldest = Infinity, keep = [];
+            for (let k = 0; k < 30 && oldest > T - 30 * 60000; k++) {
+              const after = Math.max(0, hi - 20000);
+              const tr = await j(`/api/databento/v1/trades/GC?after=${after}&limit=20000`);
+              if (!tr.trades.length) break;
+              oldest = tr.trades[0].tsEventNs / 1e6;
+              keep = tr.trades.filter((x) => x.tsEventNs / 1e6 <= T + 60000).concat(keep);
+              console.log(`page ${k}: index ${after}.. oldest ${new Date(oldest).toISOString()}`);
+              if (after === 0) break;
+              hi = after;
+            }
+            const w = keep.filter((x) => x.tsEventNs / 1e6 >= T - 3 * 3600000);
+            console.log(`trades in [T-3h, T+1min]: ${w.length}; oldest loaded ${new Date(oldest).toISOString()}`);
+            out('FR-trades', { root: 'GC', contract: head.contract, trades: w });
+          })();
+          JS
+          node tc.cjs
   busy:
     # Busy-session GC alignment (SI control) on PRODUCTION at 250 ms polling. The alignment formula is the depth job's
     # 250 ms formula, UNCHANGED. The decision rules below were fixed BEFORE the run (commit of 2026-09-30 06:xx UTC).
