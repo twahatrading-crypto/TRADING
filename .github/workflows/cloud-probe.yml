@@ -1132,6 +1132,55 @@ jobs:
           })();
           JS
           node mp2.cjs
+  sesscap:
+    # Read-only capture of the LATEST recorded GC depth session (ending at the last recorded observation) at every
+    # bucket the order-flow heatmap can request, plus Databento candles M1..H4, trades and IBKR status (gzip + base64
+    # into the log) for a local UI check on real data. Nothing is written anywhere.
+    if: ${{ contains(github.event.head_commit.message, '[sesscap]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Capture the latest recorded GC depth session (read only)
+        shell: bash
+        run: |
+          cat > sc.cjs <<'JS'
+          const zlib = require('zlib');
+          const base = 'https://twahatrading.com';
+          const j = async (p) => (await fetch(base + p, { headers: { 'User-Agent': 'tluxe-cloud-probe/1.0' } })).json();
+          const out = (name, obj) => {
+            const b = zlib.gzipSync(Buffer.from(JSON.stringify(obj))).toString('base64');
+            const n = Math.ceil(b.length / 60000);
+            for (let i = 0; i < n; i++) console.log(`CAPT ${name} ${i + 1}/${n} ${b.slice(i * 60000, (i + 1) * 60000)}`);
+            console.log(`captured ${name}: ${b.length} base64 chars`);
+          };
+          (async () => {
+            const now = Date.now();
+            const st = await j('/api/ibkr/status');
+            out('FR-status', st);
+            const probe = await j(`/api/ibkr/heatmap?root=GC&from=${now - 3 * 86400000}&to=${now}&bucket=300000`);
+            const T = probe.lastObservedMs;
+            console.log('NOW', new Date(now).toISOString(), 'IBKR GC state', st.roots?.GC?.state, 'LAST RECORDED', T && new Date(T).toISOString());
+            if (!T) return;
+            for (const b of [250, 500, 1000, 2000, 5000, 10000, 15000, 30000, 60000, 120000, 300000]) {
+              const r = await j(`/api/ibkr/heatmap?root=GC&from=${T - Math.min(26 * 3600000, b * 3800)}&to=${T + 1000}&bucket=${b}`);
+              console.log(`m${b}: ${r.columns?.length} columns`);
+              out(`FR-m${b}`, r);
+            }
+            for (const tf of ['M1', 'M5', 'M15', 'M30', 'H1', 'H4']) out(`FR-candles-${tf}`, await j(`/api/databento/v1/candles/GC?timeframe=${tf}&limit=3000`));
+            const head = await j('/api/databento/v1/trades/GC?after=0&limit=1');
+            let hi = head.lastIndex, all = [];
+            for (let k = 0; k < 4; k++) {
+              const after = Math.max(0, hi - 20000);
+              const tr = await j(`/api/databento/v1/trades/GC?after=${after}&limit=20000`);
+              all = tr.trades.concat(all);
+              if (after === 0) break;
+              hi = after;
+            }
+            out('FR-trades', { root: 'GC', contract: head.contract, trades: all });
+            console.log('SESSCAP DONE', new Date().toISOString(), 'T', T);
+          })();
+          JS
+          node sc.cjs
   busy:
     # Busy-session GC alignment (SI control) on PRODUCTION at 250 ms polling. The alignment formula is the depth job's
     # 250 ms formula, UNCHANGED. The decision rules below were fixed BEFORE the run (commit of 2026-09-30 06:xx UTC).
