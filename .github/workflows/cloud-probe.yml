@@ -1146,7 +1146,19 @@ jobs:
           cat > sc.cjs <<'JS'
           const zlib = require('zlib');
           const base = 'https://twahatrading.com';
-          const j = async (p) => (await fetch(base + p, { headers: { 'User-Agent': 'tluxe-cloud-probe/1.0' } })).json();
+          // retries: this push redeploys the gateway; an answer during the switch is an HTML error page, not data
+          const j = async (p) => {
+            for (let k = 0; ; k++) {
+              try {
+                const r = await fetch(base + p, { headers: { 'User-Agent': 'tluxe-cloud-probe/1.0' } });
+                if (r.ok && (r.headers.get('content-type') || '').includes('json')) return await r.json();
+                if (k >= 12) throw new Error(`${p}: HTTP ${r.status}`);
+              } catch (e) {
+                if (k >= 12) throw e;
+              }
+              await new Promise((res) => setTimeout(res, 10000));
+            }
+          };
           const out = (name, obj) => {
             const b = zlib.gzipSync(Buffer.from(JSON.stringify(obj))).toString('base64');
             const n = Math.ceil(b.length / 60000);
@@ -1154,6 +1166,7 @@ jobs:
             console.log(`captured ${name}: ${b.length} base64 chars`);
           };
           (async () => {
+            await new Promise((res) => setTimeout(res, 240000)); // let the redeploy caused by this push finish
             const now = Date.now();
             const st = await j('/api/ibkr/status');
             out('FR-status', st);
