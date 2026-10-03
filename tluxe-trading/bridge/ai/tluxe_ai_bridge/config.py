@@ -90,6 +90,30 @@ def _int(e: dict, key: str, default: int, lo: int, hi: int) -> int:
     return v
 
 
+def _port(e: dict, lo: int, hi: int) -> int:
+    """Resolve the listen port.
+
+    Order of precedence:
+      1. PORT - Railway's injected dynamic port at runtime.
+      2. TLUXE_AI_PORT - local development override.
+      3. DEFAULT_PORT - fallback when neither is set.
+    """
+    raw = (e.get("PORT") or "").strip()
+    source = "PORT"
+    if not raw:
+        raw = (e.get("TLUXE_AI_PORT") or "").strip()
+        source = "TLUXE_AI_PORT"
+    if not raw:
+        return DEFAULT_PORT
+    try:
+        v = int(raw)
+    except ValueError:
+        raise ConfigError(f"{source} must be an integer") from None
+    if not lo <= v <= hi:
+        raise ConfigError(f"{source} must be between {lo} and {hi}")
+    return v
+
+
 def from_env(env: dict | None = None) -> AiConfig:
     e = dict(os.environ if env is None else env)
     key = (e.get("OPENAI_API_KEY") or "").strip()
@@ -116,7 +140,7 @@ def from_env(env: dict | None = None) -> AiConfig:
         token=Secret(token),
         model=model,
         host=host,
-        port=_int(e, "TLUXE_AI_PORT", DEFAULT_PORT, 1, 65535),
+        port=_port(e, 1, 65535),
         allowed_origins=origins,
         timeout_s=_int(e, "TLUXE_AI_TIMEOUT_S", 60, 5, 300),
         max_output_tokens=_int(e, "TLUXE_AI_MAX_OUTPUT_TOKENS", 2000, 64, 32000),
