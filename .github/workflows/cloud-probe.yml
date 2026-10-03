@@ -1243,6 +1243,28 @@ jobs:
           })();
           JS
           node tc.cjs
+  vpsdiag:
+    # READ-ONLY external diagnosis of the existing VPS depth service behind https://depth.twahatrading.com (no credential
+    # used or needed): what answers - the service itself, the Cloudflare tunnel, or nothing - plus the gateway's view.
+    if: ${{ contains(github.event.head_commit.message, '[vpsdiag]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Depth service / tunnel / gateway - read only
+        shell: bash
+        run: |
+          for i in 1 2 3 4 5 6; do
+            echo "=== sample $i $(date -u +%H:%M:%S)"
+            for path in /health /depth/GC; do
+              code=$(curl -s -m 15 -D hdr.txt -o body.txt -w '%{http_code}' "https://depth.twahatrading.com$path")
+              echo "GET $path -> HTTP $code | server=$(grep -i '^server:' hdr.txt | tr -d '\r' | cut -c9-) | cf-ray=$(grep -i '^cf-ray:' hdr.txt | tr -d '\r' | cut -c9-) | content-type=$(grep -i '^content-type:' hdr.txt | tr -d '\r' | cut -c15-)"
+              # Cloudflare error pages name the error code and which side failed (browser / Cloudflare / host)
+              echo "   body: $(head -c 400 body.txt | tr '\n' ' ' | sed -E 's/<[^>]+>/ /g; s/ +/ /g' | head -c 300)"
+              grep -o 'Error code [0-9]*\|cf-error-code">[0-9]*\|Host Error\|Cloudflare Tunnel error\|Bad gateway\|origin' body.txt | sort -u | tr '\n' ';'; echo
+            done
+            echo "gateway /api/ibkr/status GC: $(curl -s -m 15 https://twahatrading.com/api/ibkr/status | python3 -c 'import json,sys; d=json.load(sys.stdin); g=d.get("roots",{}).get("GC",{}); print({k: g.get(k) for k in ("state","detail","valid","contract","target","lastUpdateMs","polls","lastDepthMs")}, "| configured:", d.get("configured"), "| mode:", d.get("mode"))')"
+            sleep 20
+          done
   busy:
     # Busy-session GC alignment (SI control) on PRODUCTION at 250 ms polling. The alignment formula is the depth job's
     # 250 ms formula, UNCHANGED. The decision rules below were fixed BEFORE the run (commit of 2026-09-30 06:xx UTC).

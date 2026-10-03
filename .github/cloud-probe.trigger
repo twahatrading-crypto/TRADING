@@ -27,3 +27,4 @@ mapval 2026-10-01T07:51:31Z live IBKR validation for GC Liquidity Map (read only
 2026-10-03T06:49:42Z sesscap: latest recorded session capture
 2026-10-03T06:52:22Z sesscap: rerun after the redeploy
 2026-10-03T07:02:03Z trcap
+2026-10-03T07:24:21Z vpsdiag
