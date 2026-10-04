@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>XAUUSD Strategy Dashboard</title>
+<link rel="stylesheet" href="/static/styles.css">
+<script src="/static/vendor/lightweight-charts.standalone.production.js"></script>
+</head>
+<body>
+<div id="app">
+  <!-- ============ TOP BAR ============ -->
+  <header class="topbar">
+    <div class="brand">
+      <svg class="logo" viewBox="0 0 64 44" aria-hidden="true">
+        <defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffe08a"/><stop offset="1" stop-color="#c8901a"/></linearGradient></defs>
+        <path d="M6 40 L14 26 H30 L36 40 Z" fill="url(#g)" stroke="#8a5d0a"/>
+        <path d="M30 40 L38 26 H54 L60 40 Z" fill="url(#g)" stroke="#8a5d0a"/>
+        <path d="M18 24 L26 10 H42 L48 24 Z" fill="url(#g)" stroke="#8a5d0a"/>
+      </svg>
+      <div>
+        <div class="brand-title">XAUUSD</div>
+        <div class="brand-sub">Gold Spot / U.S. Dollar · <span id="brokerSymbol" title="exact broker symbol in use">—</span></div>
+      </div>
+    </div>
+    <div class="tfs" id="tfs">
+      <button data-tf="M1">M1</button><button data-tf="M5" class="active">M5</button><button data-tf="M15">M15</button>
+      <button data-tf="H1">H1</button><button data-tf="H4">H4</button><button data-tf="D1">D1</button>
+    </div>
+    <div class="sessions" id="sessions">
+      <span class="pill" data-s="Asian">ASIAN</span><span class="pill" data-s="London">LONDON</span><span class="pill" data-s="New York">NEW YORK</span>
+    </div>
+    <div class="quote" id="quote">
+      <div><span class="ql">BID</span><span id="bid" class="qv">—</span></div>
+      <div><span class="ql">ASK</span><span id="ask" class="qv">—</span></div>
+      <div><span class="ql">SPREAD</span><span id="spread" class="qv">—</span></div>
+    </div>
+    <div class="clock">
+      <div><span class="ql">SERVER TIME</span><span id="srvTime" class="qv">—</span></div>
+      <div><span class="ql">DATE</span><span id="srvDate" class="qv">—</span></div>
+    </div>
+    <div class="conn">
+      <span id="connBadge" class="badge offline">MT5 OFFLINE</span>
+      <button id="btnLog" class="icon-btn" title="Signal log">Log</button>
+      <button id="btnSettings" class="icon-btn" title="Settings">Settings</button>
+    </div>
+  </header>
+  <div id="warnings" class="warnings hidden"></div>
+
+  <!-- ============ MAIN ============ -->
+  <main class="main">
+    <section class="chart-panel">
+      <div class="chart-head">
+        <span id="chartTitle">—</span>
+        <span id="ohlc" class="ohlc"></span>
+        <span id="zoneFlag" class="zone-flag hidden"></span>
+      </div>
+      <div class="chart-wrap" id="chartWrap">
+        <div id="chart"></div>
+        <canvas id="overlay"></canvas>
+        <div id="feedBanner" class="feed-banner"><div class="fb-title">MT5 OFFLINE</div><div class="fb-sub">Waiting for the MetaTrader 5 terminal…</div></div>
+      </div>
+    </section>
+
+    <aside class="side">
+      <div class="card">
+        <div class="card-head"><h2>TRADE PLAN</h2><span id="dirBadge" class="dir none">NO SETUP</span></div>
+        <div class="rows" id="planRows">
+          <div class="row"><span>Entry Price</span><b id="pEntry" class="chip blue">—</b></div>
+          <div class="row"><span>Stop Loss</span><b id="pSL" class="chip red">—</b></div>
+          <div class="row"><span id="lTP1">Take Profit 1</span><b id="pTP1" class="chip green">—</b></div>
+          <div class="row"><span id="lTP2">Take Profit 2</span><b id="pTP2" class="chip green">—</b></div>
+          <div class="row"><span>SL distance</span><b id="pRisk">—</b></div>
+          <div class="row"><span>TP2 distance</span><b id="pReward">—</b></div>
+          <div class="row"><span>Risk : Reward</span><b id="pRR">—</b></div>
+          <div class="row"><span id="lSize">Position Size</span><b id="pSize">—</b></div>
+          <div class="row"><span>Est. risk</span><b id="pRiskMoney">—</b></div>
+          <div class="row"><span>Setup score</span><b id="pScore">—</b></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h2>SETUP CHECKLIST</h2></div>
+        <ol class="checklist" id="checklist"></ol>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h2>LIVE SIGNAL</h2></div>
+        <div id="signalBox" class="signal waiting"><span id="signalArrow" class="arrow"></span><span id="signalText">WAITING</span></div>
+        <div id="signalDetail" class="signal-detail"></div>
+        <div class="row"><span>Setup Quality</span><b id="sScore">— / 100</b></div>
+        <div class="bar"><div id="sBar" class="bar-fill"></div><div id="sThr" class="bar-thr"></div></div>
+        <details class="breakdown"><summary>Score breakdown</summary><div id="scoreBreak"></div></details>
+        <div class="row"><span>Status</span><b id="sStatus">—</b></div>
+        <div class="row"><span>Next Target</span><b id="sTarget">—</b></div>
+        <div class="row"><span>Session</span><b id="sSession">—</b></div>
+        <div class="row"><span>H1 / M15 bias</span><b id="sBias">—</b></div>
+      </div>
+    </aside>
+  </main>
+
+  <!-- ============ STRATEGY STEPS ============ -->
+  <section class="steps-panel">
+    <h2>STRATEGY STEPS <span class="muted">(LIQUIDITY SWEEP → MSS → RETRACEMENT)</span></h2>
+    <div class="steps" id="steps"></div>
+  </section>
+  <footer class="foot">Analysis &amp; signals only — this software never sends, modifies or closes orders. Execution is manual. Software correctness ≠ strategy profitability: use the backtest before trading.</footer>
+</div>
+
+<!-- ============ SETTINGS ============ -->
+<div id="settingsModal" class="modal hidden">
+  <div class="modal-body">
+    <div class="modal-head"><h2>Settings</h2><button class="icon-btn" data-close>✕</button></div>
+    <div class="grid2">
+      <label>Account balance source
+        <select id="setBalSrc"><option value="mt5">MT5 account balance</option><option value="manual">Manual</option></select></label>
+      <label>Manual balance <input id="setBal" type="number" step="100" min="0"></label>
+      <label>Risk % per trade <input id="setRisk" type="number" step="0.05" min="0.01" max="5"></label>
+      <label>Broker symbol (blank = auto-detect)
+        <input id="setSymbol" list="symList" placeholder="auto"><datalist id="symList"></datalist></label>
+      <label>Broker server time rule
+        <input id="setTz" placeholder="NY+7 | UTC | fixed:+2 | Europe/Athens"></label>
+      <label>Feed stale after (seconds) <input id="setStale" type="number" min="3" step="1"></label>
+      <label>Entry mode
+        <select id="setEntry"><option value="limit_ce">Limit @ FVG 50% (CE)</option><option value="limit_edge">Limit @ FVG edge</option><option value="confirmation">Confirmation candle close</option></select></label>
+      <label>Minimum R (TP2) <input id="setMinRR" type="number" step="0.5" min="1"></label>
+      <label>A+ score threshold <input id="setThr" type="number" min="0" max="100"></label>
+      <label>Max structural SL ($) <input id="setMaxSL" type="number" step="0.5" min="0.5"></label>
+      <label>H1 alignment filter
+        <select id="setHtf"><option value="not_opposed">H1 not opposed</option><option value="aligned">H1 must align</option><option value="off">Off</option></select></label>
+      <label>Entry sessions
+        <span class="checks"><label><input type="checkbox" value="Asian" class="setSess">Asian</label><label><input type="checkbox" value="London" class="setSess">London</label><label><input type="checkbox" value="New York" class="setSess">New York</label></span></label>
+    </div>
+    <label class="block"><span>High-impact news events – manual list, one per line, UTC (e.g. <code>2026-10-02T12:30Z US NFP</code>). MT5's Python API has no economic calendar.</span>
+      <textarea id="setNews" rows="4"></textarea></label>
+    <details class="block"><summary>Advanced: all strategy thresholds (JSON)</summary>
+      <textarea id="setAdvanced" rows="16" spellcheck="false"></textarea></details>
+    <div id="setMsg" class="set-msg"></div>
+    <div class="modal-actions"><button id="setSave" class="primary">Save &amp; apply</button></div>
+  </div>
+</div>
+
+<!-- ============ SIGNAL LOG ============ -->
+<div id="logModal" class="modal hidden">
+  <div class="modal-body wide">
+    <div class="modal-head"><h2>Signal log (SQLite)</h2><button class="icon-btn" data-close>✕</button></div>
+    <div class="table-wrap"><table id="logTable"><thead><tr>
+      <th>Created (server)</th><th>Dir</th><th>Liquidity</th><th>Status</th><th>Grade</th><th>Score</th>
+      <th>Entry</th><th>SL</th><th>TP1</th><th>TP2</th><th>R</th><th>Session</th><th>Result</th><th>R result</th><th>MFE R</th><th>MAE R</th><th>Reason</th>
+    </tr></thead><tbody></tbody></table></div>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

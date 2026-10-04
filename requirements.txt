@@ -1,0 +1,6 @@
+MetaTrader5>=5.0.45; sys_platform == "win32"
+numpy>=1.24
+fastapi>=0.110
+uvicorn[standard]>=0.27
+websockets>=12
+tzdata>=2024.1
