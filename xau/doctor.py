@@ -55,7 +55,7 @@ def main() -> int:
         acc = client.account()
         print(f"MT5 terminal: {ti['name']} build {ti['build']} - broker connection: {'OK' if ti['connected'] else 'NOT CONNECTED'}")
         if acc:
-            print(f"Account: {acc.login} @ {acc.server} ({acc.trade_mode}, {acc.currency})")
+            print(f"Account: {acc.server} ({acc.trade_mode}, {acc.currency})  [login not shown]")
         sym = cfg.feed.symbol_override or client.detect_symbol(cfg.feed.symbol_candidates)[0]
         if sym:
             spec = client.spec(sym)

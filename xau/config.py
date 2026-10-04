@@ -141,6 +141,7 @@ class FeedConfig:
     symbol_candidates: list = field(default_factory=lambda: ["XAUUSD", "GOLD"])
     server_timezone: str = "NY+7"       # see xau/timeutil.py
     stale_seconds: float = 30.0         # no new tick for this long during market hours => STALE
+    require_timezone_verification: bool = True   # no signals until broker server offset is proven
     poll_interval_ms: int = 250
     chart_bars: int = 1500
 

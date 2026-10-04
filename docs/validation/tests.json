@@ -1,0 +1,8 @@
+{
+  "generated_utc": "2026-10-04T10:19:20Z",
+  "git_commit": "3c78e0af1eb5a70fa57c20bdbfcc855bb4e06d26",
+  "returncode": 0,
+  "summary": "93 passed, 1 skipped in 35.89s",
+  "platform": "Linux 6.18.44-fc-v64",
+  "real_mt5_history_replay_test": "skipped (no export)"
+}

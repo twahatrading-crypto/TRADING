@@ -292,6 +292,13 @@
         `${info.active ? "now" : "next"}: ${fmtDT(info.start_utc)} → ${fmtDT(info.end_utc, false)} (server time)`;
     });
     S.clockBase = { utc: st.now_utc, at: performance.now() };
+    const acc = st.account || {}, tz = st.tz || {};
+    const tzOk = tz.state === "VERIFIED_LIVE" || tz.state === "VERIFIED_HISTORY";
+    const lt = st.last_tick_msc ? new Date(disp(st.last_tick_msc / 1000) * 1000) : null;
+    const ltTxt = lt ? `${pad(lt.getUTCHours())}:${pad(lt.getUTCMinutes())}:${pad(lt.getUTCSeconds())}.${String(lt.getUTCMilliseconds()).padStart(3, "0")}` : "—";
+    $("acctInfo").innerHTML = `${esc(acc.company || st.terminal?.company || "—")} · <b>${esc(acc.server || "—")}</b> · ` +
+      `<b>${esc(acc.trade_mode || "—")}</b> · last tick <b>${ltTxt}</b>${st.tick_age != null ? ` (${st.tick_age}s)` : ""} · ` +
+      `<span class="${tzOk ? "tz-ok" : "tz-bad"}" title="${esc(tz.detail || "")}">server time ${tzOk ? "verified" : "NOT verified"}</span>`;
     const warn = $("warnings");
     const ws = (st.warnings || []).filter((x) => !x.startsWith("Prices are NOT live"));
     warn.classList.toggle("hidden", !ws.length);
@@ -375,6 +382,7 @@
       if (kind === "signal") { const sell = text.includes("SELL"); kind = sell ? "signal-sell" : "signal-buy"; arr = sell ? "↓" : "↑"; }
       if (status === "MARKET_CLOSED") detail = (detail ? detail + " · " : "") + "market closed";
       if (st.paused_reason) detail = st.paused_reason;
+      if (st.paused_reason && st.paused_reason.startsWith("TIMEZONE")) { kind = "stale"; text = "TIMEZONE VERIFICATION REQUIRED"; arr = ""; }
     }
     box.className = "signal " + kind; txt.textContent = text; arrow.textContent = arr;
     $("signalDetail").textContent = detail;

@@ -168,7 +168,14 @@ def compute_stats(setups: list[dict], include_untaken: bool = False) -> dict:
             g[keyf(s)].append(s["trade"]["r_result"])
         return {k: _summary(v) for k, v in sorted(g.items())}
 
-    out["by_session"] = group(lambda s: s.get("session") or "?")
+    # inclusive: a London/New York overlap trade counts in both sessions
+    sess = defaultdict(list)
+    for s in trades:
+        names = [x for x in (s.get("session") or "").split("/") if x and x != "Off-session"] or ["Off-session"]
+        for n in names:
+            sess[n].append(s["trade"]["r_result"])
+    out["by_session"] = {k: _summary(sess.get(k, [])) for k in ("Asian", "London", "New York", "Off-session")}
+    out["by_session_label"] = group(lambda s: s.get("session") or "?")
     out["by_direction"] = group(lambda s: s["direction"])
     out["by_year"] = group(lambda s: datetime.fromtimestamp(s["entry_time"], timezone.utc).strftime("%Y"))
     out["by_month"] = group(lambda s: datetime.fromtimestamp(s["entry_time"], timezone.utc).strftime("%Y-%m"))

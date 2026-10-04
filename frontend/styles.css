@@ -62,7 +62,10 @@ button { font-family: inherit; }
 .chart-head { padding: 8px 12px; display: flex; gap: 16px; align-items: center; font-family: var(--mono); font-size: 13px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
 .ohlc b { font-weight: 600; margin-right: 10px; }
 .ohlc .up { color: var(--green); } .ohlc .dn { color: #ff6b6d; }
-.zone-flag { margin-left: auto; padding: 3px 8px; border-radius: 4px; background: var(--blue-soft); border: 1px solid var(--blue); font-family: var(--font); font-size: 12px; }
+.acct-info { margin-left: auto; color: var(--muted); font-size: 12px; }
+.acct-info b { color: var(--text); font-weight: 600; }
+.acct-info .tz-ok { color: #6ff0a6; } .acct-info .tz-bad { color: #fbbf24; }
+.zone-flag { padding: 3px 8px; border-radius: 4px; background: var(--blue-soft); border: 1px solid var(--blue); font-family: var(--font); font-size: 12px; }
 .chart-wrap { position: relative; flex: 1; min-height: 480px; }
 #chart { position: absolute; inset: 0; z-index: 0; }
 #overlay { position: absolute; left: 0; top: 0; pointer-events: none; z-index: 2; }

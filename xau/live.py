@@ -20,10 +20,12 @@ import json
 import logging
 import threading
 import time
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from typing import Any, Callable, Optional
 
-from .config import AppConfig
+from .config import ROOT, AppConfig
 from .models import Candle, TIMEFRAMES, TF_SECONDS
 from .mt5_client import MT5Client, rank_symbols
 from .sessions import MarketHours, SessionDef, SessionEngine
@@ -43,6 +45,18 @@ LIVE, STALE, MARKET_CLOSED, RECONNECTING, OFFLINE, CONNECTING = (
 # Closed candles may be evaluated while LIVE, or while the market is closed (no new
 # candles can form then, history is complete).  Never while STALE/RECONNECTING/OFFLINE.
 EVAL_OK = (LIVE, MARKET_CLOSED)
+
+# Broker-time verification states.  Strategy evaluation requires VERIFIED_*.
+TZ_VERIFIED_LIVE, TZ_VERIFIED_HISTORY, TZ_MISMATCH, TZ_REQUIRED = (
+    "VERIFIED_LIVE", "VERIFIED_HISTORY", "MISMATCH", "REQUIRED")
+TZ_FILE = ROOT / "data" / "tz_verification.json"
+
+
+def load_tz_verification(path: Path = TZ_FILE) -> Optional[dict]:
+    try:
+        return json.loads(Path(path).read_text(encoding="utf-8"))
+    except Exception:
+        return None
 
 
 def offset_transitions(clock: ServerClock, start: int, end: int) -> list[list[int]]:
@@ -95,6 +109,16 @@ class LiveService:
         self.last_tick_msc: Optional[int] = None
         self.last_change_mono: Optional[float] = None
         self.detected_offset: Optional[int] = None
+        self.offset_residual: Optional[float] = None    # tick age + PC clock error, seconds
+        self.offset_source = ""
+        self.tz_file = TZ_FILE
+        self.transitions: deque = deque(maxlen=500)     # (wall, status, detail)
+        self.audit: deque = deque(maxlen=5000)          # one entry per processed closed M5 bar
+        self.audit_stats = {"processed": 0, "duplicates": 0, "skipped_existing_bars": 0,
+                            "mt5_missing_bars": 0, "lookahead_violations": 0, "batches": 0,
+                            "last_batch_size": 0, "last_batch_after_pause": False}
+        self._processed_set: set = set()
+        self._paused_since_last_eval = False
         self.fail_count = 0
         self.next_connect_mono = 0.0
         self.last_forming_m5: Optional[int] = None
@@ -146,8 +170,38 @@ class LiveService:
 
     def _set_status(self, status: str, detail: str = "") -> bool:
         changed = (status, detail) != (self.status, self.status_detail)
+        if status != self.status:
+            self.transitions.append((round(self.wall(), 3), status, detail))
         self.status, self.status_detail = status, detail
         return changed
+
+    # ------------------------------------------------------- broker time gate
+    def _measure(self, raw: int, wall: float, source: str) -> None:
+        off = measure_offset(raw, wall)
+        self.detected_offset, self.offset_residual, self.offset_source = off, round(raw - wall - off, 2), source
+
+    def tz_state(self) -> tuple[str, str]:
+        """Is the configured server-time rule proven for this broker right now?"""
+        now = int(self.wall())
+        cfg_off = self.clock.offset_at_utc(now)
+        if self.detected_offset is not None:
+            if self.detected_offset == cfg_off:
+                return TZ_VERIFIED_LIVE, (f"live ticks measure GMT{cfg_off / 3600:+g}, matching rule "
+                                          f"'{self.clock.rule}' ({self.offset_source})")
+            return TZ_MISMATCH, (f"live ticks measure GMT{self.detected_offset / 3600:+g} but rule "
+                                 f"'{self.clock.rule}' gives GMT{cfg_off / 3600:+g}")
+        rec = load_tz_verification(self.tz_file)
+        server = self.account.server if self.account else None
+        if rec and rec.get("verdict") == "VERIFIED" and rec.get("rule") == self.clock.rule \
+                and server and rec.get("server") == server:
+            return TZ_VERIFIED_HISTORY, (f"rule '{self.clock.rule}' verified for {server} by the validation "
+                                         f"tool on {rec.get('verified_at', '?')} ({rec.get('method', '')})")
+        return TZ_REQUIRED, "no fresh tick yet to measure the broker server offset"
+
+    def tz_ok(self) -> bool:
+        if not getattr(self.cfg.feed, "require_timezone_verification", True):
+            return True
+        return self.tz_state()[0] in (TZ_VERIFIED_LIVE, TZ_VERIFIED_HISTORY)
 
     # ------------------------------------------------------------ main loop
     async def run_forever(self) -> None:
@@ -230,11 +284,27 @@ class LiveService:
                 first = self.last_tick_msc is None
                 self.last_tick_msc = tick.time_msc
                 if first:
-                    age = wall - tick.time   # relies on configured server-time rule
-                    self.last_change_mono = (mono - max(age, 0.0)) if -5 < age < self.cfg.feed.stale_seconds else None
+                    # Freshness of the very first tick is judged WITHOUT the configured rule:
+                    # measure offset = raw - wall rounded to 30 min; the residual is then the
+                    # tick age (+ PC clock error).  Only a small residual counts as fresh.
+                    # It is accepted only if it agrees with the configured rule (a tick that is
+                    # an exact multiple of 30 min old must not "prove" a wrong offset); the
+                    # next tick change re-measures independently and can still reject it.
+                    off = measure_offset(raw, wall)
+                    resid = raw - wall - off
+                    if off == self.clock.offset_at_utc(int(wall)) and -5 < -resid < self.cfg.feed.stale_seconds:
+                        self.last_change_mono = mono - max(-resid, 0.0)
+                        self._measure(raw, wall, "first tick (provisional)")
+                    else:
+                        self.last_change_mono = None
                 else:
                     self.last_change_mono = mono
-                    self.detected_offset = measure_offset(raw, wall)
+                    was_provisional = self.offset_source.startswith("first tick")
+                    self._measure(raw, wall, "tick change")
+                    if was_provisional and self.detected_offset != self.clock.offset_at_utc(int(wall)):
+                        # provisional acceptance was wrong: discard anything evaluated with it
+                        self._new_engine()
+                        self.last_forming_m5 = None
                 self.tick, self.tick_raw = tick, raw
                 if self.last_change_mono is not None:
                     await self.broadcast({"type": "tick", **self.tick_json()})
@@ -281,6 +351,13 @@ class LiveService:
         self.store.spec = self.spec
         if self.status not in EVAL_OK:
             self.engine_paused_reason = f"strategy paused: feed {self.status}"
+            self._paused_since_last_eval = True
+            await self.broadcast({"type": "strategy", "strategy": self.strategy_payload()})
+            return False
+        if not self.tz_ok():
+            st, detail = self.tz_state()
+            self.engine_paused_reason = f"TIMEZONE VERIFICATION REQUIRED: {detail}"
+            self._paused_since_last_eval = True
             await self.broadcast({"type": "strategy", "strategy": self.strategy_payload()})
             return False
         self.engine_paused_reason = ""
@@ -297,11 +374,48 @@ class LiveService:
                 closes = closes[-WARMUP_BARS:]
             else:
                 closes = [ct for ct in closes if ct > eng.last_bar_time + 300]
+            warmup = eng.last_bar_time is None
+            prev = eng.last_bar_time
+            store_times = set(self.store.m5_close_times())
             for ct in closes:
+                self._audit_bar(ct, now, prev, warmup, store_times)
                 for ev in eng.on_bar(self.store.snapshot_at(ct), feed_live=True):
                     if self.log_db is not None:
                         self.log_db.upsert(ev)
+                prev = ct - 300
+            a = self.audit_stats
+            a["batches"] += 1
+            a["last_batch_size"] = len(closes)
+            a["last_batch_after_pause"] = self._paused_since_last_eval
+            self._paused_since_last_eval = False
             self.strategy_state = eng.describe()
+
+    def _audit_bar(self, ct: int, now: int, prev_open: Optional[int], warmup: bool, store_times: set) -> None:
+        """Evidence that every closed M5 candle is processed exactly once, in order,
+        and never before it closed."""
+        a = self.audit_stats
+        if ct in self._processed_set:
+            a["duplicates"] += 1
+        self._processed_set.add(ct)
+        if ct > now:
+            a["lookahead_violations"] += 1
+        gap_missing_mt5 = gap_skipped = 0
+        if prev_open is not None:
+            for t in range(prev_open + 600, ct, 300):        # closes strictly between prev and ct
+                if t in store_times:
+                    gap_skipped += 1
+                else:
+                    gap_missing_mt5 += 1
+        a["skipped_existing_bars"] += gap_skipped
+        a["mt5_missing_bars"] += gap_missing_mt5
+        a["processed"] += 1
+        self.audit.append({"bar_open_utc": ct - 300, "bar_close_utc": ct, "evaluated_at_tick_utc": now,
+                           "processed_wall": round(self.wall(), 3), "warmup": warmup,
+                           "gap_bars_without_mt5_candle": gap_missing_mt5, "gap_bars_skipped": gap_skipped})
+
+    def audit_json(self) -> dict:
+        return {"stats": dict(self.audit_stats), "recent": list(self.audit)[-200:],
+                "transitions": [{"wall": w, "status": s, "detail": d} for (w, s, d) in self.transitions]}
 
     # --------------------------------------------------------------- output
     def tick_json(self) -> dict:
@@ -335,10 +449,16 @@ class LiveService:
         age = (self.mono() - self.last_change_mono) if self.last_change_mono is not None else None
         cfg_off = self.clock.offset_at_utc(now)
         warn = []
-        if self.detected_offset is not None and self.detected_offset != cfg_off:
-            warn.append(f"Broker server offset measured as GMT{self.detected_offset/3600:+g} but setting "
-                        f"'{self.clock.rule}' gives GMT{cfg_off/3600:+g}. Fix feed.server_timezone, "
-                        f"otherwise session/Asia/day boundaries are wrong.")
+        tz_st, tz_detail = self.tz_state()
+        if tz_st == TZ_MISMATCH:
+            warn.append(f"TIMEZONE VERIFICATION REQUIRED – {tz_detail}. Fix feed.server_timezone; "
+                        f"strategy signals are stopped until it matches.")
+        elif tz_st == TZ_REQUIRED and self.status in (LIVE, MARKET_CLOSED, STALE):
+            warn.append(f"TIMEZONE VERIFICATION REQUIRED – {tz_detail}. Strategy signals are stopped "
+                        f"until live ticks (or the validation tool) prove the broker server offset.")
+        if self.offset_residual is not None and abs(self.offset_residual) > 60 and self.offset_source == "tick change":
+            warn.append(f"PC clock differs from broker tick time by {self.offset_residual:+.0f}s – "
+                        f"sync Windows time (Settings > Time > Sync now).")
         if self.status != LIVE:
             warn.append("Prices are NOT live – nothing on screen is a current quote.")
         return {
@@ -347,8 +467,13 @@ class LiveService:
             "stale_seconds": self.cfg.feed.stale_seconds, "now_utc": now,
             "server_offset_configured": cfg_off, "server_offset_detected": self.detected_offset,
             "server_rule": self.clock.rule,
+            "tz": {"state": tz_st, "detail": tz_detail, "residual_s": self.offset_residual,
+                   "source": self.offset_source},
+            "last_tick_utc": self.tick.time if self.tick else None,
+            "last_tick_msc": self.tick.time_msc if self.tick else None,
+            "last_tick_server_raw": self.tick_raw,
             "sessions": self.sessions.describe(now), "market_open": self.market_hours.is_open(now),
-            "terminal": self.terminal, "account": self.account.to_dict() if self.account else None,
+            "terminal": self.terminal, "account": self.account.public_dict() if self.account else None,
             "warnings": warn,
         }
 

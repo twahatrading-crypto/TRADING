@@ -77,6 +77,10 @@ def create_app(cfg: Optional[AppConfig] = None, mt5_module: Any = "auto",
         return {"tf": tf, "candles": await service.chart_candles(tf, min(max(count, 10), 5000)),
                 "status": service.status}
 
+    @app.get("/api/audit")
+    async def audit():
+        return service.audit_json()
+
     @app.get("/api/signals")
     async def signals(limit: int = 100):
         return signal_log.recent(min(limit, 1000))

@@ -100,6 +100,12 @@ class AccountInfo:
     def to_dict(self) -> dict:
         return asdict(self)
 
+    def public_dict(self) -> dict:
+        """For UI/logs/evidence: no login number (and MT5 never exposes passwords)."""
+        d = asdict(self)
+        d.pop("login", None)
+        return d
+
 
 Direction = str  # "BUY" | "SELL"
 

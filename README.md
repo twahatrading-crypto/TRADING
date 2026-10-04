@@ -221,7 +221,32 @@ These cannot be verified without a real terminal:
 
 ---
 
-## 7. Layout
+## 7. Real MT5 validation (Windows)
+
+`validate.bat` (= `python -m xau.validate …`) collects evidence on your PC into
+`docs/validation/*.json`. It also rebuilds `docs/real-mt5-validation.md`, which
+starts with the completion gate. Evidence that did not come from the real
+`MetaTrader5` package is labelled TEST/SYNTHETIC and can never tick a gate item.
+No login number, password or balance is recorded.
+
+| command | needs | proves |
+|---|---|---|
+| `validate.bat` | MT5 open, gold trading | connection, symbol, broker spec, broker time (live ticks + weekly-open history + NTP clock check), OHLC for all 6 TFs, Asia/PDH/PDL vs an independent raw-M1 recompute, swing liquidity, real-data setup paths incl. rejections, tests |
+| `validate.bat live` | dashboard running (start.bat), market open | ticks reach the dashboard, current candle updates, every closed M5 candle processed exactly once, in order, never before it closed |
+| `validate.bat disconnect` | dashboard running | guided: LIVE → STALE/RECONNECTING/OFFLINE → LIVE, nothing evaluated while not live, missed candles caught up |
+| `validate.bat baseline` | MT5 open | exports real history, runs the **default** rules for 1M / 3M / 1Y / all history, writes `docs/baseline/BASELINE.*` once (frozen, never overwritten) |
+| `validate.bat report` | – | rebuilds the evidence document |
+
+**Broker time is now a hard gate.** Strategy evaluation stops with
+**TIMEZONE VERIFICATION REQUIRED** until the configured `feed.server_timezone`
+is proven. Proof comes either from live tick changes (measured continuously,
+so a DST change is caught too) or from a `data/tz_verification.json` written by
+`validate.bat` for the same broker server and rule.
+`GET /api/audit` exposes the per-candle processing audit.
+
+---
+
+## 8. Layout
 ```
 xau/models.py, timeutil.py, sessions.py, config.py
 xau/strategy/   market (snapshots) · swings · liquidity · sweep · structure · displacement · fvg · plan · scoring · engine
