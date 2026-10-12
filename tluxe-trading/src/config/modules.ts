@@ -34,6 +34,8 @@ export const SMC_ROUTE = '/engines/smc';
 export const VP_ROUTE = '/engines/volume-profile';
 /** Volume Footprint page (executed order flow: Bid × Ask per price from exchange trades; analysis only). */
 export const FOOTPRINT_ROUTE = '/engines/volume-footprint';
+/** Order Flow Pro page (independent IBKR order-flow research engine for COMEX GC / SI; read-only, no orders). */
+export const OFP_ROUTE = '/engines/order-flow-pro';
 /** News Analysis page (economic calendar, breaking news, event impact; analysis only). */
 export const NEWS_ROUTE = '/engines/news-analysis';
 

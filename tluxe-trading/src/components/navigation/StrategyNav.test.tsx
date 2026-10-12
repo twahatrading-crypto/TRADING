@@ -39,13 +39,14 @@ const EXPECTED: [string, string | null, RegExp | null][] = [
   ['Volume Profile', '/engines/volume-profile', /Volume Profile/],
   ['Volume Footprint', '/engines/volume-footprint', /Volume Footprint/],
   ['News Analysis', '/engines/news-analysis', /News Analysis/],
+  ['Order Flow Pro', '/engines/order-flow-pro', /Order Flow Pro/],
   ['Sweep / Reversal', null, null],
 ];
 
 describe('Trading Strategy sidebar', () => {
   it('lists every strategy page once, in order, with the right route (Sweep / Reversal SOON)', () => {
     expect(STRATEGY_NAV.map((s) => [s.label, s.route])).toEqual(EXPECTED.map(([l, r]) => [l, r]));
-    expect(new Set(STRATEGY_NAV.map((s) => s.route).filter(Boolean)).size).toBe(11);
+    expect(new Set(STRATEGY_NAV.map((s) => s.route).filter(Boolean)).size).toBe(12);
   });
 
   it('each item opens its page, is highlighted as active, and the sidebar stays visible', async () => {
