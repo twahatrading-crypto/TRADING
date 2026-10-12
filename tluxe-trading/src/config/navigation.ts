@@ -1,4 +1,4 @@
-import { GC_MAP_ROUTE, HEATMAP_ROUTE, HLE_ROUTE, HLR_ROUTE, LIQUIDITY_ROUTE, NEWS_ROUTE, ORDER_BLOCKS_ROUTE, SMC_ROUTE, SR_ROUTE, VP_ROUTE, FOOTPRINT_ROUTE } from './modules';
+import { GC_MAP_ROUTE, HEATMAP_ROUTE, HLE_ROUTE, HLR_ROUTE, LIQUIDITY_ROUTE, NEWS_ROUTE, OFP_ROUTE, ORDER_BLOCKS_ROUTE, SMC_ROUTE, SR_ROUTE, VP_ROUTE, FOOTPRINT_ROUTE } from './modules';
 
 /**
  * Trading Strategy pages shown under "Trading Strategy" in the sidebar.
@@ -7,7 +7,7 @@ import { GC_MAP_ROUTE, HEATMAP_ROUTE, HLE_ROUTE, HLR_ROUTE, LIQUIDITY_ROUTE, NEW
  * `route` — entries without a route render disabled ("Soon"), so unfinished
  * strategies can never be opened.
  */
-export type StrategyIcon = 'sr' | 'liquidity' | 'orderBlocks' | 'hlr' | 'hle' | 'heatmap' | 'liquidityMap' | 'smc' | 'volumeProfile' | 'footprint' | 'news' | 'sweep';
+export type StrategyIcon = 'sr' | 'liquidity' | 'orderBlocks' | 'hlr' | 'hle' | 'heatmap' | 'liquidityMap' | 'smc' | 'volumeProfile' | 'footprint' | 'orderFlowPro' | 'news' | 'sweep';
 
 export interface StrategyNavItem {
   id: string;
@@ -29,6 +29,7 @@ export const STRATEGY_NAV: readonly StrategyNavItem[] = [
   { id: 'volume-profile', label: 'Volume Profile', icon: 'volumeProfile', route: VP_ROUTE },
   { id: 'volume-footprint', label: 'Volume Footprint', icon: 'footprint', route: FOOTPRINT_ROUTE },
   { id: 'news-analysis', label: 'News Analysis', icon: 'news', route: NEWS_ROUTE },
+  { id: 'order-flow-pro', label: 'Order Flow Pro', icon: 'orderFlowPro', route: OFP_ROUTE },
   { id: 'sweep-reversal', label: 'Sweep / Reversal', icon: 'sweep', route: null },
 ];
 

@@ -9,6 +9,7 @@ import {
   Droplets,
   Flame,
   Footprints,
+  Gauge,
   Layers,
   LayoutDashboard,
   LineChart,
@@ -36,6 +37,7 @@ const STRATEGY_ICONS: Record<StrategyIcon, LucideIcon> = {
   smc: Brain,
   volumeProfile: BarChart3,
   footprint: Footprints,
+  orderFlowPro: Gauge,
   news: Newspaper,
   sweep: ArrowLeftRight,
 };
