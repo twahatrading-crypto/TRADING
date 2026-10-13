@@ -1,16 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { STRONG_PARAMS, type Alert, type OfpView } from '../../engines/orderFlowPro/engine';
 import { EVIDENCE_LABEL, type ReversalSignal } from '../../engines/orderFlowPro/reversal';
-import type { CapabilityState } from '../../engines/orderFlowPro/types';
+import type { CapabilityState, SourceStatus, StreamProvenance } from '../../engines/orderFlowPro/types';
 import { DEFAULT_OFP_LINK, isLoopbackUrl, loadOfpLink, OFP_BACKEND_AVAILABLE, saveOfpLink, type OfpLinkConfig } from '../../providers/orderFlowPro/config';
 import { ProfileMini } from './OfpCanvases';
 import { feedLabel, fmtExpiry, fmtNum, fmtSigned, fmtUtcTime } from './ofpFormat';
-
-export const DEPTH_LIMITS_TEXT =
-  'IBKR market depth = aggregated PRICE LEVELS (MBP) for the rows IBKR grants, direct COMEX (not SMART depth). It is not the full COMEX book, carries no order IDs (not MBO) and no exchange timestamps (backend receive time is used). Displayed size can be pulled at any time; a reduction is not proof of a fill or a cancel.';
-
-export const CLASSIFICATION_TEXT =
-  'Side = quote-rule INFERENCE against the IBKR bid / ask (at/above ask → BUY, at/below bid → SELL). Not exchange-confirmed. A side is assigned only when that bid / ask was confirmed by its own stream within the maximum quote age (2 s) on real-time data; stale, missing, delayed, inside-spread, locked / crossed prints stay UNKNOWN and are excluded from delta, CVD and imbalances.';
+import { sourceText } from './ofpSourceText';
 
 function Empty({ text }: { text: string }) {
   return <div className="ofp-empty">{text}</div>;
@@ -199,18 +194,19 @@ export function LiquidityStrength({ view, precision, now }: { view: OfpView; pre
 
 export function TradesTable({ view, precision }: { view: OfpView; precision: number }) {
   if (!view.tape.length) return <Empty text="No trade prints received" />;
+  const tx = sourceText(view.status, false);
   return (
     <div className="ofp-scroll">
-      <p className="ofp-note">{CLASSIFICATION_TEXT}</p>
+      <p className="ofp-note">{tx.classification}</p>
       <table className="ofp-table">
         <thead>
           <tr>
             <th>Time (UTC)</th>
             <th>Price</th>
-            <th title="Quote-rule inference, not exchange-confirmed">Side (inferred)</th>
+            <th title={tx.sideTitle}>{tx.sideHeader}</th>
             <th>Size</th>
             <th title="UNKNOWN prints are never counted as buy or sell volume">Delta</th>
-            <th title="Why the side was (not) inferred, and the age of the bid / ask it was compared with">Basis · quote age</th>
+            <th title={tx.basisTitle}>{tx.basisHeader}</th>
           </tr>
         </thead>
         <tbody>
@@ -224,6 +220,7 @@ export function TradesTable({ view, precision }: { view: OfpView; precision: num
               <td className="dim" title={t.quoteSource ? `reference: ${t.quoteSource} touch` : undefined}>
                 {(t.basis ?? 'QUOTE_RULE').replace(/_/g, ' ').toLowerCase()}
                 {t.quoteAgeMs !== undefined && t.quoteAgeMs !== null ? ` · ${(t.quoteAgeMs / 1000).toFixed(1)} s` : ''}
+                {t.method === 'EXCHANGE' && t.tRecv !== undefined ? ` · ${Math.max(0, t.tRecv - t.t)} ms` : ''}
               </td>
             </tr>
           ))}
@@ -380,17 +377,48 @@ export function AbsorptionTable({ signals }: { signals: readonly ReversalSignal[
   );
 }
 
-export function SessionStatsPanel({ view }: { view: OfpView }) {
+/**
+ * Session-history coverage: shown whenever the session's prints are not completely loaded, so session statistics
+ * (volume, delta, CVD, profile) are never presented as complete. Offers the on-demand load of earlier prints.
+ */
+export function HistoryCoverage({ st, onLoad, onCancel }: { st: SourceStatus; onLoad?: () => void; onCancel?: () => void }) {
+  const h = st.provenance?.history;
+  if (!h || h.complete) return null;
+  const hhmm = (t: number) => `${fmtUtcTime(t).slice(0, 5)} UTC`;
+  return (
+    <div className="ofp-note ofp-note--warn" role="status" data-testid="ofp-history-coverage">
+      <b>PARTIAL SESSION</b> · prints loaded from {h.loadedFrom !== null ? hhmm(h.loadedFrom) : '—'} (session from {hhmm(h.sessionStart)}); earlier bars are
+      Databento OHLCV only (no footprint), so session volume, delta, CVD and profile cover the loaded part only.
+      {h.historyThrough !== null && h.loadedFrom !== null && ` Earlier prints merged ${hhmm(h.sessionStart)} → ${hhmm(h.historyThrough)}; ${hhmm(h.historyThrough)} → ${hhmm(h.loadedFrom)} not loaded yet.`}
+      {h.unavailable && ` Prints ${hhmm(h.unavailable.from)} → ${hhmm(h.unavailable.to)} are no longer available from the gateway.`}
+      {h.loading && ` Loading earlier prints… ${h.historyLoaded.toLocaleString('en-US')} so far.`}
+      {h.error && ` ${h.error}.`}{' '}
+      {!h.loading && onLoad && !h.unavailable && (
+        <button type="button" className="ofp-btn" onClick={onLoad}>
+          Load earlier prints
+        </button>
+      )}
+      {h.loading && onCancel && (
+        <button type="button" className="ofp-btn ofp-btn--ghost" onClick={onCancel}>
+          Cancel
+        </button>
+      )}
+    </div>
+  );
+}
+
+export function SessionStatsPanel({ view, onLoadHistory, onCancelHistory }: { view: OfpView; onLoadHistory?: () => void; onCancelHistory?: () => void }) {
   const s = view.stats;
   return (
     <dl className="ofp-kv ofp-scroll">
+      <HistoryCoverage st={view.status} onLoad={onLoadHistory} onCancel={onCancelHistory} />
       <dt>Session window</dt>
       <dd>
         {fmtUtcTime(s.window.start)} → {fmtUtcTime(s.window.end)} UTC ({s.window.session})
       </dd>
       <dt>Executed volume</dt>
       <dd>{fmtNum(s.volume)}</dd>
-      <dt>Buy / Sell (inferred)</dt>
+      <dt>{sourceText(view.status, false).buySell}</dt>
       <dd>
         <span className="bid">{fmtNum(s.buy)}</span> / <span className="ask">{fmtNum(s.sell)}</span>
       </dd>
@@ -433,12 +461,16 @@ export function DiagnosticsPanel({ view, demo, onLinkChange }: { view: OfpView; 
         <dd>{st.marketDataType ?? 'not reported'}</dd>
         <dt>Contract</dt>
         <dd>
-          {st.contract ? `${st.contract.localSymbol} · ${st.contract.exchange} · class ${st.contract.tradingClass} · ×${st.contract.multiplier} · expiry ${fmtExpiry(st.contract.expiry)} · conId ${st.contract.conId ?? '—'} · ${st.contract.verified ? 'VERIFIED (reqContractDetails)' : 'NOT VERIFIED'}` : 'none'}
+          {st.contract
+            ? st.provenance
+              ? `${st.contract.localSymbol} · ${st.contract.exchange} · class ${st.contract.tradingClass} · ×${st.contract.multiplier} · contract month ${st.contract.expiry.slice(0, 4)}-${st.contract.expiry.slice(4, 6)} · ${st.contract.verified ? 'MATCHED: Databento trades = IBKR depth' : 'trades only - IBKR depth not matched'}`
+              : `${st.contract.localSymbol} · ${st.contract.exchange} · class ${st.contract.tradingClass} · ×${st.contract.multiplier} · expiry ${fmtExpiry(st.contract.expiry)} · conId ${st.contract.conId ?? '—'} · ${st.contract.verified ? 'VERIFIED (reqContractDetails)' : 'NOT VERIFIED'}`
+            : 'none'}
         </dd>
         <dt>Depth rows granted</dt>
         <dd>{st.depthRows || '—'}</dd>
         {(['depth', 'trades', 'aggressor', 'historicalBars'] as const).map((k) => (
-          <FragmentKV key={k} k={k === 'aggressor' ? 'Aggressor (quote rule)' : k === 'historicalBars' ? 'Historical bars' : k[0]!.toUpperCase() + k.slice(1)} v={st.capabilities[k]} />
+          <FragmentKV key={k} k={k === 'aggressor' ? sourceText(st, demo).aggressorCap : k === 'historicalBars' ? 'Historical bars' : k[0]!.toUpperCase() + k.slice(1)} v={st.capabilities[k]} />
         ))}
         {st.health && (
           <>
@@ -477,7 +509,10 @@ export function DiagnosticsPanel({ view, demo, onLinkChange }: { view: OfpView; 
           <>
             <dt>Side classification</dt>
             <dd>
-              INFERRED (quote rule vs {st.classification.touchSource ?? '—'} touch, max quote age {st.classification.maxQuoteAgeMs ?? '—'} ms) · UNKNOWN volume{' '}
+              {st.classification.method === 'EXCHANGE'
+                ? 'EXCHANGE-REPORTED aggressor (CME via Databento; N → UNKNOWN, never inferred)'
+                : `INFERRED (quote rule vs ${st.classification.touchSource ?? '—'} touch, max quote age ${st.classification.maxQuoteAgeMs ?? '—'} ms)`}{' '}
+              · UNKNOWN volume{' '}
               {st.classification.unknownVolumePct === null ? '—' : `${st.classification.unknownVolumePct}%`}
               {st.classification.unknownVolumeByReason && Object.keys(st.classification.unknownVolumeByReason).length
                 ? ` (${Object.entries(st.classification.unknownVolumeByReason)
@@ -497,8 +532,9 @@ export function DiagnosticsPanel({ view, demo, onLinkChange }: { view: OfpView; 
           bars {view.bars.length} · heat columns {view.stats.heatColumns} · gaps {view.gaps.length} · depth ignored while invalid {view.stats.ignoredDepthWhileInvalid}
         </dd>
       </dl>
-      <p className="ofp-note">{DEPTH_LIMITS_TEXT}</p>
-      <p className="ofp-note">{CLASSIFICATION_TEXT}</p>
+      {st.provenance && <ProvenanceBlock st={st} />}
+      <p className="ofp-note">{sourceText(st, demo).depthLimits}</p>
+      <p className="ofp-note">{sourceText(st, demo).classification}</p>
       <p className="ofp-note">Read-only: this page and its backend have no order, account or position functions. Scores are evidence scores, not probabilities.</p>
       {st.diagnostics.length > 0 && (
         <ul className="ofp-diag__list">
@@ -588,5 +624,36 @@ export function SessionVpPanel({ view, precision }: { view: OfpView; precision: 
         <ProfileMini profile={p} version={view.version} />
       </div>
     </div>
+  );
+}
+
+const fmtAge = (ms: number | null) => (ms === null ? '—' : ms < 1000 ? `${ms} ms` : ms < 120_000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.round(ms / 60_000)} min`);
+const TIME_BASIS: Record<StreamProvenance['timeBasis'], string> = { EXCHANGE_EVENT: 'exchange event time', VPS_DEPTH_UPDATE: 'VPS depth-service update time', BAR_OPEN: 'bar open time' };
+
+/** Gateway source: independent state + freshness of every upstream stream, and the data-quality counters. */
+function ProvenanceBlock({ st }: { st: SourceStatus }) {
+  const p = st.provenance!;
+  const q = p.quality;
+  const rows: Array<[string, StreamProvenance]> = [
+    ['Trades', p.trades],
+    ['Depth', p.depth],
+    ['Bars', p.bars],
+  ];
+  return (
+    <dl className="ofp-kv" data-testid="ofp-provenance">
+      {rows.map(([k, s]) => (
+        <FragmentText
+          key={k}
+          k={`${k} source`}
+          v={`${s.state.replace('_', ' ')} · ${s.provider} · contract ${s.contract ?? '—'} · ${TIME_BASIS[s.timeBasis]}${s.lastMs !== null ? ` · last ${fmtUtcTime(s.lastMs, true)} UTC (${fmtAge(s.ageMs)} ago)` : ''}${s.detail ? ` · ${s.detail}` : ''}`}
+        />
+      ))}
+      <FragmentText k="Aggressor source" v={p.aggressor === 'EXCHANGE' ? 'exchange-reported (CME via Databento)' : 'none'} />
+      <FragmentText
+        k="Data quality"
+        v={`trades accepted ${q.tradesAccepted} · duplicate ${q.tradesDuplicate} · rejected ${q.tradesRejected} · out of order ${q.tradesOutOfOrder} · unknown side ${q.unknownSide} · depth changes ${q.depthChanges} · resyncs ${q.depthResyncs} · sequence gaps ${q.depthSeqGaps} · depth rejected ${q.depthRejected} · gaps ${q.gaps} · request errors ${q.requestErrors} · rate-limited ${q.rateLimited}`}
+      />
+      <FragmentText k="Gateway requests" v={`${p.requests} GET since subscription (read-only)`} />
+    </dl>
   );
 }

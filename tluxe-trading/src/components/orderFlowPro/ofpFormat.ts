@@ -19,11 +19,21 @@ export type Tone = 'ok' | 'warn' | 'bad' | 'muted' | 'demo';
 export function feedLabel(s: SourceStatus): { text: string; tone: Tone; detail: string } {
   const f: FeedState = s.feed;
   switch (f) {
-    case 'LIVE':
+    case 'LIVE': {
       if (s.marketDataType !== 'REALTIME') return { text: s.marketDataType ?? 'UNKNOWN TYPE', tone: 'warn', detail: 'Not real-time market data' };
+      const p = s.provenance;
+      if (p) {
+        // Gateway source: trades decide LIVE; depth is reported separately and never upgrades the label.
+        const depthOk = p.depth.state === 'LIVE' || p.depth.state === 'QUIET';
+        const depthNote = depthOk ? '' : ` · DEPTH ${p.depth.state.replace('_', ' ')}`;
+        if (p.trades.state === 'QUIET')
+          return { text: `LIVE · QUIET${depthNote}`, tone: depthOk ? 'ok' : 'warn', detail: `Databento reports live; no CME trade for ${Math.round((p.trades.ageMs ?? 0) / 1000)} s (quiet market - not a gap)${depthOk ? '' : ` · depth: ${p.depth.detail ?? p.depth.state}`}` };
+        return { text: `LIVE${depthNote}`, tone: depthOk ? 'ok' : 'warn', detail: `Databento CME trades (exchange time) via the TLUXE gateway${depthOk ? ' · IBKR price-level depth' : ` · depth: ${p.depth.detail ?? p.depth.state}`}` };
+      }
       if (s.health?.activity === 'QUIET')
         return { text: 'LIVE · QUIET', tone: 'ok', detail: `Connected and subscribed; no market-data change for ${Math.round((s.health.quietForMs ?? 0) / 1000)} s (quiet market - not a gap)` };
       return { text: 'LIVE', tone: 'ok', detail: 'IBKR real-time market data' };
+    }
     case 'DELAYED':
       return { text: 'DELAYED', tone: 'warn', detail: 'IBKR delayed market data (type 3) - not real-time' };
     case 'FROZEN':
@@ -31,9 +41,15 @@ export function feedLabel(s: SourceStatus): { text: string; tone: Tone; detail: 
     case 'DELAYED_FROZEN':
       return { text: 'DELAYED FROZEN', tone: 'warn', detail: 'IBKR delayed-frozen market data (type 4)' };
     case 'STALE':
-      return { text: 'STALE', tone: 'warn', detail: 'Subscribed, but no events within the stale window' };
+      return { text: 'STALE', tone: 'warn', detail: s.provenance ? (s.provenance.trades.detail ?? 'No fresh gateway data') : 'Subscribed, but no events within the stale window' };
     case 'CONNECTING':
-      return { text: 'CONNECTING', tone: 'muted', detail: 'Connecting to IB Gateway' };
+      return { text: 'CONNECTING', tone: 'muted', detail: s.provenance ? 'Connecting to the TLUXE gateway market data' : 'Connecting to IB Gateway' };
+    case 'DISCONNECTED':
+      return { text: 'DISCONNECTED', tone: 'bad', detail: s.provenance?.trades.detail ?? 'Gateway market data not reachable' };
+    case 'UNAVAILABLE':
+      return { text: 'DATA UNAVAILABLE', tone: 'bad', detail: s.provenance?.trades.detail ?? 'No usable market data from the gateway' };
+    case 'CONTRACT_MISMATCH':
+      return { text: 'CONTRACT MISMATCH', tone: 'bad', detail: s.provenance?.trades.detail ?? 'Sources report different contracts - nothing combined' };
     case 'AUTH_REQUIRED':
       return { text: 'GATEWAY LOGIN REQUIRED', tone: 'bad', detail: 'IB Gateway is running but its API refuses connections' };
     case 'NOT_ENTITLED':

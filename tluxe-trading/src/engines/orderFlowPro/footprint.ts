@@ -87,6 +87,44 @@ export class FootprintBuilder {
     this.insert({ t, ms: this.ms, o: b.o, h: b.h, l: b.l, c: b.c, volume: b.v, buy: 0, sell: 0, unknown: 0, delta: null, trades: 0, levels: new Map(), source: 'BARS_ONLY', closed: true });
   }
 
+  /**
+   * Earlier-session print loaded on demand after newer prints: merged into its (older) slot without late exclusion.
+   * Callers guarantee the slot is older than every live-loaded slot; prints arrive oldest first. A history slot is a
+   * closed bar; an OHLCV-only bar becomes MIXED (its OHLC is kept, the footprint holds the prints).
+   */
+  addHistoryTrade(tr: TradeEvent) {
+    const t = this.slot(tr.t);
+    let bar = this.bars.get(t);
+    if (!bar) {
+      bar = newBar(t, this.ms, tr.price);
+      bar.closed = true;
+      this.insert(bar);
+    } else if (bar.source === 'BARS_ONLY') {
+      bar.source = 'MIXED';
+      bar.volume = 0;
+    }
+    if (bar.trades === 0 && bar.source === 'TRADES') bar.o = tr.price;
+    bar.h = Math.max(bar.h, tr.price);
+    bar.l = Math.min(bar.l, tr.price);
+    bar.c = tr.price; // history prints arrive oldest first: the newest one so far is the close
+    bar.volume += tr.size;
+    bar.trades++;
+    const k = toTick(tr.price, this.tick);
+    let lv = bar.levels.get(k);
+    if (!lv) bar.levels.set(k, (lv = { buy: 0, sell: 0, unknown: 0 }));
+    if (tr.aggressor === 'BUY') {
+      lv.buy += tr.size;
+      bar.buy += tr.size;
+    } else if (tr.aggressor === 'SELL') {
+      lv.sell += tr.size;
+      bar.sell += tr.size;
+    } else {
+      lv.unknown += tr.size;
+      bar.unknown += tr.size;
+    }
+    bar.delta = bar.buy - bar.sell;
+  }
+
   addTrade(tr: TradeEvent) {
     const t = this.slot(tr.t);
     let bar = this.bars.get(t);

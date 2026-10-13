@@ -3,7 +3,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { ChartStage } from '../components/chart/ChartStage';
 import { MiniSeries, DepthHeatmap } from '../components/orderFlowPro/OfpCanvases';
 import { DEFAULT_LAYERS, OfpChartView, type BubbleDensity, type ChartFrame, type DrawTool, type Drawing, type HoverInfo, type LayerFlags } from '../components/orderFlowPro/OfpChartView';
-import { AbsorptionTable, AlertsList, DiagnosticsPanel, LiquidityStrength, OrderBookPanel, ReversalTable, SessionStatsPanel, SessionVpPanel, StrongTable, TradesTable } from '../components/orderFlowPro/OfpPanels';
+import { AbsorptionTable, AlertsList, DiagnosticsPanel, HistoryCoverage, LiquidityStrength, OrderBookPanel, ReversalTable, SessionStatsPanel, SessionVpPanel, StrongTable, TradesTable } from '../components/orderFlowPro/OfpPanels';
+import { replayText, sourceText } from '../components/orderFlowPro/ofpSourceText';
 import { OfpSplitter } from '../components/orderFlowPro/OfpSplitter';
 import { feedLabel, fmtExpiry, fmtNum, fmtSigned, fmtUtcTime, HEAT_LEGEND, scheduleLabel } from '../components/orderFlowPro/ofpFormat';
 import { INTENSITY_SCALES, isOfpRoot, isOfpSession, isOfpTf, OFP_PRECISION, OFP_ROOTS, OFP_SESSIONS, OFP_TFS, type IntensityScale, type OfpSession } from '../engines/orderFlowPro/config';
@@ -17,7 +18,8 @@ import '../components/orderFlowPro/ofp.css';
 
 /* ============================================================================
  * TLUXE ORDER FLOW PRO - a SEPARATE, independent research page for COMEX GC / SI futures.
- * Data: the local Order Flow Pro backend (IBKR TWS API, read-only) only. No other TLUXE provider, engine or store is
+ * Data: the local Order Flow Pro backend (IBKR TWS API, read-only) or - website, when activated - the gateway's
+ * existing read-only market-data endpoints (Databento CME trades + IBKR depth). No other TLUXE provider, engine or store is
  * read or written. No orders, no trade instructions. Independently removable: this file, components/orderFlowPro,
  * engines/orderFlowPro, providers/orderFlowPro, one route, one nav item.
  *
@@ -105,6 +107,10 @@ export function OrderFlowProPage() {
   const st = view.status;
   const precision = OFP_PRECISION[root];
   const fl = feedLabel(st);
+  const tx = sourceText(st, demo);
+  // On-demand earlier-session prints (gateway source only): bounded, cancellable, never re-downloads loaded prints.
+  const loadHistory = ctl.source.loadEarlierHistory ? () => void ctl.source.loadEarlierHistory!(root) : undefined;
+  const cancelHistory = ctl.source.cancelEarlierHistory ? () => ctl.source.cancelEarlierHistory!(root) : undefined;
   const live = isLiveFeed(st);
   const now = engine.now || view.status.lastEventMs || 0;
   const sched = scheduleLabel(globexSchedule(now || Date.now()));
@@ -181,7 +187,7 @@ export function OrderFlowProPage() {
       )}
       {replay && (
         <div className="ofp-banner ofp-banner--replay" role="status">
-          REPLAY · {fmtUtcTime(replay.cursor)} UTC · recorded data, not live
+          REPLAY · {fmtUtcTime(replay.cursor)} UTC · not live · <span data-testid="ofp-replay-provenance">{replayText(replay.provenance)}</span>
         </div>
       )}
 
@@ -194,7 +200,7 @@ export function OrderFlowProPage() {
         )}
         <div className="ofp-brand">
           <h1>Order Flow Pro</h1>
-          <span>COMEX futures · IBKR · research only</span>
+          <span>{tx.subtitle}</span>
         </div>
         <div className="ofp-group" role="group" aria-label="Symbol">
           {OFP_ROOTS.map((r) => (
@@ -369,7 +375,7 @@ export function OrderFlowProPage() {
         </div>
         <div className="ofp-q">
           <span>Provider</span>
-          <b>{demo ? 'DEMO fixture' : 'IBKR (read-only)'}</b>
+          <b>{tx.provider}</b>
           <em>{st.marketDataType ? `market data: ${st.marketDataType}` : 'market data type: —'}</em>
         </div>
         <div className="ofp-q" data-testid="ofp-schedule" title="CME Globex weekly schedule only. Exchange holidays, early closes and halts are not verified - this is not an exchange 'market open' status.">
@@ -471,7 +477,7 @@ export function OrderFlowProPage() {
             <aside className="ofp-side">
               <section className="ofp-panel ofp-panel--book">
                 <header>
-                  <h2>Order Book (IBKR)</h2>
+                  <h2 title={replay ? 'Recorded IBKR depth: time-weighted average displayed size per bucket - not an exact historical order book' : undefined}>{replay ? 'Recorded depth (IBKR, bucket averages)' : 'Order Book (IBKR)'}</h2>
                   <span className="ofp-tag" title="Rows granted by IBKR (price levels, not full book)">
                     {st.depthRows ? `${st.depthRows} × ${st.depthRows} rows` : 'no depth'}
                   </span>
@@ -509,7 +515,11 @@ export function OrderFlowProPage() {
               <header>
                 <h2>CVD</h2>
                 <b className={lastCvd && lastCvd.v < 0 ? 'ask' : 'bid'}>{lastCvd ? fmtSigned(lastCvd.v) : '—'}</b>
-                {lastCvd?.partial && <span className="ofp-tag ofp-tag--warn" title="Unknown-side prints are excluded">PARTIAL</span>}
+                {(lastCvd?.partial || (!replay && st.provenance?.history && !st.provenance.history.complete)) && (
+                  <span className="ofp-tag ofp-tag--warn" title={!replay && st.provenance?.history && !st.provenance.history.complete ? 'Session prints only partly loaded (see Session Stats); unknown-side prints are excluded' : 'Unknown-side prints are excluded'}>
+                    PARTIAL
+                  </span>
+                )}
               </header>
               <MiniSeries points={view.cvd} mode="area" label="CVD" />
             </section>
@@ -531,7 +541,7 @@ export function OrderFlowProPage() {
               <header>
                 <h2>Order Flow Imbalance</h2>
                 <b className={lastOfi && lastOfi.v < 0 ? 'ask' : 'bid'}>{lastOfi ? fmtSigned(lastOfi.v) : '—'}</b>
-                <span className="ofp-tag" title="Top-of-book OFI (Cont-Kukanov-Stoikov) from IBKR quotes">top of book</span>
+                <span className="ofp-tag" title={tx.ofiTitle}>top of book</span>
               </header>
               <MiniSeries points={view.ofi} mode="bars" label="OFI" />
             </section>
@@ -554,7 +564,7 @@ export function OrderFlowProPage() {
                 {tab === 'Reversal Detector' && <ReversalTable signals={view.reversals} />}
                 {tab === 'Strong Liquidity' && <StrongTable view={view} precision={precision} />}
                 {tab === 'Absorptions' && <AbsorptionTable signals={view.reversals} />}
-                {tab === 'Session Stats' && <SessionStatsPanel view={view} />}
+                {tab === 'Session Stats' && <SessionStatsPanel view={view} onLoadHistory={replay ? undefined : loadHistory} onCancelHistory={replay ? undefined : cancelHistory} />}
                 {tab === 'Diagnostics' && <DiagnosticsPanel view={view} demo={demo} onLinkChange={() => setLinkVer((v) => v + 1)} />}
               </div>
             </section>
@@ -570,6 +580,7 @@ export function OrderFlowProPage() {
                 <h2>Session Volume Profile</h2>
                 <span className="ofp-tag">executed prints</span>
               </header>
+              {!replay && <HistoryCoverage st={st} onLoad={loadHistory} onCancel={cancelHistory} />}
               <SessionVpPanel view={view} precision={precision} />
             </section>
           </div>
@@ -580,7 +591,7 @@ export function OrderFlowProPage() {
         <footer className="ofp-foot">
           <span>TLUXE | ORDER FLOW PRO</span>
           <span>{lastBar ? `${view.bars.length} bars · ${lastBar.source === 'BARS_ONLY' ? 'historical bars (no footprint)' : 'built from prints'}` : 'no bars'}</span>
-          <span>IBKR price-level depth (not full book, not MBO) · quote-rule inferred sides · research only — no orders, no signals to trade</span>
+          <span>{tx.footer}</span>
         </footer>
       )}
     </div>

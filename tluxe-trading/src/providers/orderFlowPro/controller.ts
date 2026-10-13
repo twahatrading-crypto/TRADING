@@ -1,7 +1,9 @@
 import { OfpEngine } from '../../engines/orderFlowPro/engine';
 import { OFP_ROOTS } from '../../engines/orderFlowPro/config';
-import type { OfpFrame, OfpRoot } from '../../engines/orderFlowPro/types';
+import type { OfpFrame, OfpRoot, ReplayProvenance } from '../../engines/orderFlowPro/types';
+import { gatewaySourceEnabled } from './activation';
 import { BackendSource } from './BackendSource';
+import { GatewaySource } from './GatewaySource';
 import type { OfpSource } from './source';
 
 /* ============================================================================
@@ -21,6 +23,8 @@ export interface ReplayState {
   cursor: number;
   speed: number;
   playing: boolean;
+  /** What this replay contains (exact prints, recorded depth aggregates, gaps); null = the source does not say. */
+  provenance: ReplayProvenance | null;
 }
 
 type Listener = () => void;
@@ -108,7 +112,9 @@ export class OfpController {
   /** Start replay of recorded frames [from, to]: everything before `from` is applied instantly, then played. */
   async startReplay(root: OfpRoot, from: number, to: number, speed = 10) {
     this.stopReplay();
-    const frames = await this.src.history(root, from, to);
+    // A replay never touches the live engines: it is built in its own engine from recorded data only.
+    const detailed = this.src.historyDetailed ? await this.src.historyDetailed(root, from, to) : null;
+    const frames = detailed ? detailed.frames : await this.src.history(root, from, to);
     const engine = new OfpEngine(root, this.engines[root].status);
     const t0 = (f: OfpFrame) => {
       const e = f.events[0];
@@ -119,7 +125,7 @@ export class OfpController {
     engine.advance(from);
     this.replayFrames = frames;
     this.replayIdx = i;
-    this.replay = { root, engine, from, to, cursor: from, speed, playing: true };
+    this.replay = { root, engine, from, to, cursor: from, speed, playing: true, provenance: detailed?.provenance ?? null };
     this.replayTimer = setInterval(() => this.replayStep(), 100);
     this.notify();
   }
@@ -173,9 +179,15 @@ export class OfpController {
 
 let current: OfpController | null = null;
 
-/** The page's controller. Production: the local backend source. */
+/** The source the page uses: the gateway's read-only market data only when activated (see activation.ts),
+ *  otherwise the local backend link (on the website that is the BACKEND OFFLINE guard). */
+export function defaultOfpSource(enabled: boolean = gatewaySourceEnabled()): OfpSource {
+  return enabled ? new GatewaySource() : new BackendSource();
+}
+
+/** The page's controller. */
 export function ofpController(): OfpController {
-  if (!current) current = new OfpController(new BackendSource());
+  if (!current) current = new OfpController(defaultOfpSource());
   return current;
 }
 

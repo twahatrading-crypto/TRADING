@@ -1,4 +1,4 @@
-import type { OfpFrame, OfpRoot, SourceStatus } from '../../engines/orderFlowPro/types';
+import type { OfpFrame, OfpRoot, ReplayProvenance, SourceStatus } from '../../engines/orderFlowPro/types';
 
 export interface SourceSink {
   frames(frames: OfpFrame[]): void;
@@ -24,4 +24,9 @@ export interface OfpSource {
   history(root: OfpRoot, from: number, to: number): Promise<OfpFrame[]>;
   /** Ask the backend to subscribe a different verified contract. */
   selectContract?(root: OfpRoot, localSymbol: string): Promise<void>;
+  /** Replay with an explicit description of what it contains (exact prints vs recorded depth aggregates, gaps). */
+  historyDetailed?(root: OfpRoot, from: number, to: number): Promise<{ frames: OfpFrame[]; provenance: ReplayProvenance }>;
+  /** Load the earlier part of the current session's prints on demand (bounded, cancellable). */
+  loadEarlierHistory?(root: OfpRoot): Promise<void>;
+  cancelEarlierHistory?(root: OfpRoot): void;
 }
