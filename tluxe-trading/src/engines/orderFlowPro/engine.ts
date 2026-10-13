@@ -156,6 +156,12 @@ export class OfpEngine {
   }
 
   private addTrade(tr: TradeEvent) {
+    // Earlier-session print loaded on demand: older slots only; never the tape, never the last price.
+    if (tr.history) {
+      for (const tf of OFP_TFS) this.builders[tf].addHistoryTrade(tr);
+      this.addToSession(tr);
+      return;
+    }
     // The backend already classified the print. A trade without a method is classified here by the same quote rule.
     let t = tr;
     if (tr.method === 'NONE' && tr.aggressor === 'UNKNOWN' && this.quote) {
@@ -164,6 +170,13 @@ export class OfpEngine {
     }
     this.last = t.price;
     for (const tf of OFP_TFS) this.builders[tf].addTrade(t);
+    this.addToSession(t);
+    this.tape.push(t);
+    if (this.tape.length > MAX_TAPE) this.tape.splice(0, this.tape.length - MAX_TAPE);
+  }
+
+  /** Session profile + totals: plain sums, so the order prints arrive in does not matter. */
+  private addToSession(t: TradeEvent) {
     for (const s of ['ETH', 'RTH'] as const) {
       const w = sessionWindow(t.t, s);
       if (!inWindow(t.t, w)) continue;
@@ -187,8 +200,6 @@ export class OfpEngine {
       else if (t.aggressor === 'SELL') tot.sell += t.size;
       else tot.unknown += t.size;
     }
-    this.tape.push(t);
-    if (this.tape.length > MAX_TAPE) this.tape.splice(0, this.tape.length - MAX_TAPE);
   }
 
   private pushAlert(a: Alert) {

@@ -1,0 +1,2828 @@
+{
+ "_fixture": {
+  "kind": "RECORDED",
+  "note": "Real responses captured read-only from the production TLUXE gateway public market-data endpoints for deterministic tests. NOT live data - never shown as LIVE.",
+  "capturedAtUtc": "2026-10-12T11:05:33Z",
+  "source": "https://twahatrading.com (gateway f6da572)",
+  "requests": 16,
+  "healthCapturedAtUtc": "2026-10-12T11:19:05Z",
+  "healthTimeMsCapturedAtUtc": "2026-10-13T06:31:57Z"
+ },
+ "tradesGC": {
+  "root": "GC",
+  "contract": "GCZ6",
+  "instrumentId": 41271,
+  "trades": [
+   {
+    "i": 34165,
+    "tsEventNs": 1791803015989154987,
+    "tsRecvNs": 1791803015989408221,
+    "price": 4199.3,
+    "size": 1,
+    "side": "A",
+    "aggressor": "SELL",
+    "sequence": 10767010,
+    "key": "1791803015989154987-1791803015989408221-10767010-4199300000000-1-A-20898-0",
+    "contract": "GCZ6"
+   },
+   {
+    "i": 34166,
+    "tsEventNs": 1791803015991996077,
+    "tsRecvNs": 1791803015992221817,
+    "price": 4199.2,
+    "size": 1,
+    "side": "A",
+    "aggressor": "SELL",
+    "sequence": 10767070,
+    "key": "1791803015991996077-1791803015992221817-10767070-4199200000000-1-A-14411-0",
+    "contract": "GCZ6"
+   },
+   {
+    "i": 34167,
+    "tsEventNs": 1791803019371840581,
+    "tsRecvNs": 1791803019372123267,
+    "price": 4199.2,
+    "size": 1,
+    "side": "A",
+    "aggressor": "SELL",
+    "sequence": 10767425,
+    "key": "1791803019371840581-1791803019372123267-10767425-4199200000000-1-A-14518-0",
+    "contract": "GCZ6"
+   },
+   {
+    "i": 34168,
+    "tsEventNs": 1791803021829017957,
+    "tsRecvNs": 1791803021829319667,
+    "price": 4199.3,
+    "size": 3,
+    "side": "B",
+    "aggressor": "BUY",
+    "sequence": 10767837,
+    "key": "1791803021829017957-1791803021829319667-10767837-4199300000000-3-B-15284-0",
+    "contract": "GCZ6"
+   },
+   {
+    "i": 34169,
+    "tsEventNs": 1791803025265655663,
+    "tsRecvNs": 1791803025266053481,
+    "price": 4199.4,
+    "size": 2,
+    "side": "B",
+    "aggressor": "BUY",
+    "sequence": 10768411,
+    "key": "1791803025265655663-1791803025266053481-10768411-4199400000000-2-B-14571-0",
+    "contract": "GCZ6"
+   },
+   {
+    "i": 34170,
+    "tsEventNs": 1791803025794609677,
+    "tsRecvNs": 1791803025794878157,
+    "price": 4199.3,
+    "size": 1,
+    "side": "A",
+    "aggressor": "SELL",
+    "sequence": 10768499,
+    "key": "1791803025794609677-1791803025794878157-10768499-4199300000000-1-A-14235-0",
+    "contract": "GCZ6"
+   },
+   {
+    "i": 34171,
+    "tsEventNs": 1791803031564417251,
+    "tsRecvNs": 1791803031565233051,
+    "price": 4199.3,
+    "size": 2,
+    "side": "A",
+    "aggressor": "SELL",
+    "sequence": 10768802,
+    "key": "1791803031564417251-1791803031565233051-10768802-4199300000000-2-A-15810-0",
+    "contract": "GCZ6"
+   },
+   {
+    "i": 34172,
+    "tsEventNs": 1791803031564417251,
+    "tsRecvNs": 1791803031565233051,
+    "price": 4199.2,
+    "size": 2,
+    "side": "A",
+    "aggressor": "SELL",
+    "sequence": 10768802,
+    "key": "1791803031564417251-1791803031565233051-10768802-4199200000000-2-A-15810-0",
+    "contract": "GCZ6"
+   },
+   {
+    "i": 34173,
+    "tsEventNs": 1791803032021077251,
+    "tsRecvNs": 1791803032021350461,
+    "price": 4199.3,
+    "size": 1,
+    "side": "B",
+    "aggressor": "BUY",
+    "sequence": 10769074,
+    "key": "1791803032021077251-1791803032021350461-10769074-4199300000000-1-B-14486-0",
+    "contract": "GCZ6"
+   },
+   {
+    "i": 34174,
+    "tsEventNs": 1791803033294406943,
+    "tsRecvNs": 1791803033294771853,
+    "price": 4199.4,
+    "size": 3,
+    "side": "B",
+    "aggressor": "BUY",
+    "sequence": 10769237,
+    "key": "1791803033294406943-1791803033294771853-10769237-4199400000000-3-B-15258-0",
+    "contract": "GCZ6"
+   },
+   {
+    "i": 34175,
+    "tsEventNs": 1791803037919979215,
+    "tsRecvNs": 1791803037920301209,
+    "price": 4199.3,
+    "size": 1,
+    "side": "B",
+    "aggressor": "BUY",
+    "sequence": 10769650,
+    "key": "1791803037919979215-1791803037920301209-10769650-4199300000000-1-B-14566-0",
+    "contract": "GCZ6"
+   },
+   {
+    "i": 34176,
+    "tsEventNs": 1791803042247377991,
+    "tsRecvNs": 1791803042247653331,
+    "price": 4199.4,
+    "size": 1,
+    "side": "B",
+    "aggressor": "BUY",
+    "sequence": 10770307,
+    "key": "1791803042247377991-1791803042247653331-10770307-4199400000000-1-B-16901-0",
+    "contract": "GCZ6"
+   },
+   {
+    "i": 34177,
+    "tsEventNs": 1791803044449919953,
+    "tsRecvNs": 1791803044450230673,
+    "price": 4199.4,
+    "size": 1,
+    "side": "B",
+    "aggressor": "BUY",
+    "sequence": 10770428,
+    "key": "1791803044449919953-1791803044450230673-10770428-4199400000000-1-B-22454-0",
+    "contract": "GCZ6"
+   },
+   {
+    "i": 34178,
+    "tsEventNs": 1791803047912058195,
+    "tsRecvNs": 1791803047912384213,
+    "price": 4199.4,
+    "size": 1,
+    "side": "B",
+    "aggressor": "BUY",
+    "sequence": 10770636,
+    "key": "1791803047912058195-1791803047912384213-10770636-4199400000000-1-B-15010-0",
+    "contract": "GCZ6"
+   },
+   {
+    "i": 34179,
+    "tsEventNs": 1791803047912345817,
+    "tsRecvNs": 1791803047912604119,
+    "price": 4199.4,
+    "size": 1,
+    "side": "B",
+    "aggressor": "BUY",
+    "sequence": 10770649,
+    "key": "1791803047912345817-1791803047912604119-10770649-4199400000000-1-B-14642-0",
+    "contract": "GCZ6"
+   },
+   {
+    "i": 34180,
+    "tsEventNs": 1791803051104789483,
+    "tsRecvNs": 1791803051105033287,
+    "price": 4199.5,
+    "size": 1,
+    "side": "B",
+    "aggressor": "BUY",
+    "sequence": 10770945,
+    "key": "1791803051104789483-1791803051105033287-10770945-4199500000000-1-B-17899-0",
+    "contract": "GCZ6"
+   },
+   {
+    "i": 34181,
+    "tsEventNs": 1791803056787324419,
+    "tsRecvNs": 1791803056787732029,
+    "price": 4199.3,
+    "size": 1,
+    "side": "A",
+    "aggressor": "SELL",
+    "sequence": 10771377,
+    "key": "1791803056787324419-1791803056787732029-10771377-4199300000000-1-A-14691-0",
+    "contract": "GCZ6"
+   },
+   {
+    "i": 34182,
+    "tsEventNs": 1791803072308788115,
+    "tsRecvNs": 1791803072309064173,
+    "price": 4199.5,
+    "size": 1,
+    "side": "B",
+    "aggressor": "BUY",
+    "sequence": 10772645,
+    "key": "1791803072308788115-1791803072309064173-10772645-4199500000000-1-B-14855-0",
+    "contract": "GCZ6"
+   },
+   {
+    "i": 34183,
+    "tsEventNs": 1791803072432249749,
+    "tsRecvNs": 1791803072432562453,
+    "price": 4199.4,
+    "size": 1,
+    "side": "A",
+    "aggressor": "SELL",
+    "sequence": 10772819,
+    "key": "1791803072432249749-1791803072432562453-10772819-4199400000000-1-A-13823-0",
+    "contract": "GCZ6"
+   },
+   {
+    "i": 34184,
+    "tsEventNs": 1791803072489059135,
+    "tsRecvNs": 1791803072489351109,
+    "price": 4199.3,
+    "size": 1,
+    "side": "A",
+    "aggressor": "SELL",
+    "sequence": 10772969,
+    "key": "1791803072489059135-1791803072489351109-10772969-4199300000000-1-A-14300-0",
+    "contract": "GCZ6"
+   },
+   {
+    "i": 34185,
+    "tsEventNs": 1791803074666545085,
+    "tsRecvNs": 1791803074666778069,
+    "price": 4199.4,
+    "size": 1,
+    "side": "B",
+    "aggressor": "BUY",
+    "sequence": 10773257,
+    "key": "1791803074666545085-1791803074666778069-10773257-4199400000000-1-B-13959-0",
+    "contract": "GCZ6"
+   },
+   {
+    "i": 34186,
+    "tsEventNs": 1791803079293424081,
+    "tsRecvNs": 1791803079293689973,
+    "price": 4199.3,
+    "size": 1,
+    "side": "A",
+    "aggressor": "SELL",
+    "sequence": 10774099,
+    "key": "1791803079293424081-1791803079293689973-10774099-4199300000000-1-A-14595-0",
+    "contract": "GCZ6"
+   },
+   {
+    "i": 34187,
+    "tsEventNs": 1791803085324279891,
+    "tsRecvNs": 1791803085324567067,
+    "price": 4199.4,
+    "size": 1,
+    "side": "A",
+    "aggressor": "SELL",
+    "sequence": 10774852,
+    "key": "1791803085324279891-1791803085324567067-10774852-4199400000000-1-A-15097-0",
+    "contract": "GCZ6"
+   },
+   {
+    "i": 34188,
+    "tsEventNs": 1791803087295476421,
+    "tsRecvNs": 1791803087295873457,
+    "price": 4199.4,
+    "size": 1,
+    "side": "A",
+    "aggressor": "SELL",
+    "sequence": 10775113,
+    "key": "1791803087295476421-1791803087295873457-10775113-4199400000000-1-A-14477-0",
+    "contract": "GCZ6"
+   },
+   {
+    "i": 34189,
+    "tsEventNs": 1791803097675093551,
+    "tsRecvNs": 1791803097675356939,
+    "price": 4199.5,
+    "size": 1,
+    "side": "A",
+    "aggressor": "SELL",
+    "sequence": 10775562,
+    "key": "1791803097675093551-1791803097675356939-10775562-4199500000000-1-A-14501-0",
+    "contract": "GCZ6"
+   },
+   {
+    "i": 34190,
+    "tsEventNs": 1791803100258611301,
+    "tsRecvNs": 1791803100258898613,
+    "price": 4199.4,
+    "size": 1,
+    "side": "A",
+    "aggressor": "SELL",
+    "sequence": 10776035,
+    "key": "1791803100258611301-1791803100258898613-10776035-4199400000000-1-A-15234-0",
+    "contract": "GCZ6"
+   },
+   {
+    "i": 34191,
+    "tsEventNs": 1791803100637378893,
+    "tsRecvNs": 1791803100637645411,
+    "price": 4199.4,
+    "size": 1,
+    "side": "A",
+    "aggressor": "SELL",
+    "sequence": 10776226,
+    "key": "1791803100637378893-1791803100637645411-10776226-4199400000000-1-A-15297-0",
+    "contract": "GCZ6"
+   },
+   {
+    "i": 34192,
+    "tsEventNs": 1791803102150653685,
+    "tsRecvNs": 1791803102151141007,
+    "price": 4199.4,
+    "size": 1,
+    "side": "A",
+    "aggressor": "SELL",
+    "sequence": 10776411,
+    "key": "1791803102150653685-1791803102151141007-10776411-4199400000000-1-A-14506-0",
+    "contract": "GCZ6"
+   },
+   {
+    "i": 34193,
+    "tsEventNs": 1791803103728863449,
+    "tsRecvNs": 1791803103729139733,
+    "price": 4199.3,
+    "size": 1,
+    "side": "A",
+    "aggressor": "SELL",
+    "sequence": 10776770,
+    "key": "1791803103728863449-1791803103729139733-10776770-4199300000000-1-A-14800-0",
+    "contract": "GCZ6"
+   },
+   {
+    "i": 34194,
+    "tsEventNs": 1791803103729154259,
+    "tsRecvNs": 1791803103729534865,
+    "price": 4199.3,
+    "size": 1,
+    "side": "B",
+    "aggressor": "BUY",
+    "sequence": 10776792,
+    "key": "1791803103729154259-1791803103729534865-10776792-4199300000000-1-B-12724-0",
+    "contract": "GCZ6"
+   },
+   {
+    "i": 34195,
+    "tsEventNs": 1791803103729318853,
+    "tsRecvNs": 1791803103729818569,
+    "price": 4199.3,
+    "size": 1,
+    "side": "B",
+    "aggressor": "BUY",
+    "sequence": 10776809,
+    "key": "1791803103729318853-1791803103729818569-10776809-4199300000000-1-B-13391-0",
+    "contract": "GCZ6"
+   },
+   {
+    "i": 34196,
+    "tsEventNs": 1791803104786911195,
+    "tsRecvNs": 1791803104787205549,
+    "price": 4199.3,
+    "size": 1,
+    "side": "A",
+    "aggressor": "SELL",
+    "sequence": 10776914,
+    "key": "1791803104786911195-1791803104787205549-10776914-4199300000000-1-A-15891-0",
+    "contract": "GCZ6"
+   },
+   {
+    "i": 34197,
+    "tsEventNs": 1791803104971447707,
+    "tsRecvNs": 1791803104971697239,
+    "price": 4199.3,
+    "size": 1,
+    "side": "A",
+    "aggressor": "SELL",
+    "sequence": 10776983,
+    "key": "1791803104971447707-1791803104971697239-10776983-4199300000000-1-A-14848-0",
+    "contract": "GCZ6"
+   },
+   {
+    "i": 34198,
+    "tsEventNs": 1791803120873562101,
+    "tsRecvNs": 1791803120873816829,
+    "price": 4199.1,
+    "size": 1,
+    "side": "A",
+    "aggressor": "SELL",
+    "sequence": 10778577,
+    "key": "1791803120873562101-1791803120873816829-10778577-4199100000000-1-A-14624-0",
+    "contract": "GCZ6"
+   },
+   {
+    "i": 34199,
+    "tsEventNs": 1791803121671140999,
+    "tsRecvNs": 1791803121671405047,
+    "price": 4199.2,
+    "size": 1,
+    "side": "A",
+    "aggressor": "SELL",
+    "sequence": 10778931,
+    "key": "1791803121671140999-1791803121671405047-10778931-4199200000000-1-A-14406-0",
+    "contract": "GCZ6"
+   },
+   {
+    "i": 34200,
+    "tsEventNs": 1791803121671884295,
+    "tsRecvNs": 1791803121672129003,
+    "price": 4199.2,
+    "size": 1,
+    "side": "B",
+    "aggressor": "BUY",
+    "sequence": 10778972,
+    "key": "1791803121671884295-1791803121672129003-10778972-4199200000000-1-B-14837-0",
+    "contract": "GCZ6"
+   },
+   {
+    "i": 34201,
+    "tsEventNs": 1791803124576915631,
+    "tsRecvNs": 1791803124577240515,
+    "price": 4199.4,
+    "size": 1,
+    "side": "B",
+    "aggressor": "BUY",
+    "sequence": 10779127,
+    "key": "1791803124576915631-1791803124577240515-10779127-4199400000000-1-B-25000-0",
+    "contract": "GCZ6"
+   },
+   {
+    "i": 34202,
+    "tsEventNs": 1791803127626309571,
+    "tsRecvNs": 1791803127626577025,
+    "price": 4199.4,
+    "size": 2,
+    "side": "B",
+    "aggressor": "BUY",
+    "sequence": 10779204,
+    "key": "1791803127626309571-1791803127626577025-10779204-4199400000000-2-B-22586-0",
+    "contract": "GCZ6"
+   },
+   {
+    "i": 34203,
+    "tsEventNs": 1791803127626581041,
+    "tsRecvNs": 1791803127626956801,
+    "price": 4199.4,
+    "size": 3,
+    "side": "B",
+    "aggressor": "BUY",
+    "sequence": 10779214,
+    "key": "1791803127626581041-1791803127626956801-10779214-4199400000000-3-B-13466-0",
+    "contract": "GCZ6"
+   },
+   {
+    "i": 34204,
+    "tsEventNs": 1791803132907469721,
+    "tsRecvNs": 1791803132907763831,
+    "price": 4199.3,
+    "size": 1,
+    "side": "A",
+    "aggressor": "SELL",
+    "sequence": 10779541,
+    "key": "1791803132907469721-1791803132907763831-10779541-4199300000000-1-A-14936-0",
+    "contract": "GCZ6"
+   }
+  ],
+  "complete": true,
+  "lastIndex": 34205,
+  "cursor": 3496
+ },
+ "bookGC": {
+  "root": "GC",
+  "state": "LIVE",
+  "detail": null,
+  "valid": true,
+  "epoch": 1,
+  "depthSeq": 7072,
+  "contract": {
+   "localSymbol": "GCZ6",
+   "symbol": "GC",
+   "exchange": "COMEX",
+   "currency": "USD"
+  },
+  "source": "Interactive Brokers",
+  "depthType": "PRICE_LEVEL",
+  "mbo": false,
+  "rows": {
+   "bids": [
+    {
+     "position": 0,
+     "price": 4199.3,
+     "size": 4.0,
+     "marketMaker": null
+    },
+    {
+     "position": 1,
+     "price": 4199.2,
+     "size": 4.0,
+     "marketMaker": null
+    },
+    {
+     "position": 2,
+     "price": 4199.1,
+     "size": 3.0,
+     "marketMaker": null
+    },
+    {
+     "position": 3,
+     "price": 4199.0,
+     "size": 4.0,
+     "marketMaker": null
+    },
+    {
+     "position": 4,
+     "price": 4198.9,
+     "size": 4.0,
+     "marketMaker": null
+    },
+    {
+     "position": 5,
+     "price": 4198.8,
+     "size": 4.0,
+     "marketMaker": null
+    },
+    {
+     "position": 6,
+     "price": 4198.7,
+     "size": 7.0,
+     "marketMaker": null
+    },
+    {
+     "position": 7,
+     "price": 4198.6,
+     "size": 8.0,
+     "marketMaker": null
+    },
+    {
+     "position": 8,
+     "price": 4198.5,
+     "size": 5.0,
+     "marketMaker": null
+    },
+    {
+     "position": 9,
+     "price": 4198.4,
+     "size": 5.0,
+     "marketMaker": null
+    }
+   ],
+   "asks": [
+    {
+     "position": 0,
+     "price": 4199.6,
+     "size": 2.0,
+     "marketMaker": null
+    },
+    {
+     "position": 1,
+     "price": 4199.7,
+     "size": 3.0,
+     "marketMaker": null
+    },
+    {
+     "position": 2,
+     "price": 4199.8,
+     "size": 5.0,
+     "marketMaker": null
+    },
+    {
+     "position": 3,
+     "price": 4199.9,
+     "size": 5.0,
+     "marketMaker": null
+    },
+    {
+     "position": 4,
+     "price": 4200.0,
+     "size": 4.0,
+     "marketMaker": null
+    },
+    {
+     "position": 5,
+     "price": 4200.1,
+     "size": 7.0,
+     "marketMaker": null
+    },
+    {
+     "position": 6,
+     "price": 4200.2,
+     "size": 7.0,
+     "marketMaker": null
+    },
+    {
+     "position": 7,
+     "price": 4200.3,
+     "size": 5.0,
+     "marketMaker": null
+    },
+    {
+     "position": 8,
+     "price": 4200.4,
+     "size": 5.0,
+     "marketMaker": null
+    },
+    {
+     "position": 9,
+     "price": 4200.5,
+     "size": 9.0,
+     "marketMaker": null
+    }
+   ]
+  },
+  "lastDepthMs": 1791803134805,
+  "lastUpdateMs": 1791803134805,
+  "serverMs": 1791803135247,
+  "bids": [
+   [
+    4199.3,
+    4.0
+   ],
+   [
+    4199.2,
+    4.0
+   ],
+   [
+    4199.1,
+    3.0
+   ],
+   [
+    4199.0,
+    4.0
+   ],
+   [
+    4198.9,
+    4.0
+   ],
+   [
+    4198.8,
+    4.0
+   ],
+   [
+    4198.7,
+    7.0
+   ],
+   [
+    4198.6,
+    8.0
+   ],
+   [
+    4198.5,
+    5.0
+   ],
+   [
+    4198.4,
+    5.0
+   ]
+  ],
+  "asks": [
+   [
+    4199.6,
+    2.0
+   ],
+   [
+    4199.7,
+    3.0
+   ],
+   [
+    4199.8,
+    5.0
+   ],
+   [
+    4199.9,
+    5.0
+   ],
+   [
+    4200.0,
+    4.0
+   ],
+   [
+    4200.1,
+    7.0
+   ],
+   [
+    4200.2,
+    7.0
+   ],
+   [
+    4200.3,
+    5.0
+   ],
+   [
+    4200.4,
+    5.0
+   ],
+   [
+    4200.5,
+    9.0
+   ]
+  ]
+ },
+ "updatesGC": {
+  "root": "GC",
+  "state": "LIVE",
+  "detail": null,
+  "valid": true,
+  "epoch": 1,
+  "depthSeq": 7082,
+  "serverMs": 1791803135719,
+  "lastUpdateMs": 1791803135506,
+  "rows": {
+   "bids": [
+    {
+     "position": 0,
+     "price": 4199.3,
+     "size": 3.0,
+     "marketMaker": null
+    },
+    {
+     "position": 1,
+     "price": 4199.2,
+     "size": 4.0,
+     "marketMaker": null
+    },
+    {
+     "position": 2,
+     "price": 4199.1,
+     "size": 4.0,
+     "marketMaker": null
+    },
+    {
+     "position": 3,
+     "price": 4199.0,
+     "size": 4.0,
+     "marketMaker": null
+    },
+    {
+     "position": 4,
+     "price": 4198.9,
+     "size": 4.0,
+     "marketMaker": null
+    },
+    {
+     "position": 5,
+     "price": 4198.8,
+     "size": 4.0,
+     "marketMaker": null
+    },
+    {
+     "position": 6,
+     "price": 4198.7,
+     "size": 7.0,
+     "marketMaker": null
+    },
+    {
+     "position": 7,
+     "price": 4198.6,
+     "size": 8.0,
+     "marketMaker": null
+    },
+    {
+     "position": 8,
+     "price": 4198.5,
+     "size": 5.0,
+     "marketMaker": null
+    },
+    {
+     "position": 9,
+     "price": 4198.4,
+     "size": 5.0,
+     "marketMaker": null
+    }
+   ],
+   "asks": [
+    {
+     "position": 0,
+     "price": 4199.6,
+     "size": 3.0,
+     "marketMaker": null
+    },
+    {
+     "position": 1,
+     "price": 4199.7,
+     "size": 3.0,
+     "marketMaker": null
+    },
+    {
+     "position": 2,
+     "price": 4199.8,
+     "size": 4.0,
+     "marketMaker": null
+    },
+    {
+     "position": 3,
+     "price": 4199.9,
+     "size": 5.0,
+     "marketMaker": null
+    },
+    {
+     "position": 4,
+     "price": 4200.0,
+     "size": 4.0,
+     "marketMaker": null
+    },
+    {
+     "position": 5,
+     "price": 4200.1,
+     "size": 7.0,
+     "marketMaker": null
+    },
+    {
+     "position": 6,
+     "price": 4200.2,
+     "size": 6.0,
+     "marketMaker": null
+    },
+    {
+     "position": 7,
+     "price": 4200.3,
+     "size": 5.0,
+     "marketMaker": null
+    },
+    {
+     "position": 8,
+     "price": 4200.4,
+     "size": 5.0,
+     "marketMaker": null
+    },
+    {
+     "position": 9,
+     "price": 4200.5,
+     "size": 9.0,
+     "marketMaker": null
+    }
+   ]
+  },
+  "resync": false,
+  "changes": [
+   [
+    7061,
+    "bid",
+    4199.1,
+    3.0,
+    1791803134605
+   ],
+   [
+    7062,
+    "bid",
+    4199.2,
+    5.0,
+    1791803134605
+   ],
+   [
+    7063,
+    "bid",
+    4199.3,
+    4.0,
+    1791803134605
+   ],
+   [
+    7064,
+    "bid",
+    4199.4,
+    3.0,
+    1791803134605
+   ],
+   [
+    7065,
+    "ask",
+    4199.5,
+    0.0,
+    1791803134605
+   ],
+   [
+    7066,
+    "ask",
+    4199.7,
+    3.0,
+    1791803134605
+   ],
+   [
+    7067,
+    "ask",
+    4199.8,
+    5.0,
+    1791803134605
+   ],
+   [
+    7068,
+    "ask",
+    4200.0,
+    4.0,
+    1791803134605
+   ],
+   [
+    7069,
+    "ask",
+    4200.5,
+    9.0,
+    1791803134605
+   ],
+   [
+    7070,
+    "bid",
+    4198.4,
+    5.0,
+    1791803134805
+   ],
+   [
+    7071,
+    "bid",
+    4199.2,
+    4.0,
+    1791803134805
+   ],
+   [
+    7072,
+    "bid",
+    4199.4,
+    0.0,
+    1791803134805
+   ],
+   [
+    7073,
+    "bid",
+    4199.1,
+    4.0,
+    1791803135105
+   ],
+   [
+    7074,
+    "bid",
+    4199.3,
+    2.0,
+    1791803135105
+   ],
+   [
+    7075,
+    "ask",
+    4199.5,
+    2.0,
+    1791803135105
+   ],
+   [
+    7076,
+    "ask",
+    4199.6,
+    3.0,
+    1791803135105
+   ],
+   [
+    7077,
+    "ask",
+    4200.5,
+    0.0,
+    1791803135105
+   ],
+   [
+    7078,
+    "bid",
+    4199.3,
+    3.0,
+    1791803135506
+   ],
+   [
+    7079,
+    "ask",
+    4199.5,
+    0.0,
+    1791803135506
+   ],
+   [
+    7080,
+    "ask",
+    4199.8,
+    4.0,
+    1791803135506
+   ],
+   [
+    7081,
+    "ask",
+    4200.2,
+    6.0,
+    1791803135506
+   ],
+   [
+    7082,
+    "ask",
+    4200.5,
+    9.0,
+    1791803135506
+   ]
+  ]
+ },
+ "candlesM1GC": {
+  "root": "GC",
+  "contract": "GCZ6",
+  "instrumentId": 41271,
+  "timeframe": "M1",
+  "bars": [
+   {
+    "time": 1791802800,
+    "open": 4201.8,
+    "high": 4201.8,
+    "low": 4200.7,
+    "close": 4201.4,
+    "volume": 41,
+    "isClosed": true
+   },
+   {
+    "time": 1791802860,
+    "open": 4201.6,
+    "high": 4201.9,
+    "low": 4199.8,
+    "close": 4200.1,
+    "volume": 73,
+    "isClosed": true
+   },
+   {
+    "time": 1791802920,
+    "open": 4200.0,
+    "high": 4200.0,
+    "low": 4199.5,
+    "close": 4199.7,
+    "volume": 25,
+    "isClosed": true
+   },
+   {
+    "time": 1791802980,
+    "open": 4199.5,
+    "high": 4199.5,
+    "low": 4199.2,
+    "close": 4199.3,
+    "volume": 36,
+    "isClosed": true
+   },
+   {
+    "time": 1791803040,
+    "open": 4199.4,
+    "high": 4199.5,
+    "low": 4199.3,
+    "close": 4199.5,
+    "volume": 14,
+    "isClosed": true
+   },
+   {
+    "time": 1791803100,
+    "open": 4199.4,
+    "high": 4199.5,
+    "low": 4199.1,
+    "close": 4199.5,
+    "volume": 21,
+    "isClosed": false
+   }
+  ],
+  "source": "databento",
+  "schema": "ohlcv-1m + historical ohlcv-1m/1h/1d",
+  "history": "READY",
+  "cursor": 3502
+ },
+ "dbStatusGC": {
+  "provider": "Databento",
+  "source": "embedded",
+  "state": "LIVE",
+  "detail": "Last Databento trade / OHLCV data 2 s ago.",
+  "connection": "CONNECTED",
+  "dataset": "GLBX.MDP3",
+  "plan": "standard",
+  "market": "COMEX",
+  "root": "GC",
+  "subscribed": "GC.v.0",
+  "activeContract": "GCZ6",
+  "instrumentId": 41271,
+  "instrumentStatus": "LIVE",
+  "lastEventUtc": "2026-10-12T11:05:34.511Z",
+  "lastEventAgeMs": 2223,
+  "freshness": "LIVE",
+  "marketOpen": true,
+  "received": {
+   "trades": 34205,
+   "ohlcvBars": 785,
+   "tapeCounts": {
+    "accepted": 34205,
+    "duplicates": 0,
+    "malformed": 0,
+    "unknownSide": 324
+   }
+  },
+  "history": {
+   "state": "READY",
+   "contract": "GCZ6",
+   "instrumentId": 41271,
+   "message": null,
+   "bars": {
+    "ohlcv-1m": 89966,
+    "ohlcv-1h": 5716,
+    "ohlcv-1d": 467
+   },
+   "estimatedCostUsd": 0.0,
+   "range": {
+    "start": "2023-10-08T00:00:00",
+    "end": "2026-10-12T10:40:00"
+   },
+   "loadedAtMs": 1791802274643,
+   "source": "Databento Historical API (timeseries.get_range)"
+  },
+  "lastTrade": {
+   "price": 4199.5,
+   "size": 3,
+   "side": "B",
+   "timeUtc": "2026-10-12T11:05:34.511Z"
+  },
+  "lastBar": {
+   "open": 4199.4,
+   "high": 4199.5,
+   "low": 4199.3,
+   "close": 4199.5,
+   "volume": 14,
+   "isClosed": true,
+   "timeUtc": "2026-10-12T11:04:00.000Z"
+  },
+  "verifiedByRealData": true,
+  "schemas": {
+   "mbo": "NOT_ENTITLED",
+   "mbp-10": "NOT_ENTITLED"
+  },
+  "depth": "UNSUPPORTED",
+  "timeUtc": "2026-10-12T11:05:36.734Z"
+ },
+ "tradesSI": {
+  "root": "SI",
+  "contract": "SIZ6",
+  "instrumentId": 701,
+  "trades": [
+   {
+    "i": 7264,
+    "tsEventNs": 1791802981694880853,
+    "tsRecvNs": 1791802981695298745,
+    "price": 60.895,
+    "size": 1,
+    "side": "A",
+    "aggressor": "SELL",
+    "sequence": 10760916,
+    "key": "1791802981694880853-1791802981695298745-10760916-60895000000-1-A-13000-0",
+    "contract": "SIZ6"
+   },
+   {
+    "i": 7265,
+    "tsEventNs": 1791802981694880853,
+    "tsRecvNs": 1791802981695298745,
+    "price": 60.89,
+    "size": 1,
+    "side": "A",
+    "aggressor": "SELL",
+    "sequence": 10760916,
+    "key": "1791802981694880853-1791802981695298745-10760916-60890000000-1-A-13000-0",
+    "contract": "SIZ6"
+   },
+   {
+    "i": 7266,
+    "tsEventNs": 1791802981696186721,
+    "tsRecvNs": 1791802981697319517,
+    "price": 60.89,
+    "size": 1,
+    "side": "A",
+    "aggressor": "SELL",
+    "sequence": 10761059,
+    "key": "1791802981696186721-1791802981697319517-10761059-60890000000-1-A-12677-0",
+    "contract": "SIZ6"
+   },
+   {
+    "i": 7267,
+    "tsEventNs": 1791802981730159607,
+    "tsRecvNs": 1791802981730418061,
+    "price": 60.885,
+    "size": 3,
+    "side": "A",
+    "aggressor": "SELL",
+    "sequence": 10761370,
+    "key": "1791802981730159607-1791802981730418061-10761370-60885000000-3-A-14224-0",
+    "contract": "SIZ6"
+   },
+   {
+    "i": 7268,
+    "tsEventNs": 1791802981750215973,
+    "tsRecvNs": 1791802981750488815,
+    "price": 60.89,
+    "size": 2,
+    "side": "B",
+    "aggressor": "BUY",
+    "sequence": 10761635,
+    "key": "1791802981750215973-1791802981750488815-10761635-60890000000-2-B-14443-0",
+    "contract": "SIZ6"
+   },
+   {
+    "i": 7269,
+    "tsEventNs": 1791802981750495649,
+    "tsRecvNs": 1791802981751096291,
+    "price": 60.895,
+    "size": 2,
+    "side": "B",
+    "aggressor": "BUY",
+    "sequence": 10761660,
+    "key": "1791802981750495649-1791802981751096291-10761660-60895000000-2-B-19163-0",
+    "contract": "SIZ6"
+   },
+   {
+    "i": 7270,
+    "tsEventNs": 1791802981750816541,
+    "tsRecvNs": 1791802981751383335,
+    "price": 60.895,
+    "size": 1,
+    "side": "B",
+    "aggressor": "BUY",
+    "sequence": 10761676,
+    "key": "1791802981750816541-1791802981751383335-10761676-60895000000-1-B-11862-0",
+    "contract": "SIZ6"
+   },
+   {
+    "i": 7271,
+    "tsEventNs": 1791802981751099179,
+    "tsRecvNs": 1791802981751715325,
+    "price": 60.895,
+    "size": 1,
+    "side": "B",
+    "aggressor": "BUY",
+    "sequence": 10761701,
+    "key": "1791802981751099179-1791802981751715325-10761701-60895000000-1-B-12097-0",
+    "contract": "SIZ6"
+   },
+   {
+    "i": 7272,
+    "tsEventNs": 1791802981767870719,
+    "tsRecvNs": 1791802981768136481,
+    "price": 60.905,
+    "size": 1,
+    "side": "B",
+    "aggressor": "BUY",
+    "sequence": 10761794,
+    "key": "1791802981767870719-1791802981768136481-10761794-60905000000-1-B-15190-0",
+    "contract": "SIZ6"
+   },
+   {
+    "i": 7273,
+    "tsEventNs": 1791802981768235275,
+    "tsRecvNs": 1791802981768678509,
+    "price": 60.91,
+    "size": 1,
+    "side": "B",
+    "aggressor": "BUY",
+    "sequence": 10761820,
+    "key": "1791802981768235275-1791802981768678509-10761820-60910000000-1-B-12165-0",
+    "contract": "SIZ6"
+   },
+   {
+    "i": 7274,
+    "tsEventNs": 1791802981768548047,
+    "tsRecvNs": 1791802981768958179,
+    "price": 60.905,
+    "size": 1,
+    "side": "B",
+    "aggressor": "BUY",
+    "sequence": 10761840,
+    "key": "1791802981768548047-1791802981768958179-10761840-60905000000-1-B-12388-0",
+    "contract": "SIZ6"
+   },
+   {
+    "i": 7275,
+    "tsEventNs": 1791802989074000713,
+    "tsRecvNs": 1791802989074517733,
+    "price": 60.89,
+    "size": 1,
+    "side": "N",
+    "aggressor": "UNKNOWN",
+    "sequence": 10762931,
+    "key": "1791802989074000713-1791802989074517733-10762931-60890000000-1-N-17383-0",
+    "contract": "SIZ6"
+   },
+   {
+    "i": 7276,
+    "tsEventNs": 1791802989087232917,
+    "tsRecvNs": 1791802989087484971,
+    "price": 60.89,
+    "size": 2,
+    "side": "A",
+    "aggressor": "SELL",
+    "sequence": 10763099,
+    "key": "1791802989087232917-1791802989087484971-10763099-60890000000-2-A-16153-0",
+    "contract": "SIZ6"
+   },
+   {
+    "i": 7277,
+    "tsEventNs": 1791802989938732401,
+    "tsRecvNs": 1791802989939061047,
+    "price": 60.895,
+    "size": 2,
+    "side": "B",
+    "aggressor": "BUY",
+    "sequence": 10763482,
+    "key": "1791802989938732401-1791802989939061047-10763482-60895000000-2-B-17368-0",
+    "contract": "SIZ6"
+   },
+   {
+    "i": 7278,
+    "tsEventNs": 1791802997543712031,
+    "tsRecvNs": 1791802997543979901,
+    "price": 60.905,
+    "size": 1,
+    "side": "B",
+    "aggressor": "BUY",
+    "sequence": 10764352,
+    "key": "1791802997543712031-1791802997543979901-10764352-60905000000-1-B-16024-0",
+    "contract": "SIZ6"
+   },
+   {
+    "i": 7279,
+    "tsEventNs": 1791802997544001995,
+    "tsRecvNs": 1791802997544555103,
+    "price": 60.905,
+    "size": 1,
+    "side": "A",
+    "aggressor": "SELL",
+    "sequence": 10764377,
+    "key": "1791802997544001995-1791802997544555103-10764377-60905000000-1-A-11512-0",
+    "contract": "SIZ6"
+   },
+   {
+    "i": 7280,
+    "tsEventNs": 1791803002006191893,
+    "tsRecvNs": 1791803002006499759,
+    "price": 60.89,
+    "size": 1,
+    "side": "A",
+    "aggressor": "SELL",
+    "sequence": 10764992,
+    "key": "1791803002006191893-1791803002006499759-10764992-60890000000-1-A-17190-0",
+    "contract": "SIZ6"
+   },
+   {
+    "i": 7281,
+    "tsEventNs": 1791803002006804423,
+    "tsRecvNs": 1791803002007185433,
+    "price": 60.89,
+    "size": 1,
+    "side": "A",
+    "aggressor": "SELL",
+    "sequence": 10765013,
+    "key": "1791803002006804423-1791803002007185433-10765013-60890000000-1-A-14766-0",
+    "contract": "SIZ6"
+   },
+   {
+    "i": 7282,
+    "tsEventNs": 1791803002092195711,
+    "tsRecvNs": 1791803002092465757,
+    "price": 60.89,
+    "size": 2,
+    "side": "B",
+    "aggressor": "BUY",
+    "sequence": 10765240,
+    "key": "1791803002092195711-1791803002092465757-10765240-60890000000-2-B-15108-0",
+    "contract": "SIZ6"
+   },
+   {
+    "i": 7283,
+    "tsEventNs": 1791803002092469149,
+    "tsRecvNs": 1791803002092980137,
+    "price": 60.89,
+    "size": 1,
+    "side": "B",
+    "aggressor": "BUY",
+    "sequence": 10765253,
+    "key": "1791803002092469149-1791803002092980137-10765253-60890000000-1-B-15687-0",
+    "contract": "SIZ6"
+   },
+   {
+    "i": 7284,
+    "tsEventNs": 1791803002092568481,
+    "tsRecvNs": 1791803002093216131,
+    "price": 60.895,
+    "size": 1,
+    "side": "B",
+    "aggressor": "BUY",
+    "sequence": 10765266,
+    "key": "1791803002092568481-1791803002093216131-10765266-60895000000-1-B-12463-0",
+    "contract": "SIZ6"
+   },
+   {
+    "i": 7285,
+    "tsEventNs": 1791803002093220475,
+    "tsRecvNs": 1791803002093736213,
+    "price": 60.895,
+    "size": 1,
+    "side": "A",
+    "aggressor": "SELL",
+    "sequence": 10765302,
+    "key": "1791803002093220475-1791803002093736213-10765302-60895000000-1-A-13636-0",
+    "contract": "SIZ6"
+   },
+   {
+    "i": 7286,
+    "tsEventNs": 1791803002094688163,
+    "tsRecvNs": 1791803002094904413,
+    "price": 60.895,
+    "size": 1,
+    "side": "A",
+    "aggressor": "SELL",
+    "sequence": 10765380,
+    "key": "1791803002094688163-1791803002094904413-10765380-60895000000-1-A-14880-0",
+    "contract": "SIZ6"
+   },
+   {
+    "i": 7287,
+    "tsEventNs": 1791803006020784721,
+    "tsRecvNs": 1791803006021064175,
+    "price": 60.89,
+    "size": 1,
+    "side": "A",
+    "aggressor": "SELL",
+    "sequence": 10765588,
+    "key": "1791803006020784721-1791803006021064175-10765588-60890000000-1-A-17240-0",
+    "contract": "SIZ6"
+   },
+   {
+    "i": 7288,
+    "tsEventNs": 1791803006021077987,
+    "tsRecvNs": 1791803006021543747,
+    "price": 60.89,
+    "size": 1,
+    "side": "B",
+    "aggressor": "BUY",
+    "sequence": 10765612,
+    "key": "1791803006021077987-1791803006021543747-10765612-60890000000-1-B-15321-0",
+    "contract": "SIZ6"
+   },
+   {
+    "i": 7289,
+    "tsEventNs": 1791803007058488279,
+    "tsRecvNs": 1791803007058769053,
+    "price": 60.9,
+    "size": 2,
+    "side": "B",
+    "aggressor": "BUY",
+    "sequence": 10765849,
+    "key": "1791803007058488279-1791803007058769053-10765849-60900000000-2-B-16633-0",
+    "contract": "SIZ6"
+   },
+   {
+    "i": 7290,
+    "tsEventNs": 1791803007058772639,
+    "tsRecvNs": 1791803007059161885,
+    "price": 60.9,
+    "size": 1,
+    "side": "B",
+    "aggressor": "BUY",
+    "sequence": 10765860,
+    "key": "1791803007058772639-1791803007059161885-10765860-60900000000-1-B-12523-0",
+    "contract": "SIZ6"
+   },
+   {
+    "i": 7291,
+    "tsEventNs": 1791803024817072681,
+    "tsRecvNs": 1791803024817329871,
+    "price": 60.88,
+    "size": 1,
+    "side": "B",
+    "aggressor": "BUY",
+    "sequence": 10768305,
+    "key": "1791803024817072681-1791803024817329871-10768305-60880000000-1-B-14708-0",
+    "contract": "SIZ6"
+   },
+   {
+    "i": 7292,
+    "tsEventNs": 1791803031565199919,
+    "tsRecvNs": 1791803031566792413,
+    "price": 60.875,
+    "size": 1,
+    "side": "A",
+    "aggressor": "SELL",
+    "sequence": 10768814,
+    "key": "1791803031565199919-1791803031566792413-10768814-60875000000-1-A-12840-0",
+    "contract": "SIZ6"
+   },
+   {
+    "i": 7293,
+    "tsEventNs": 1791803040077063549,
+    "tsRecvNs": 1791803040077353443,
+    "price": 60.885,
+    "size": 2,
+    "side": "B",
+    "aggressor": "BUY",
+    "sequence": 10769904,
+    "key": "1791803040077063549-1791803040077353443-10769904-60885000000-2-B-14516-0",
+    "contract": "SIZ6"
+   },
+   {
+    "i": 7294,
+    "tsEventNs": 1791803040222670739,
+    "tsRecvNs": 1791803040222995393,
+    "price": 60.885,
+    "size": 2,
+    "side": "A",
+    "aggressor": "SELL",
+    "sequence": 10770106,
+    "key": "1791803040222670739-1791803040222995393-10770106-60885000000-2-A-14444-0",
+    "contract": "SIZ6"
+   },
+   {
+    "i": 7295,
+    "tsEventNs": 1791803047912737211,
+    "tsRecvNs": 1791803047913077603,
+    "price": 60.885,
+    "size": 1,
+    "side": "B",
+    "aggressor": "BUY",
+    "sequence": 10770676,
+    "key": "1791803047912737211-1791803047913077603-10770676-60885000000-1-B-13362-0",
+    "contract": "SIZ6"
+   },
+   {
+    "i": 7296,
+    "tsEventNs": 1791803051105037497,
+    "tsRecvNs": 1791803051105350093,
+    "price": 60.89,
+    "size": 1,
+    "side": "B",
+    "aggressor": "BUY",
+    "sequence": 10770949,
+    "key": "1791803051105037497-1791803051105350093-10770949-60890000000-1-B-15158-0",
+    "contract": "SIZ6"
+   },
+   {
+    "i": 7297,
+    "tsEventNs": 1791803056787337093,
+    "tsRecvNs": 1791803056787856939,
+    "price": 60.89,
+    "size": 1,
+    "side": "A",
+    "aggressor": "SELL",
+    "sequence": 10771387,
+    "key": "1791803056787337093-1791803056787856939-10771387-60890000000-1-A-13888-0",
+    "contract": "SIZ6"
+   },
+   {
+    "i": 7298,
+    "tsEventNs": 1791803088946784289,
+    "tsRecvNs": 1791803088947051643,
+    "price": 60.91,
+    "size": 2,
+    "side": "A",
+    "aggressor": "SELL",
+    "sequence": 10775207,
+    "key": "1791803088946784289-1791803088947051643-10775207-60910000000-2-A-14906-0",
+    "contract": "SIZ6"
+   },
+   {
+    "i": 7299,
+    "tsEventNs": 1791803097675583475,
+    "tsRecvNs": 1791803097675915055,
+    "price": 60.905,
+    "size": 3,
+    "side": "A",
+    "aggressor": "SELL",
+    "sequence": 10775591,
+    "key": "1791803097675583475-1791803097675915055-10775591-60905000000-3-A-15124-0",
+    "contract": "SIZ6"
+   },
+   {
+    "i": 7300,
+    "tsEventNs": 1791803105531122425,
+    "tsRecvNs": 1791803105531404713,
+    "price": 60.9,
+    "size": 1,
+    "side": "B",
+    "aggressor": "BUY",
+    "sequence": 10777194,
+    "key": "1791803105531122425-1791803105531404713-10777194-60900000000-1-B-20132-0",
+    "contract": "SIZ6"
+   },
+   {
+    "i": 7301,
+    "tsEventNs": 1791803111980239365,
+    "tsRecvNs": 1791803111980537639,
+    "price": 60.91,
+    "size": 1,
+    "side": "A",
+    "aggressor": "SELL",
+    "sequence": 10778074,
+    "key": "1791803111980239365-1791803111980537639-10778074-60910000000-1-A-15382-0",
+    "contract": "SIZ6"
+   },
+   {
+    "i": 7302,
+    "tsEventNs": 1791803111980652837,
+    "tsRecvNs": 1791803111980913327,
+    "price": 60.905,
+    "size": 1,
+    "side": "A",
+    "aggressor": "SELL",
+    "sequence": 10778083,
+    "key": "1791803111980652837-1791803111980913327-10778083-60905000000-1-A-13664-0",
+    "contract": "SIZ6"
+   },
+   {
+    "i": 7303,
+    "tsEventNs": 1791803121154419685,
+    "tsRecvNs": 1791803121154696963,
+    "price": 60.9,
+    "size": 1,
+    "side": "B",
+    "aggressor": "BUY",
+    "sequence": 10778748,
+    "key": "1791803121154419685-1791803121154696963-10778748-60900000000-1-B-15646-0",
+    "contract": "SIZ6"
+   }
+  ],
+  "complete": true,
+  "lastIndex": 7303,
+  "cursor": 3508
+ },
+ "bookSI": {
+  "root": "SI",
+  "state": "LIVE",
+  "detail": null,
+  "valid": true,
+  "epoch": 1,
+  "depthSeq": 5067,
+  "contract": {
+   "localSymbol": "SIZ6",
+   "symbol": "SI",
+   "exchange": "COMEX",
+   "currency": "USD"
+  },
+  "source": "Interactive Brokers",
+  "depthType": "PRICE_LEVEL",
+  "mbo": false,
+  "rows": {
+   "bids": [
+    {
+     "position": 0,
+     "price": 60.9,
+     "size": 4.0,
+     "marketMaker": null
+    },
+    {
+     "position": 1,
+     "price": 60.895,
+     "size": 3.0,
+     "marketMaker": null
+    },
+    {
+     "position": 2,
+     "price": 60.89,
+     "size": 6.0,
+     "marketMaker": null
+    },
+    {
+     "position": 3,
+     "price": 60.885,
+     "size": 4.0,
+     "marketMaker": null
+    },
+    {
+     "position": 4,
+     "price": 60.88,
+     "size": 4.0,
+     "marketMaker": null
+    },
+    {
+     "position": 5,
+     "price": 60.875,
+     "size": 4.0,
+     "marketMaker": null
+    },
+    {
+     "position": 6,
+     "price": 60.87,
+     "size": 5.0,
+     "marketMaker": null
+    },
+    {
+     "position": 7,
+     "price": 60.865,
+     "size": 3.0,
+     "marketMaker": null
+    },
+    {
+     "position": 8,
+     "price": 60.86,
+     "size": 3.0,
+     "marketMaker": null
+    },
+    {
+     "position": 9,
+     "price": 60.855,
+     "size": 3.0,
+     "marketMaker": null
+    }
+   ],
+   "asks": [
+    {
+     "position": 0,
+     "price": 60.915,
+     "size": 2.0,
+     "marketMaker": null
+    },
+    {
+     "position": 1,
+     "price": 60.92,
+     "size": 7.0,
+     "marketMaker": null
+    },
+    {
+     "position": 2,
+     "price": 60.925,
+     "size": 5.0,
+     "marketMaker": null
+    },
+    {
+     "position": 3,
+     "price": 60.93,
+     "size": 5.0,
+     "marketMaker": null
+    },
+    {
+     "position": 4,
+     "price": 60.935,
+     "size": 2.0,
+     "marketMaker": null
+    },
+    {
+     "position": 5,
+     "price": 60.94,
+     "size": 4.0,
+     "marketMaker": null
+    },
+    {
+     "position": 6,
+     "price": 60.945,
+     "size": 4.0,
+     "marketMaker": null
+    },
+    {
+     "position": 7,
+     "price": 60.95,
+     "size": 2.0,
+     "marketMaker": null
+    },
+    {
+     "position": 8,
+     "price": 60.955,
+     "size": 3.0,
+     "marketMaker": null
+    },
+    {
+     "position": 9,
+     "price": 60.96,
+     "size": 7.0,
+     "marketMaker": null
+    }
+   ]
+  },
+  "lastDepthMs": 1791803138010,
+  "lastUpdateMs": 1791803138010,
+  "serverMs": 1791803138244,
+  "bids": [
+   [
+    60.9,
+    4.0
+   ],
+   [
+    60.895,
+    3.0
+   ],
+   [
+    60.89,
+    6.0
+   ],
+   [
+    60.885,
+    4.0
+   ],
+   [
+    60.88,
+    4.0
+   ],
+   [
+    60.875,
+    4.0
+   ],
+   [
+    60.87,
+    5.0
+   ],
+   [
+    60.865,
+    3.0
+   ],
+   [
+    60.86,
+    3.0
+   ],
+   [
+    60.855,
+    3.0
+   ]
+  ],
+  "asks": [
+   [
+    60.915,
+    2.0
+   ],
+   [
+    60.92,
+    7.0
+   ],
+   [
+    60.925,
+    5.0
+   ],
+   [
+    60.93,
+    5.0
+   ],
+   [
+    60.935,
+    2.0
+   ],
+   [
+    60.94,
+    4.0
+   ],
+   [
+    60.945,
+    4.0
+   ],
+   [
+    60.95,
+    2.0
+   ],
+   [
+    60.955,
+    3.0
+   ],
+   [
+    60.96,
+    7.0
+   ]
+  ]
+ },
+ "updatesSI": {
+  "root": "SI",
+  "state": "LIVE",
+  "detail": null,
+  "valid": true,
+  "epoch": 1,
+  "depthSeq": 5067,
+  "serverMs": 1791803138709,
+  "lastUpdateMs": 1791803138010,
+  "rows": {
+   "bids": [
+    {
+     "position": 0,
+     "price": 60.9,
+     "size": 4.0,
+     "marketMaker": null
+    },
+    {
+     "position": 1,
+     "price": 60.895,
+     "size": 3.0,
+     "marketMaker": null
+    },
+    {
+     "position": 2,
+     "price": 60.89,
+     "size": 6.0,
+     "marketMaker": null
+    },
+    {
+     "position": 3,
+     "price": 60.885,
+     "size": 4.0,
+     "marketMaker": null
+    },
+    {
+     "position": 4,
+     "price": 60.88,
+     "size": 4.0,
+     "marketMaker": null
+    },
+    {
+     "position": 5,
+     "price": 60.875,
+     "size": 4.0,
+     "marketMaker": null
+    },
+    {
+     "position": 6,
+     "price": 60.87,
+     "size": 5.0,
+     "marketMaker": null
+    },
+    {
+     "position": 7,
+     "price": 60.865,
+     "size": 3.0,
+     "marketMaker": null
+    },
+    {
+     "position": 8,
+     "price": 60.86,
+     "size": 3.0,
+     "marketMaker": null
+    },
+    {
+     "position": 9,
+     "price": 60.855,
+     "size": 3.0,
+     "marketMaker": null
+    }
+   ],
+   "asks": [
+    {
+     "position": 0,
+     "price": 60.915,
+     "size": 2.0,
+     "marketMaker": null
+    },
+    {
+     "position": 1,
+     "price": 60.92,
+     "size": 7.0,
+     "marketMaker": null
+    },
+    {
+     "position": 2,
+     "price": 60.925,
+     "size": 5.0,
+     "marketMaker": null
+    },
+    {
+     "position": 3,
+     "price": 60.93,
+     "size": 5.0,
+     "marketMaker": null
+    },
+    {
+     "position": 4,
+     "price": 60.935,
+     "size": 2.0,
+     "marketMaker": null
+    },
+    {
+     "position": 5,
+     "price": 60.94,
+     "size": 4.0,
+     "marketMaker": null
+    },
+    {
+     "position": 6,
+     "price": 60.945,
+     "size": 4.0,
+     "marketMaker": null
+    },
+    {
+     "position": 7,
+     "price": 60.95,
+     "size": 2.0,
+     "marketMaker": null
+    },
+    {
+     "position": 8,
+     "price": 60.955,
+     "size": 3.0,
+     "marketMaker": null
+    },
+    {
+     "position": 9,
+     "price": 60.96,
+     "size": 7.0,
+     "marketMaker": null
+    }
+   ]
+  },
+  "resync": false,
+  "changes": [
+   [
+    5056,
+    "ask",
+    60.96,
+    6.0,
+    1791803135106
+   ],
+   [
+    5057,
+    "bid",
+    60.885,
+    4.0,
+    1791803136107
+   ],
+   [
+    5058,
+    "bid",
+    60.89,
+    7.0,
+    1791803136107
+   ],
+   [
+    5059,
+    "ask",
+    60.96,
+    7.0,
+    1791803136107
+   ],
+   [
+    5060,
+    "bid",
+    60.855,
+    3.0,
+    1791803137609
+   ],
+   [
+    5061,
+    "bid",
+    60.89,
+    5.0,
+    1791803137609
+   ],
+   [
+    5062,
+    "bid",
+    60.895,
+    4.0,
+    1791803137609
+   ],
+   [
+    5063,
+    "bid",
+    60.9,
+    4.0,
+    1791803137609
+   ],
+   [
+    5064,
+    "ask",
+    60.92,
+    7.0,
+    1791803137609
+   ],
+   [
+    5065,
+    "bid",
+    60.89,
+    6.0,
+    1791803138010
+   ],
+   [
+    5066,
+    "bid",
+    60.895,
+    3.0,
+    1791803138010
+   ],
+   [
+    5067,
+    "ask",
+    60.915,
+    2.0,
+    1791803138010
+   ]
+  ]
+ },
+ "candlesM1SI": {
+  "root": "SI",
+  "contract": "SIZ6",
+  "instrumentId": 701,
+  "timeframe": "M1",
+  "bars": [
+   {
+    "time": 1791802800,
+    "open": 60.945,
+    "high": 60.95,
+    "low": 60.89,
+    "close": 60.935,
+    "volume": 142,
+    "isClosed": true
+   },
+   {
+    "time": 1791802860,
+    "open": 60.93,
+    "high": 60.945,
+    "low": 60.915,
+    "close": 60.92,
+    "volume": 50,
+    "isClosed": true
+   },
+   {
+    "time": 1791802920,
+    "open": 60.925,
+    "high": 60.93,
+    "low": 60.905,
+    "close": 60.92,
+    "volume": 11,
+    "isClosed": true
+   },
+   {
+    "time": 1791802980,
+    "open": 60.915,
+    "high": 60.915,
+    "low": 60.875,
+    "close": 60.875,
+    "volume": 43,
+    "isClosed": true
+   },
+   {
+    "time": 1791803040,
+    "open": 60.885,
+    "high": 60.91,
+    "low": 60.885,
+    "close": 60.905,
+    "volume": 12,
+    "isClosed": true
+   },
+   {
+    "time": 1791803100,
+    "open": 60.9,
+    "high": 60.91,
+    "low": 60.9,
+    "close": 60.9,
+    "volume": 4,
+    "isClosed": false
+   }
+  ],
+  "source": "databento",
+  "schema": "ohlcv-1m + historical ohlcv-1m/1h/1d",
+  "history": "READY",
+  "cursor": 3514
+ },
+ "dbStatusSI": {
+  "provider": "Databento",
+  "source": "embedded",
+  "state": "LIVE",
+  "detail": "Last Databento trade / OHLCV data 1 s ago.",
+  "connection": "CONNECTED",
+  "dataset": "GLBX.MDP3",
+  "plan": "standard",
+  "market": "COMEX",
+  "root": "SI",
+  "subscribed": "SI.v.0",
+  "activeContract": "SIZ6",
+  "instrumentId": 701,
+  "instrumentStatus": "LIVE",
+  "lastEventUtc": "2026-10-12T11:05:21.154Z",
+  "lastEventAgeMs": 18616,
+  "freshness": "LIVE",
+  "marketOpen": true,
+  "received": {
+   "trades": 7303,
+   "ohlcvBars": 735,
+   "tapeCounts": {
+    "accepted": 7303,
+    "duplicates": 0,
+    "malformed": 0,
+    "unknownSide": 147
+   }
+  },
+  "history": {
+   "state": "READY",
+   "contract": "SIZ6",
+   "instrumentId": 701,
+   "message": null,
+   "bars": {
+    "ohlcv-1m": 64905,
+    "ohlcv-1h": 4508,
+    "ohlcv-1d": 372
+   },
+   "estimatedCostUsd": 0.0,
+   "range": {
+    "start": "2023-10-08T00:00:00",
+    "end": "2026-10-12T10:40:00"
+   },
+   "loadedAtMs": 1791802280767,
+   "source": "Databento Historical API (timeseries.get_range)"
+  },
+  "lastTrade": {
+   "price": 60.9,
+   "size": 1,
+   "side": "B",
+   "timeUtc": "2026-10-12T11:05:21.154Z"
+  },
+  "lastBar": {
+   "open": 60.885,
+   "high": 60.91,
+   "low": 60.885,
+   "close": 60.905,
+   "volume": 12,
+   "isClosed": true,
+   "timeUtc": "2026-10-12T11:04:00.000Z"
+  },
+  "verifiedByRealData": true,
+  "schemas": {
+   "mbo": "NOT_ENTITLED",
+   "mbp-10": "NOT_ENTITLED"
+  },
+  "depth": "UNSUPPORTED",
+  "timeUtc": "2026-10-12T11:05:39.770Z"
+ },
+ "heatmapGC": {
+  "root": "GC",
+  "contract": "GCZ6",
+  "provider": "Interactive Brokers",
+  "depthType": "PRICE_LEVEL",
+  "mbo": false,
+  "firstRecordedMs": 1791795316577,
+  "timestampSource": "IBKR bridge receive time",
+  "persistence": "postgresql",
+  "bucketMs": 15000,
+  "from": 1791802950000,
+  "to": 1791803145000,
+  "columns": [
+   [
+    1791802950000,
+    1.0,
+    [
+     [
+      4199.9,
+      0.07
+     ],
+     [
+      4199.8,
+      0.81
+     ],
+     [
+      4199.7,
+      0.7
+     ],
+     [
+      4199.6,
+      2.69
+     ],
+     [
+      4199.5,
+      1.92
+     ],
+     [
+      4199.4,
+      4.59
+     ]
+    ],
+    [
+     [
+      4199.8,
+      0.47
+     ],
+     [
+      4199.9,
+      1.61
+     ],
+     [
+      4200.0,
+      2.19
+     ],
+     [
+      4200.1,
+      3.83
+     ],
+     [
+      4200.2,
+      4.48
+     ],
+     [
+      4200.3,
+      3.84
+     ]
+    ]
+   ],
+   [
+    1791802965000,
+    1.0,
+    [
+     [
+      4199.7,
+      0.58
+     ],
+     [
+      4199.6,
+      1.58
+     ],
+     [
+      4199.5,
+      2.48
+     ],
+     [
+      4199.4,
+      3.92
+     ],
+     [
+      4199.3,
+      4.36
+     ],
+     [
+      4199.2,
+      5.67
+     ]
+    ],
+    [
+     [
+      4199.6,
+      0.04
+     ],
+     [
+      4199.7,
+      0.56
+     ],
+     [
+      4199.8,
+      1.39
+     ],
+     [
+      4199.9,
+      1.96
+     ],
+     [
+      4200.0,
+      3.36
+     ],
+     [
+      4200.1,
+      5.37
+     ]
+    ]
+   ],
+   [
+    1791802980000,
+    1.0,
+    [
+     [
+      4199.7,
+      0.01
+     ],
+     [
+      4199.6,
+      0.05
+     ],
+     [
+      4199.5,
+      0.5
+     ],
+     [
+      4199.4,
+      0.45
+     ],
+     [
+      4199.3,
+      1.18
+     ],
+     [
+      4199.2,
+      2.33
+     ]
+    ],
+    [
+     [
+      4199.3,
+      0.11
+     ],
+     [
+      4199.4,
+      2.31
+     ],
+     [
+      4199.5,
+      0.97
+     ],
+     [
+      4199.6,
+      3.69
+     ],
+     [
+      4199.7,
+      4.33
+     ],
+     [
+      4199.8,
+      3.59
+     ]
+    ]
+   ],
+   [
+    1791802995000,
+    1.0,
+    [
+     [
+      4199.5,
+      0.25
+     ],
+     [
+      4199.4,
+      2.18
+     ],
+     [
+      4199.3,
+      3.67
+     ],
+     [
+      4199.2,
+      5.77
+     ],
+     [
+      4199.1,
+      3.83
+     ],
+     [
+      4199.0,
+      4.42
+     ]
+    ],
+    [
+     [
+      4199.6,
+      0.63
+     ],
+     [
+      4199.7,
+      2.89
+     ],
+     [
+      4199.8,
+      3.89
+     ],
+     [
+      4199.9,
+      4.99
+     ],
+     [
+      4200.0,
+      5.07
+     ],
+     [
+      4200.1,
+      5.03
+     ]
+    ]
+   ],
+   [
+    1791803010000,
+    1.0,
+    [
+     [
+      4199.4,
+      0.36
+     ],
+     [
+      4199.3,
+      0.89
+     ],
+     [
+      4199.2,
+      2.32
+     ],
+     [
+      4199.1,
+      2.78
+     ],
+     [
+      4199.0,
+      4.43
+     ],
+     [
+      4198.9,
+      5.5
+     ]
+    ],
+    [
+     [
+      4199.2,
+      0.01
+     ],
+     [
+      4199.3,
+      0.37
+     ],
+     [
+      4199.4,
+      1.34
+     ],
+     [
+      4199.5,
+      1.92
+     ],
+     [
+      4199.6,
+      3.51
+     ],
+     [
+      4199.7,
+      3.54
+     ]
+    ]
+   ],
+   [
+    1791803025000,
+    1.0,
+    [
+     [
+      4199.4,
+      0.01
+     ],
+     [
+      4199.3,
+      1.57
+     ],
+     [
+      4199.2,
+      2.11
+     ],
+     [
+      4199.1,
+      4.44
+     ],
+     [
+      4199.0,
+      4.52
+     ],
+     [
+      4198.9,
+      4.62
+     ]
+    ],
+    [
+     [
+      4199.3,
+      0.08
+     ],
+     [
+      4199.4,
+      0.87
+     ],
+     [
+      4199.5,
+      2.15
+     ],
+     [
+      4199.6,
+      2.67
+     ],
+     [
+      4199.7,
+      4.05
+     ],
+     [
+      4199.8,
+      4.58
+     ]
+    ]
+   ]
+  ],
+  "lastObservedMs": 1791803140073
+ },
+ "ibkrStatus": {
+  "provider": "IBKR",
+  "exchange": "COMEX",
+  "configured": true,
+  "mode": "pull",
+  "depthTypeCode": "PRICE_LEVEL",
+  "mbo": false,
+  "link": {
+   "connected": false,
+   "stale": false,
+   "bridgeId": null,
+   "connectedAtMs": null,
+   "lastMessageMs": null,
+   "detail": null
+  },
+  "session": {
+   "state": "LIVE",
+   "apiConnected": true,
+   "ibServerLink": null,
+   "authRequired": false,
+   "detail": null,
+   "lastIbHeartbeatMs": null,
+   "lastConnectedMs": null,
+   "reconnects": 0,
+   "nextReconnectMs": null,
+   "lastError": null
+  },
+  "roots": {
+   "GC": {
+    "state": "LIVE",
+    "detail": null,
+    "valid": true,
+    "contract": {
+     "localSymbol": "GCZ6",
+     "symbol": "GC",
+     "exchange": "COMEX",
+     "currency": "USD"
+    },
+    "target": "GCZ6",
+    "lastUpdateMs": 1791803139513,
+    "polls": 2635,
+    "outOfOrder": 0,
+    "malformed": 0,
+    "receiveLagMs": {
+     "n": 600,
+     "min": 40,
+     "p50": 178,
+     "p90": 326,
+     "p99": 369,
+     "max": 420
+    },
+    "receiveLagHist": {
+     "bucketMs": 10,
+     "n": 1202,
+     "max": 494,
+     "counts": {
+      "4": 48,
+      "5": 58,
+      "6": 34,
+      "7": 38,
+      "8": 57,
+      "9": 41,
+      "10": 50,
+      "11": 40,
+      "12": 35,
+      "13": 34,
+      "14": 37,
+      "15": 37,
+      "16": 27,
+      "17": 26,
+      "18": 41,
+      "19": 35,
+      "20": 26,
+      "21": 37,
+      "22": 36,
+      "23": 42,
+      "24": 29,
+      "25": 37,
+      "26": 27,
+      "27": 31,
+      "28": 34,
+      "29": 33,
+      "30": 40,
+      "31": 36,
+      "32": 34,
+      "33": 23,
+      "34": 32,
+      "35": 33,
+      "36": 19,
+      "37": 7,
+      "38": 3,
+      "39": 2,
+      "40": 1,
+      "42": 1,
+      "49": 1
+     }
+    },
+    "bidLevels": 10,
+    "askLevels": 10,
+    "depthSeq": 7112,
+    "epoch": 1,
+    "lastDepthMs": 1791803139513,
+    "rowsRequested": null,
+    "ops": null,
+    "marketMakerField": null,
+    "resetReason": null
+   },
+   "SI": {
+    "state": "LIVE",
+    "detail": null,
+    "valid": true,
+    "contract": {
+     "localSymbol": "SIZ6",
+     "symbol": "SI",
+     "exchange": "COMEX",
+     "currency": "USD"
+    },
+    "target": "SIZ6",
+    "lastUpdateMs": 1791803139913,
+    "polls": 2634,
+    "outOfOrder": 0,
+    "malformed": 0,
+    "receiveLagMs": {
+     "n": 600,
+     "min": 41,
+     "p50": 196,
+     "p90": 331,
+     "p99": 374,
+     "max": 394
+    },
+    "receiveLagHist": {
+     "bucketMs": 10,
+     "n": 1055,
+     "max": 487,
+     "counts": {
+      "4": 30,
+      "5": 46,
+      "6": 55,
+      "7": 36,
+      "8": 37,
+      "9": 39,
+      "10": 31,
+      "11": 28,
+      "12": 27,
+      "13": 32,
+      "14": 31,
+      "15": 21,
+      "16": 37,
+      "17": 23,
+      "18": 42,
+      "19": 39,
+      "20": 29,
+      "21": 34,
+      "22": 29,
+      "23": 36,
+      "24": 25,
+      "25": 32,
+      "26": 26,
+      "27": 29,
+      "28": 35,
+      "29": 28,
+      "30": 34,
+      "31": 32,
+      "32": 29,
+      "33": 20,
+      "34": 20,
+      "35": 24,
+      "36": 21,
+      "37": 10,
+      "38": 5,
+      "39": 2,
+      "48": 1
+     }
+    },
+    "bidLevels": 10,
+    "askLevels": 10,
+    "depthSeq": 5069,
+    "epoch": 1,
+    "lastDepthMs": 1791803139913,
+    "rowsRequested": null,
+    "ops": null,
+    "marketMakerField": null,
+    "resetReason": null
+   }
+  },
+  "counts": {
+   "rejectedSkew": 0,
+   "rejectedReplay": 0,
+   "linkGaps": 0,
+   "depthGaps": 0,
+   "authRejected": 0,
+   "resets": 0,
+   "snapshots": 2,
+   "changes": 12181
+  },
+  "depthType": "PRICE_LEVEL - aggregated price levels (IBKR market depth, COMEX); order-by-order (MBO) NOT provided",
+  "timestampSource": "bridge receive time (lastUpdate, UTC) - not an exchange timestamp"
+ },
+ "dbHealth": {
+  "provider": "Databento",
+  "dataset": "GLBX.MDP3",
+  "plan": "standard",
+  "sessions": {
+   "tape": {
+    "state": "CONNECTED",
+    "reconnects": 0,
+    "lastError": null
+   }
+  },
+  "instruments": {
+   "GC": {
+    "root": "GC",
+    "provider": "Databento",
+    "dataset": "GLBX.MDP3",
+    "subscribed": "GC.v.0",
+    "contract": "GCZ6",
+    "instrumentId": 41271,
+    "status": "LIVE",
+    "freshness": "LIVE",
+    "reasons": [],
+    "lastEventNs": 1791803937584001481,
+    "lastEventAgeMs": 7530
+   },
+   "SI": {
+    "root": "SI",
+    "provider": "Databento",
+    "dataset": "GLBX.MDP3",
+    "subscribed": "SI.v.0",
+    "contract": "SIZ6",
+    "instrumentId": 701,
+    "status": "LIVE",
+    "freshness": "LIVE",
+    "reasons": [],
+    "lastEventNs": 1791803940024260035,
+    "lastEventAgeMs": 5090
+   }
+  },
+  "timeMs": 1791873119338
+ }
+}

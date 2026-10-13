@@ -1,14 +1,16 @@
 /* ============================================================================
  * TLUXE Order Flow Pro - normalized model (independent engine; shares no state with any other engine).
  *
- * Source of every value: the local Order Flow Pro backend (IBKR TWS API, read-only) or, in the dev harness /
- * unit tests only, a DEMO fixture (`SourceInfo.demo = true`, never shown as LIVE).
+ * Source of every value: the local Order Flow Pro backend (IBKR TWS API, read-only), the TLUXE gateway's existing
+ * read-only market-data endpoints (GatewaySource: Databento CME trades + IBKR price-level depth), or, in the dev
+ * harness / unit tests only, a DEMO fixture (`SourceInfo.demo = true`, never shown as LIVE).
  *
  * Two different things are kept apart everywhere:
  *   - RESTING liquidity = displayed size in the IBKR price-level book (MBP, limited rows, not full book, not MBO);
  *   - EXECUTED volume   = trade prints (IBKR tick-by-tick "AllLast" / "Last").
- * IBKR prints carry NO exchange aggressor flag. A side is only ever INFERRED by the quote rule against the
- * prevailing IBKR bid / ask and labelled so; anything ambiguous stays UNKNOWN.
+ * IBKR prints carry NO exchange aggressor flag: there a side is only ever INFERRED by the quote rule against the
+ * prevailing IBKR bid / ask and labelled so. Databento CME trades carry the EXCHANGE-reported aggressor side
+ * (method 'EXCHANGE', never inferred). Anything ambiguous or unreported stays UNKNOWN.
  * ========================================================================== */
 
 export type OfpRoot = 'GC' | 'SI';
@@ -32,7 +34,12 @@ export type FeedState =
   | 'IDENTITY_UNCONFIRMED' // backend config lacks the separate-IBKR-username acknowledgement - no connection attempted
   | 'ACCOUNT_UNVERIFIED' // IB Gateway did not report its account(s) in time - paper/live unverifiable, disconnected
   | 'MODE_MISMATCH' // declared paper/live does not match the account IB Gateway is logged in to - disconnected
-  | 'DEMO'; // DEMO fixture - never LIVE
+  | 'DEMO' // DEMO fixture - never LIVE
+  // TLUXE gateway source (website): the gateway or its upstream is not reachable / reports no usable data /
+  // trades and depth refer to different contracts (never merged).
+  | 'DISCONNECTED'
+  | 'UNAVAILABLE'
+  | 'CONTRACT_MISMATCH';
 
 /** IBKR reqMarketDataType values, reported verbatim (1 real-time, 2 frozen, 3 delayed, 4 delayed-frozen). */
 export type MarketDataType = 'REALTIME' | 'FROZEN' | 'DELAYED' | 'DELAYED_FROZEN';
@@ -83,6 +90,88 @@ export interface SourceStatus {
   /** Separate health signals reported by the backend (never collapsed into one flag). */
   health?: FeedHealth;
   classification?: ClassificationStats;
+  /** Gateway source only: provenance + independent freshness of every upstream stream (never collapsed). */
+  provenance?: GatewayProvenance;
+}
+
+/** Freshness / state of ONE upstream stream as observed through the TLUXE gateway. */
+export type StreamLiveness = 'LIVE' | 'QUIET' | 'STALE' | 'DISCONNECTED' | 'UNAVAILABLE' | 'CONTRACT_MISMATCH';
+
+export interface StreamProvenance {
+  state: StreamLiveness;
+  /** e.g. "Databento GLBX.MDP3 trades (CME)" / "Interactive Brokers price-level depth". */
+  provider: string;
+  /** What the event timestamps mean: exchange event time, the VPS depth service's update time, or bar open time. */
+  timeBasis: 'EXCHANGE_EVENT' | 'VPS_DEPTH_UPDATE' | 'BAR_OPEN';
+  /** Contract as reported by THIS stream (e.g. GCZ6). */
+  contract: string | null;
+  /** Newest event time (ms, `timeBasis`) and its age at the last successful poll. */
+  lastMs: number | null;
+  ageMs: number | null;
+  /** Last successful request to the gateway for this stream (browser clock). */
+  lastPollMs: number | null;
+  detail: string | null;
+}
+
+export interface GatewayProvenance {
+  trades: StreamProvenance;
+  depth: StreamProvenance;
+  bars: StreamProvenance;
+  /** Aggressor side source of the trades: exchange-reported (Databento CME), or none. Never inferred here. */
+  aggressor: 'EXCHANGE' | 'NONE';
+  /** Data-quality counters since subscription (records rejected by schema / contract checks are never applied). */
+  quality: {
+    tradesAccepted: number;
+    tradesDuplicate: number;
+    tradesRejected: number;
+    tradesOutOfOrder: number;
+    unknownSide: number;
+    depthChanges: number;
+    depthResyncs: number;
+    depthSeqGaps: number;
+    depthRejected: number;
+    gaps: number;
+    requestErrors: number;
+    rateLimited: number;
+  };
+  /** Requests issued to the gateway since subscription (all GET). */
+  requests: number;
+  /** Which part of the current session's prints is loaded (session statistics are PARTIAL until complete). */
+  history?: SessionHistory;
+}
+
+export interface SessionHistory {
+  /** ETH session start (ms). */
+  sessionStart: number;
+  /** Prints are loaded from here (ms). Before it: Databento OHLCV bars only (no footprint), or nothing. */
+  loadedFrom: number | null;
+  /** True when every print of the session that the gateway still holds is loaded. */
+  complete: boolean;
+  loading: boolean;
+  /** Earlier prints loaded on demand so far. */
+  historyLoaded: number;
+  /** Earlier prints are merged from sessionStart up to this time; (historyThrough, loadedFrom) is still missing. */
+  historyThrough: number | null;
+  /** Earlier session prints that are no longer available from the gateway (left its trade window): from..to. */
+  unavailable: { from: number; to: number } | null;
+  error: string | null;
+}
+
+/** What a replay actually contains - shown to the user, never implied. */
+export interface ReplayProvenance {
+  trades: { kind: 'EXACT_PRINTS'; source: string; count: number; from: number | null; to: number | null; complete: boolean; detail: string | null };
+  depth: {
+    kind: 'RECORDED_TIME_WEIGHTED_AGGREGATE' | 'NONE';
+    source: string;
+    bucketMs: number | null;
+    buckets: number;
+    coveredBuckets: number;
+    firstRecordedMs: number | null;
+    detail: string | null;
+  };
+  /** Exact historical order-book snapshots are not served by the gateway. */
+  exactDepthSnapshots: 'NOT_AVAILABLE';
+  gaps: Array<{ from: number; to: number; reason: string }>;
 }
 
 export type StreamState = 'OFF' | 'PENDING' | 'ACTIVE' | 'ERROR' | 'NOT_ENTITLED' | 'SUSPENDED';
@@ -117,7 +206,7 @@ export interface FeedHealth {
 }
 
 export interface ClassificationStats {
-  method: 'QUOTE_RULE';
+  method: 'QUOTE_RULE' | 'EXCHANGE';
   inferred?: boolean;
   touchSource: 'depth' | 'quote' | null;
   maxQuoteAgeMs?: number;
@@ -131,8 +220,9 @@ export interface ClassificationStats {
 export type Side = 'BID' | 'ASK';
 export type Aggressor = 'BUY' | 'SELL' | 'UNKNOWN';
 
-/** How a print's side was decided. Never 'EXCHANGE' for IBKR data. */
-export type ClassificationMethod = 'QUOTE_RULE' | 'NONE';
+/** How a print's side was decided. 'EXCHANGE' = aggressor side reported by the exchange (CME via Databento),
+ *  never inferred and never re-classified; never used for IBKR prints. */
+export type ClassificationMethod = 'QUOTE_RULE' | 'EXCHANGE' | 'NONE';
 
 export interface QuoteEvent {
   kind: 'quote';
@@ -153,8 +243,17 @@ export interface TradeEvent {
   /** Why the side was (not) inferred: AT_ASK, AT_BID, PREV_ASK, PREV_BID (directional) or INSIDE_SPREAD, LOCKED_CROSSED,
    *  NO_QUOTE, QUOTE_STALE, QUOTE_UNHEALTHY, QUOTE_DELAYED_DATA, DATA_TYPE_UNCONFIRMED, QUOTE_AFTER_TRADE, TRADE_DELAYED. */
   basis?: string;
-  /** Always true for IBKR prints: the side is an inference, never exchange-confirmed. */
+  /** True for IBKR prints (the side is an inference); false for exchange-reported sides (method 'EXCHANGE'). */
   inferred?: boolean;
+  /** Receipt time (ms) when it differs from the exchange event time `t` (gateway source: Databento ts_recv). */
+  tRecv?: number;
+  /** Stable source identifier used for de-duplication (gateway source: contract + transport index). */
+  id?: string;
+  /**
+   * Earlier-session print loaded on demand AFTER newer prints were applied. It is strictly older than every live-loaded
+   * bar slot: it is merged into older bars (sums are order-independent) and never changes the tape or the last price.
+   */
+  history?: boolean;
   /** Age of the reference bid / ask (since its own stream last confirmed it) when the print was classified. */
   quoteAgeMs?: number | null;
   quoteSource?: 'depth' | 'quote' | null;

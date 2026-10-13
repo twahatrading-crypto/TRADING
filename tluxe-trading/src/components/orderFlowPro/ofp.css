@@ -255,3 +255,5 @@ body[data-ofp-harness] .ofp--ws { bottom: 28px; }
   .ofp-feed { margin-left: 0; }
   .ofp-last { font-size: 24px; }
 }
+.ofp-note--warn { color: var(--amber); border-left: 2px solid var(--amber); padding-left: 8px; margin: 4px 0 6px; }
+.ofp-note--warn .ofp-btn { margin-left: 6px; padding: 2px 8px; }
