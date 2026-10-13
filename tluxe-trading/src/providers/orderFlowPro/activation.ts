@@ -14,7 +14,7 @@ import { IS_CLOUD } from '../../config/deployment';
  * Local (non-cloud) builds always use the local backend link (the gateway is same-origin only).
  * ========================================================================== */
 
-export const OFP_GATEWAY_RELEASED = false;
+export const OFP_GATEWAY_RELEASED = true;
 
 export function gatewaySourceEnabled(cloud: boolean = IS_CLOUD, released: boolean = OFP_GATEWAY_RELEASED, testFlag: unknown = import.meta.env.VITE_TLUXE_OFP_GATEWAY): boolean {
   return cloud && (released || testFlag === '1');
