@@ -9,8 +9,8 @@ import { defaultOfpSource } from './controller';
 import { GatewaySource } from './GatewaySource';
 
 describe('Order Flow Pro gateway activation (website only, off by default)', () => {
-  it('is NOT released: the production website keeps BACKEND OFFLINE until an approved release flips it', () => {
-    expect(OFP_GATEWAY_RELEASED).toBe(false);
+  it('is released: the website reads the gateway read-only market data (rollback = set it back to false)', () => {
+    expect(OFP_GATEWAY_RELEASED).toBe(true);
   });
   it('enable matrix: never in local builds; website only when released or in an explicit test build', () => {
     expect(gatewaySourceEnabled(false, true, '1')).toBe(false);
