@@ -5,13 +5,15 @@ import { MiniSeries, DepthHeatmap } from '../components/orderFlowPro/OfpCanvases
 import { DEFAULT_LAYERS, DEFAULT_LIQ_FLAGS, OfpChartView, type BubbleDensity, type ChartFrame, type DrawTool, type Drawing, type HoverInfo, type LayerFlags, type LiqFlags } from '../components/orderFlowPro/OfpChartView';
 import { AbsorptionTable, AlertsList, DiagnosticsPanel, HistoryCoverage, LiquidityLegend, LiquidityStrength, OrderBookPanel, ReversalTable, SessionStatsPanel, SessionVpPanel, StrongTable, TradesTable, type LastConfirmedBook } from '../components/orderFlowPro/OfpPanels';
 import { cachedSeed, historyContract, loadRecordedSeed, usableSeed, type SeedState } from '../components/orderFlowPro/liquidityHistory';
+import { bucketFor, DepthHistory } from '../components/orderFlowPro/depthHistory';
+import { DEFAULT_HEAT_FILTERS, HEAT_RGB, TIER_LABEL, type HeatFilters } from '../components/orderFlowPro/heatLayer';
 import { fmtQty, fmtRest } from '../components/orderFlowPro/ofpLayout';
 import { DEFAULT_LIQ_PARAMS, liquidityOverlay } from '../engines/orderFlowPro/liquidityClass';
 import { gatewaySourceEnabled } from '../providers/orderFlowPro/activation';
 import { replayText, sourceText } from '../components/orderFlowPro/ofpSourceText';
 import { OfpSplitter } from '../components/orderFlowPro/OfpSplitter';
 import { depthFreshness, feedLabel, fmtExpiry, fmtNum, fmtSigned, fmtUtcTime, HEAT_LEGEND, scheduleLabel } from '../components/orderFlowPro/ofpFormat';
-import { INTENSITY_SCALES, isOfpRoot, isOfpSession, isOfpTf, OFP_PRECISION, OFP_ROOTS, OFP_SESSIONS, OFP_TFS, type IntensityScale, type OfpSession } from '../engines/orderFlowPro/config';
+import { INTENSITY_SCALES, isOfpRoot, isOfpSession, isOfpTf, OFP_PRECISION, OFP_ROOTS, OFP_SESSIONS, OFP_TFS, OFP_TICK, type IntensityScale, type OfpSession } from '../engines/orderFlowPro/config';
 import { isLiveFeed } from '../engines/orderFlowPro/engine';
 import { globexSchedule } from '../engines/orderFlowPro/nyTime';
 import type { OfpRoot, OfpTf } from '../engines/orderFlowPro/types';
@@ -57,6 +59,17 @@ const PANE_LIMITS: Record<keyof Panes, [number, number]> = { side: [300, 640], m
 const isPanes = (v: unknown): v is Panes => !!v && typeof v === 'object' && (['side', 'metrics', 'bottom'] as const).every((k) => typeof (v as Record<string, unknown>)[k] === 'number');
 const clampPane = (k: keyof Panes, v: number) => Math.round(Math.min(PANE_LIMITS[k][1], Math.max(PANE_LIMITS[k][0], v)));
 const isLiqFlags = (v: unknown): v is LiqFlags => !!v && typeof v === 'object' && Object.keys(DEFAULT_LIQ_FLAGS).every((k) => typeof (v as Record<string, unknown>)[k] === 'boolean');
+const isHeatFilters = (v: unknown): v is HeatFilters => !!v && typeof v === 'object' && Object.keys(DEFAULT_HEAT_FILTERS).every((k) => typeof (v as Record<string, unknown>)[k] === 'boolean');
+const HEAT_TOGGLES: Array<[keyof HeatFilters, string, string]> = [
+  ['bid', 'Bid', 'BID = resting buy-side liquidity (recorded side)'],
+  ['ask', 'Ask', 'ASK = resting sell-side liquidity (recorded side)'],
+  ['strongOnly', 'Strong only', 'Only cells at or above the STRONG tier (p90)'],
+  ['history', 'History', 'Recorded depth before this page opened (gateway history, verified contract only)'],
+];
+const rgbCss = (c: readonly number[]) => `rgb(${c[0]},${c[1]},${c[2]})`;
+/** Debounce before reading recorded depth after the view moved (scroll / zoom). */
+const HISTORY_DEBOUNCE_MS = 600;
+
 const LIQ_TOGGLES: Array<[keyof LiqFlags, string, string]> = [
   ['strong', 'Strong', 'STRONG resting liquidity'],
   ['medium', 'Medium', 'MEDIUM resting liquidity'],
@@ -118,6 +131,14 @@ export function OrderFlowProPage() {
   // remounted, so zoom / pan survive expanding and restoring; the layout state is never touched.
   const [expanded, setExpanded] = useState(false);
   const [seeds, setSeeds] = useState<Record<string, SeedState>>({});
+  const [heatFilters, setHeatFilters] = usePersistentState<HeatFilters>('tluxe.ofp.heat.v1', { ...DEFAULT_HEAT_FILTERS }, isHeatFilters);
+  // On-demand recorded depth for the heatmap: one bounded loader per page (rate-limited, contract-safe, LRU-bounded).
+  // re-render when the history cache changes (the chart's layer key uses the loader version)
+  const [, setHistVer] = useState(0);
+  const historyRef = useRef<DepthHistory | null>(null);
+  if (!historyRef.current) historyRef.current = new DepthHistory((r) => OFP_TICK[r], undefined, undefined, () => setHistVer((v) => v + 1));
+  const viewRef = useRef<{ from: number; to: number; pxPerMs: number } | null>(null);
+  const [viewVer, setViewVer] = useState(0);
 
   // One ref-counted subscription per root (StrictMode / HMR safe; the controller lives outside React).
   useEffect(() => ctl.acquire(root), [ctl, root]);
@@ -145,6 +166,23 @@ export function OrderFlowProPage() {
   // overlay is drawn at all), so another contract's recorded liquidity can never appear on this chart.
   const contractMismatch = st.feed === 'CONTRACT_MISMATCH' || depthProv?.state === 'CONTRACT_MISMATCH' || (!!depthContract && !!st.contract && depthContract !== st.contract.localSymbol);
   const histContract = replay ? null : historyContract(root, st.contract?.localSymbol, depthContract, contractMismatch);
+  // heatmap history: another contract's recorded depth is dropped the moment the verified contract changes / is lost
+  useEffect(() => historyRef.current!.keepOnly(root, histContract), [root, histContract]);
+  const heatHistoryAllowed = gatewaySourceEnabled() && !replay && !demo && !!histContract && layers.heatmap && heatFilters.history && !clean;
+  useEffect(() => {
+    if (!heatHistoryAllowed || !viewRef.current) return;
+    const t = setTimeout(() => {
+      const v = viewRef.current;
+      if (!v || !histContract) return;
+      const cols = engine.view(tf, session).recorder.columnsIn(-Infinity, Infinity);
+      const before = cols.length ? cols[0]!.t : now;
+      const margin = (v.to - v.from) * 0.1;
+      historyRef.current!.ensure(root, histContract, v.from - margin, v.to, bucketFor(v.pxPerMs), before);
+    }, HISTORY_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+    // only view changes (debounced) and contract / setting changes trigger a read - never data ticks
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewVer, heatHistoryAllowed, root, histContract]);
   const seedKey = histContract ? `${root}:${histContract}` : null;
   const seedState = seedKey ? (seeds[seedKey] ?? cachedSeed(root, histContract!)) : null;
   // ONE read of the gateway's recorded depth per instrument + verified contract (website gateway source only).
@@ -202,8 +240,37 @@ export function OrderFlowProPage() {
     return () => window.removeEventListener('keydown', onKey);
   }, [expanded]);
 
+  // Heatmap tiers come from the SAME reference as the STRONG / MEDIUM classifier (p75 / p90 / p97).
+  const heatTiers = liq.mediumMin !== null && liq.strongMin !== null && liq.veryStrongMin !== null ? { medium: liq.mediumMin, strong: liq.strongMin, veryStrong: liq.veryStrongMin } : null;
+  const heatSource = {
+    tiers: heatTiers,
+    filters: heatFilters,
+    history: (from: number, to: number, bucket: number) => (heatHistoryAllowed && histContract ? historyRef.current!.columns(root, histContract, bucket, from, to) : []),
+    version: historyRef.current.version,
+    contractKey: heatHistoryAllowed ? histContract : null,
+  };
+  const heatRange = viewRef.current && histContract ? historyRef.current.rangeState(root, histContract, bucketFor(viewRef.current.pxPerMs), viewRef.current.from, viewRef.current.to) : null;
+  const heatStatus = !layers.heatmap || clean
+    ? 'off'
+    : contractMismatch
+      ? 'withheld - contract mismatch (contracts are never mixed)'
+      : !heatTiers
+      ? 'collecting depth history - no tiers yet'
+      : replay
+        ? 'replay: recorded depth averages'
+        : !depthCurrent
+          ? `historical only - ${depthF.label}`
+          : !heatHistoryAllowed
+            ? heatFilters.history ? 'live only (recorded history needs a verified contract)' : 'live only (history hidden)'
+            : heatRange?.loading
+              ? 'live + loading recorded depth…'
+              : heatRange?.failed
+                ? `live · history: ${heatRange.detail ?? 'unavailable'}`
+                : heatRange?.deferred
+                  ? 'live · history waiting (request budget)'
+                  : 'live + recorded history';
   const frameRef = useRef<ChartFrame | null>(null);
-  frameRef.current = { view, precision, layers, scale, gain, drawings: drawings[root], tool, demo, replay: !!replay, now, heatOpacity, bubbleOpacity, bubbleDensity, liq, liqFlags, depth: depthInfo, clean, depthCurrent: replay ? undefined : depthCurrent };
+  frameRef.current = { view, precision, layers, scale, gain, drawings: drawings[root], tool, demo, replay: !!replay, now, heatOpacity, bubbleOpacity, bubbleDensity, liq, liqFlags, depth: depthInfo, clean, depthCurrent: replay ? undefined : depthCurrent, heat: heatSource };
   const hostRef = useRef<HTMLDivElement | null>(null);
   const [chart, setChart] = useState<OfpChartView | null>(null);
   const hasBars = view.bars.length > 0;
@@ -213,7 +280,11 @@ export function OrderFlowProPage() {
     if (!host || !hasBars) return;
     const v = new OfpChartView(host, () => frameRef.current, {
       onHover: (h) =>
-        setHover((prev) => (prev?.t === h?.t && prev?.price === h?.price && prev?.bar === h?.bar && prev?.resting?.size === h?.resting?.size ? prev : h)),
+        setHover((prev) => (prev?.t === h?.t && prev?.price === h?.price && prev?.bar === h?.bar && prev?.resting?.size === h?.resting?.size && prev?.heat?.t === h?.heat?.t && prev?.heat?.tick === h?.heat?.tick ? prev : h)),
+      onView: (vw) => {
+        viewRef.current = vw;
+        setViewVer((x) => x + 1);
+      },
       onDrawing: (d) => setDrawings((prev) => ({ ...prev, [frameRef.current!.view.root]: [...prev[frameRef.current!.view.root], d] })),
     });
     setChart(v);
@@ -552,6 +623,31 @@ export function OrderFlowProPage() {
             ))}
             <LiquidityLegend liq={liq} replay={!!replay} calcMs={liqCalcMs.current} seed={seedState} depthLabel={!replay && !depthCurrent ? depthF.label : null} />
           </div>
+          <div className={`ofp-heatbar${clean || !layers.heatmap ? ' is-off' : ''}`} role="group" aria-label="Liquidity heatmap">
+            <label className="ofp-check" title="Liquidity heatmap behind the candles">
+              <input type="checkbox" checked={layers.heatmap} disabled={clean} onChange={(e) => setLayers({ ...layers, heatmap: e.target.checked })} /> Show heatmap
+            </label>
+            {HEAT_TOGGLES.map(([k, label, title]) => (
+              <label key={k} className="ofp-check" title={title}>
+                <input type="checkbox" checked={heatFilters[k]} disabled={clean || !layers.heatmap} onChange={(e) => setHeatFilters({ ...heatFilters, [k]: e.target.checked })} /> {label}
+              </label>
+            ))}
+            <label className="ofp-range" title="Intensity: brightens / dims the picture; tiers (hover, filters) stay unchanged">
+              Intensity <input type="range" min={0.25} max={4} step={0.25} value={gain} disabled={clean || !layers.heatmap} onChange={(e) => setGain(Number(e.target.value))} aria-label="Heatmap intensity" />
+            </label>
+            <label className="ofp-range">
+              Opacity <input type="range" min={0.2} max={1} step={0.05} value={heatOpacity} disabled={clean || !layers.heatmap} onChange={(e) => setHeatOpacity(Number(e.target.value))} aria-label="Heatmap opacity" />
+            </label>
+            <span className="ofp-heatlegend" data-testid="ofp-heat-legend" title={`Tiers are relative to this instrument's own recorded book (same reference as STRONG / MEDIUM: time-weighted 15 s cells, last 30 min) - not an absolute measure of significance. Displayed aggregate contracts per price level (IBKR, ${OFP_TICK[root]} tick, 10 levels per side) - never an order count. Where a level leaves the visible 10-level window it is simply no longer observed (not proven cancelled).`}>
+              <i style={{ background: rgbCss(HEAT_RGB.VERY_STRONG) }} /> very strong{heatTiers ? ` ≥ ${fmtQty(heatTiers.veryStrong)}` : ''}
+              <i style={{ background: rgbCss(HEAT_RGB.STRONG) }} /> strong{heatTiers ? ` ≥ ${fmtQty(heatTiers.strong)}` : ''}
+              <i style={{ background: rgbCss(HEAT_RGB.MEDIUM) }} /> medium{heatTiers ? ` ≥ ${fmtQty(heatTiers.medium)}` : ''}
+              <i style={{ background: rgbCss(HEAT_RGB.WEAK) }} /> weak · contracts
+            </span>
+            <span className={`ofp-heatstatus${/historical|collecting|unavailable|waiting|needs|withheld/.test(heatStatus) ? ' warn' : ''}`} data-testid="ofp-heat-status" data-history-cells={historyRef.current.cachedCells} data-history-requests={historyRef.current.requests}>
+              Heatmap: {heatStatus}
+            </span>
+          </div>
           <div className="ofp-hover" aria-live="off">
             {hover ? (
               <>
@@ -571,6 +667,13 @@ export function OrderFlowProPage() {
                   </>
                 )}
                 {hover.resting && ` · resting ${hover.resting.side.toLowerCase()} ${hover.resting.size} contracts (displayed)`}
+                {hover.heat &&
+                  hover.heat.cells.map((c) => (
+                    <span key={c.side} className={c.side === 'BID' ? 'bid' : 'ask'} data-testid="ofp-heat-hover">
+                      {' '}
+                      · heat {TIER_LABEL[c.tier]} {c.side} {fmtQty(Math.round(c.avg * 10) / 10)} contracts (avg {fmtRest(hover.heat!.dt)} from {fmtUtcTime(hover.heat!.t)} UTC) · observed {fmtRest(hover.heat!.observedMs)} · {hover.heat!.status}
+                    </span>
+                  ))}
                 {hover.liq && (
                   <span className={hover.liq.side === 'BID' ? 'bid' : 'ask'}>
                     {' '}

@@ -2,6 +2,7 @@ import { HEAT_BUCKET_MS } from '../../engines/orderFlowPro/config';
 import type { RecordedSeed } from '../../engines/orderFlowPro/liquidityClass';
 import type { OfpRoot } from '../../engines/orderFlowPro/types';
 import { parseHeatmap } from '../../providers/orderFlowPro/gatewayMap';
+import { historyBudget, type HistoryBudget } from '../../providers/orderFlowPro/historyBudget';
 
 /* ============================================================================
  * Recorded IBKR depth for the liquidity classes: ONE read-only GET of the gateway's existing /api/ibkr/heatmap per
@@ -41,6 +42,7 @@ const inflight = new Map<string, Promise<SeedState>>();
 export function resetSeedCache() {
   cache.clear();
   inflight.clear();
+  historyBudget.reset();
 }
 
 export function cachedSeed(root: OfpRoot, contract: string): SeedState | null {
@@ -51,7 +53,7 @@ export function cachedSeed(root: OfpRoot, contract: string): SeedState | null {
  * Load (once) the last `lookbackMs` of recorded depth for `root` / `contract`, in the recorder's own 15 s buckets.
  * Same-origin, credentials as the rest of the website. Any failure is final for this page session (UNAVAILABLE).
  */
-export function loadRecordedSeed(root: OfpRoot, contract: string, now: number, lookbackMs: number, fetchImpl: typeof fetch = (...a) => fetch(...a)): Promise<SeedState> {
+export function loadRecordedSeed(root: OfpRoot, contract: string, now: number, lookbackMs: number, fetchImpl: typeof fetch = (...a) => fetch(...a), budget: HistoryBudget = historyBudget): Promise<SeedState> {
   const key = `${root}:${contract}`;
   const hit = cache.get(key);
   if (hit && hit.state !== 'LOADING') return Promise.resolve(hit);
@@ -62,6 +64,8 @@ export function loadRecordedSeed(root: OfpRoot, contract: string, now: number, l
   const to = Math.ceil(now);
   const p = (async (): Promise<SeedState> => {
     try {
+      // shares the page's recorded-depth budget (<= 10 / min with the heatmap history and replay); waits for a slot
+      if (!(await budget.acquire())) return { state: 'UNAVAILABLE', detail: 'recorded depth request budget exhausted' };
       const r = await fetchImpl(`/api/ibkr/heatmap?root=${root}&from=${from}&to=${to}&bucket=${HEAT_BUCKET_MS}`, { method: 'GET', credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json' } });
       if (!r.ok) return { state: 'UNAVAILABLE', detail: `recorded depth unavailable (HTTP ${r.status})` };
       const h = parseHeatmap(await r.json(), root);

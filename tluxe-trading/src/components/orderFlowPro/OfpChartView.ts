@@ -6,6 +6,8 @@ import { bandTier, type BandTier } from '../../engines/orderFlowPro/depthRecorde
 import { barPoc, imbalances, stackedImbalances, type FootprintBar } from '../../engines/orderFlowPro/footprint';
 import type { ClassifiedLevel, LiqClass, LiquidityOverlay } from '../../engines/orderFlowPro/liquidityClass';
 import type { Side } from '../../engines/orderFlowPro/types';
+import { bucketFor } from './depthHistory';
+import { cellVisible, heatColor, hoverAt, type HeatColumn, type HeatFilters, type HeatHover, type HeatTiers } from './heatLayer';
 import { fmtQty, fmtRest, laneLabelSlots, spreadLabels, topKThreshold } from './ofpLayout';
 
 /* ============================================================================
@@ -60,7 +62,24 @@ export interface ChartFrame {
    * in-plot book strip, no resting size in the hover, no current-level tags / markers. Recorded history stays.
    */
   depthCurrent?: boolean;
+  /** Liquidity heatmap source (tiers, filters, recorded history for the verified contract). */
+  heat?: HeatSource | null;
 }
+
+/** What the page hands the chart for the heatmap (history is read on demand by the page; the chart never requests). */
+export interface HeatSource {
+  /** Tiers from the STRONG / MEDIUM classifier reference (null while collecting history: no tiers, no heat). */
+  tiers: HeatTiers | null;
+  filters: HeatFilters;
+  /** Recorded columns for [from, to) at `bucket` for the verified contract ([] when none / not allowed). */
+  history: (from: number, to: number, bucket: number) => HeatColumn[];
+  /** Changes whenever cached history changes. */
+  version: number;
+  /** Verified contract (part of the layer cache key); null = no recorded history may be drawn. */
+  contractKey: string | null;
+}
+
+export type HeatStatus = 'CURRENT · live IBKR depth' | 'HISTORICAL · observed live this session' | 'HISTORICAL · recorded (gateway)' | 'RECORDED · replay';
 
 /** In-plot book / resting hover: only for current live depth, or in replay (recorded book under the replay banner). */
 const bookShown = (f: ChartFrame) => f.replay || f.depthCurrent !== false;
@@ -87,6 +106,8 @@ export const LIQ_RGB: Record<LiqClass, Record<Side, string>> = {
 export const liqVisible = (fl: LiqFlags, cls: LiqClass, side: Side) => (cls === 'STRONG' ? fl.strong : fl.medium) && (side === 'BID' ? fl.bid : fl.ask);
 
 const LANE_W = 184;
+/** Heat columns narrower than this are merged with their contiguous neighbours (sub-pixel detail is not visible). */
+const MERGE_PX = 2.5;
 
 export type BubbleDensity = 'low' | 'medium' | 'high';
 /** Max bubbles per visible bar (adaptive: the K largest executed clusters in view are drawn). */
@@ -105,6 +126,8 @@ export interface HoverInfo {
   resting: { side: 'BID' | 'ASK'; size: number } | null;
   /** STRONG / MEDIUM class of the resting level under the cursor (visualization only). */
   liq?: ClassifiedLevel | null;
+  /** Heatmap cell(s) under the cursor: side, time-weighted displayed contracts, tier, time span, observed run. */
+  heat?: (HeatHover & { status: HeatStatus }) | null;
 }
 
 const AXIS_W = 70;
@@ -167,6 +190,20 @@ export class OfpChartView implements ChartNavigable {
   private drag: { x: number; y: number; ro: number; bs: number; mp: { lo: number; hi: number } | null; moved: boolean; mode: 'pan' | 'price' | 'time' } | null = null;
   /** Width of the liquidity label lane in the last frame (0 = hidden). */
   private lane = 0;
+  /** Off-screen heat layer (completed columns) and its cache key; the newest live column is drawn per frame. */
+  private heatLayer: HTMLCanvasElement | null = null;
+  private heatKey = '';
+  private heatCols: HeatColumn[] = [];
+  private heatNewest: HeatColumn | null = null;
+  private heatTiers: HeatTiers | null = null;
+  private viewKey = '';
+  /** Completed live recorder columns never change: their converted heat column is cached (by identity + validMs). */
+  private liveConv = new WeakMap<object, { validMs: number; col: HeatColumn }>();
+  /** fillStyle per quantised size, valid for one tier / gain / scale / opacity setting (cleared on rebuild key). */
+  private styleMemo = new Map<number, string>();
+  private styleKey = '';
+  /** Measured rendering cost (also mirrored on the canvas dataset for local performance checks). */
+  readonly stats = { draws: 0, heatBuilds: 0, lastDrawMs: 0, maxDrawMs: 0, lastHeatBuildMs: 0 };
   private trendStart: { t: number; p: number } | null = null;
   private lastScale = { lo: 0, hi: 1, tEnd: 0, pxPerMs: 0 };
   private disposed = false;
@@ -174,7 +211,7 @@ export class OfpChartView implements ChartNavigable {
   constructor(
     private host: HTMLElement,
     private frame: () => ChartFrame | null,
-    private cb: { onHover?: (h: HoverInfo | null) => void; onDrawing?: (d: Drawing) => void } = {},
+    private cb: { onHover?: (h: HoverInfo | null) => void; onDrawing?: (d: Drawing) => void; onView?: (v: { from: number; to: number; pxPerMs: number }) => void } = {},
   ) {
     this.canvas = document.createElement('canvas');
     this.canvas.className = 'ofp-canvas';
@@ -431,6 +468,20 @@ export class OfpChartView implements ChartNavigable {
 
   /* ---------------- drawing ---------------- */
   draw() {
+    const t0 = typeof performance !== 'undefined' ? performance.now() : 0;
+    this.drawFrame();
+    if (!t0) return;
+    const ms = performance.now() - t0;
+    this.stats.draws++;
+    this.stats.lastDrawMs = ms;
+    this.stats.maxDrawMs = Math.max(this.stats.maxDrawMs, ms);
+    this.canvas.dataset.drawMs = ms.toFixed(2);
+    this.canvas.dataset.draws = String(this.stats.draws);
+    this.canvas.dataset.heatBuilds = String(this.stats.heatBuilds);
+    this.canvas.dataset.heatBuildMs = this.stats.lastHeatBuildMs.toFixed(2);
+  }
+
+  private drawFrame() {
     const ctx = this.ctx;
     const f = this.frame();
     if (!ctx || !f || this.w < 50 || this.h < 50) return;
@@ -489,9 +540,19 @@ export class OfpChartView implements ChartNavigable {
       ctx.stroke();
     }
 
-    if (layers.heatmap) this.drawHeat(ctx, f, tStart, tEnd, tickPx);
+    const vk = `${Math.round(tStart)}|${Math.round(tEnd)}|${pxPerMs.toPrecision(6)}`;
+    if (vk !== this.viewKey) {
+      this.viewKey = vk;
+      this.cb.onView?.({ from: tStart, to: tEnd, pxPerMs });
+    }
+    if (layers.heatmap && f.heat) this.drawHeatLayer(ctx, f, tStart, tEnd, plotW, plotH, tickPx);
+    else if (layers.heatmap) this.drawHeat(ctx, f, tStart, tEnd, tickPx);
+    else {
+      this.heatCols = [];
+      this.heatNewest = null;
+    }
     this.drawGaps(ctx, f, tStart, tEnd, plotH);
-    if (liqOn) this.drawLiqBands(ctx, f, tStart, tEnd, plotW, tickPx);
+    if (liqOn) this.drawLiqBands(ctx, f, tStart, tEnd, plotW, tickPx, layers.heatmap && !!f.heat);
     else if (layers.strong) this.drawBands(ctx, f, tStart, tEnd, plotW, tickPx);
     if (layers.profile) this.drawProfile(ctx, f, plotW, plotH, tickPx);
     if (layers.levels) this.drawLevelLines(ctx, f, plotW);
@@ -518,6 +579,187 @@ export class OfpChartView implements ChartNavigable {
     else if (liqOn) this.drawLiqNotice(ctx, f, plotW);
     this.drawAxes(ctx, { ...f, layers }, tStart, tEnd, plotW, plotH, pStep, msBar);
     this.drawCrosshair(ctx, f, plotW, plotH, msBar);
+  }
+
+  /**
+   * Liquidity heatmap (yellow / gold / cyan / blue tiers). Completed columns are rendered once into an off-screen
+   * layer keyed by view, size, tiers, settings, filters and data version; mouse moves only re-blit it. The newest live
+   * column (still filling) is drawn on top each frame. Sides are kept; columns are merged only while contiguous
+   * (a recording gap is never bridged); nothing is drawn where nothing was observed.
+   */
+  private drawHeatLayer(ctx: CanvasRenderingContext2D, f: ChartFrame, tStart: number, tEnd: number, plotW: number, plotH: number, tickPx: number) {
+    const src = f.heat!;
+    const tiers = src.tiers;
+    this.heatTiers = tiers;
+    if (!tiers) {
+      this.heatCols = [];
+      this.heatNewest = null;
+      return;
+    }
+    const rec = f.view.recorder;
+    const all = rec.columnsIn(-Infinity, Infinity);
+    const liveStart = all.length ? all[0]!.t : Infinity;
+    const newestRaw = all.length ? all[all.length - 1]! : null;
+    const bucket = bucketFor(this.lastScale.pxPerMs);
+    const key = [Math.round(tStart), Math.round(tEnd), this.lastScale.lo, this.lastScale.hi, this.w, this.h, this.dpr, this.lane, tiers.medium, tiers.strong, tiers.veryStrong, f.gain, f.scale, f.heatOpacity, src.filters.bid, src.filters.ask, src.filters.strongOnly, src.filters.history, src.version, src.contractKey, bucket, all.length, newestRaw?.t ?? 0, liveStart].join('|');
+    if (key !== this.heatKey || !this.heatLayer) {
+      const t0 = typeof performance !== 'undefined' ? performance.now() : 0;
+      const hist = src.filters.history && src.contractKey ? src.history(tStart, Math.min(tEnd, liveStart), bucket).filter((c) => c.t + c.dt <= liveStart) : [];
+      const live: HeatColumn[] = [];
+      for (const c of all) {
+        if (c === newestRaw || c.t + rec.bucketMs <= tStart || c.t > tEnd || c.validMs <= 0) continue;
+        const hit = this.liveConv.get(c);
+        if (hit && hit.validMs === c.validMs) live.push(hit.col);
+        else {
+          const col = this.toHeatColumn(c, rec.bucketMs);
+          this.liveConv.set(c, { validMs: c.validMs, col });
+          live.push(col);
+        }
+      }
+      this.heatCols = [...hist, ...live];
+      if (!this.heatLayer && typeof document !== 'undefined') this.heatLayer = document.createElement('canvas');
+      const lc = this.heatLayer?.getContext?.('2d') ?? null;
+      if (this.heatLayer && lc) {
+        this.heatLayer.width = Math.max(1, Math.floor(this.w * this.dpr));
+        this.heatLayer.height = Math.max(1, Math.floor(this.h * this.dpr));
+        lc.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+        lc.clearRect(0, 0, this.w, this.h);
+        lc.save();
+        lc.beginPath();
+        lc.rect(0, 0, plotW, plotH);
+        lc.clip();
+        this.paintHeat(lc, this.heatCols, tiers, f, tickPx, plotW, rec.tick);
+        lc.restore();
+      }
+      this.heatKey = key;
+      this.stats.heatBuilds++;
+      if (t0) this.stats.lastHeatBuildMs = performance.now() - t0;
+    }
+    if (this.heatLayer && this.heatLayer.width > 1) ctx.drawImage(this.heatLayer, 0, 0, this.w, this.h);
+    // where recorded history (gateway) hands over to this page's live observation - so the two are never confused
+    const xs = this.x(liveStart);
+    if (Number.isFinite(xs) && xs > 0 && xs < plotW && src.filters.history && src.contractKey && !f.replay) {
+      ctx.save();
+      ctx.strokeStyle = 'rgba(200,210,230,0.35)';
+      ctx.setLineDash([3, 4]);
+      ctx.beginPath();
+      ctx.moveTo(Math.round(xs) + 0.5, 0);
+      ctx.lineTo(Math.round(xs) + 0.5, plotH);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.font = '600 9px Inter, system-ui, sans-serif';
+      ctx.fillStyle = 'rgba(200,210,230,0.75)';
+      ctx.textBaseline = 'top';
+      ctx.textAlign = 'right';
+      ctx.fillText('recorded ◂', xs - 4, 4);
+      ctx.textAlign = 'left';
+      ctx.fillText(f.depthCurrent === false ? '▸ this session · no current depth' : '▸ this session', xs + 4, 4);
+      ctx.restore();
+    }
+    // the newest live column, still filling, drawn on top every frame
+    this.heatNewest = newestRaw && newestRaw.validMs > 0 && newestRaw.t <= tEnd ? this.toHeatColumn(newestRaw, rec.bucketMs) : null;
+    if (this.heatNewest) this.paintHeat(ctx, [this.heatNewest], tiers, f, tickPx, plotW, rec.tick);
+  }
+
+  private toHeatColumn(c: { t: number; validMs: number; cells: Map<number, { tick: number; side: Side; sizeMs: number }> }, bucketMs: number): HeatColumn {
+    const cells: HeatColumn['cells'] = [];
+    for (const x of c.cells.values()) if (x.sizeMs > 0) cells.push({ tick: x.tick, side: x.side, avg: x.sizeMs / c.validMs });
+    return { t: c.t, dt: bucketMs, validMs: c.validMs, cells, source: 'LIVE' };
+  }
+
+  /** Paint columns; contiguous columns narrower than MERGE_PX are merged (validMs-weighted), never across a gap. */
+  private paintHeat(ctx: CanvasRenderingContext2D, cols: readonly HeatColumn[], tiers: HeatTiers, f: ChartFrame, tickPx: number, plotW: number, tickSize: number) {
+    const filt: HeatFilters = f.heat!.filters;
+    const hpx = Math.max(1.5, tickPx);
+    // only price levels inside the visible price range (plus one tick) are accumulated or painted
+    const { lo, hi } = this.lastScale;
+    const tickLo = Math.floor(lo / tickSize) - 1;
+    const tickHi = Math.ceil(hi / tickSize) + 1;
+    const ph = this.h - TIME_H;
+    const yk = -(tickSize / (hi - lo || 1)) * ph; // y = y0 + yk * tick (same mapping as this.y)
+    const y0 = ph + (lo / (hi - lo || 1)) * ph;
+    // maps are reused between column groups (cleared, not re-allocated)
+    const acc = new Map<number, { tick: number; side: Side; w: number; v: number }>();
+    const both = new Map<number, number>();
+    let gx0 = 0;
+    let gx1 = 0;
+    let prevEnd: number | null = null;
+    let prevSrc: string | null = null;
+    const flush = () => {
+      if (!acc.size) return;
+      both.clear();
+      for (const a of acc.values()) {
+        a.v = a.v / a.w; // -> average
+        if (!cellVisible({ tick: a.tick, side: a.side, avg: a.v }, filt, tiers)) a.w = 0;
+        else both.set(a.tick, (both.get(a.tick) ?? 0) + 1);
+      }
+      const x0 = Math.max(0, gx0);
+      const w = Math.max(1, Math.min(plotW, gx1) - x0);
+      for (const a of acc.values()) {
+        if (a.w === 0) continue;
+        const y = y0 + yk * a.tick;
+        ctx.fillStyle = this.heatStyle(a.v, tiers, f);
+        // both sides at one price inside this column (price moved through it): ASK top half, BID bottom half
+        if ((both.get(a.tick) ?? 0) > 1) ctx.fillRect(x0, a.side === 'ASK' ? y - hpx / 2 : y, w, hpx / 2);
+        else ctx.fillRect(x0, y - hpx / 2, w, hpx);
+      }
+      acc.clear();
+    };
+    for (const c of cols) {
+      const x0 = this.x(c.t);
+      const x1 = this.x(c.t + c.dt);
+      if (x1 < 0 || x0 > plotW) {
+        flush();
+        prevEnd = null;
+        continue;
+      }
+      const contiguous = prevEnd !== null && prevEnd === c.t && prevSrc === c.source;
+      if (!contiguous || x1 - gx0 >= MERGE_PX) {
+        flush();
+        gx0 = x0;
+      }
+      gx1 = x1;
+      prevEnd = c.t + c.dt;
+      prevSrc = c.source;
+      const wgt = Math.max(1, c.validMs);
+      for (const cell of c.cells) {
+        if (cell.tick < tickLo || cell.tick > tickHi) continue;
+        const k = cell.tick * 2 + (cell.side === 'ASK' ? 1 : 0);
+        let a = acc.get(k);
+        if (!a) acc.set(k, (a = { tick: cell.tick, side: cell.side, w: 0, v: 0 }));
+        a.w += wgt;
+        a.v += cell.avg * wgt;
+      }
+    }
+    flush();
+  }
+
+  /** fillStyle for a size, memoised per setting (sizes quantised to 0.05 contracts - far below a visible change). */
+  private heatStyle(avg: number, tiers: HeatTiers, f: ChartFrame): string {
+    const sk = `${tiers.medium}|${tiers.strong}|${tiers.veryStrong}|${f.gain}|${f.scale}|${f.heatOpacity}`;
+    if (sk !== this.styleKey) {
+      this.styleKey = sk;
+      this.styleMemo.clear();
+    }
+    const q = Math.round(avg * 20);
+    let st = this.styleMemo.get(q);
+    if (st === undefined) {
+      const { rgb, alpha } = heatColor(q / 20, tiers, f.gain, f.scale);
+      st = `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${(alpha * f.heatOpacity).toFixed(3)})`;
+      if (this.styleMemo.size < 20_000) this.styleMemo.set(q, st);
+    }
+    return st;
+  }
+
+  private heatHover(f: ChartFrame, t: number, tick: number): (HeatHover & { status: HeatStatus }) | null {
+    const tiers = this.heatTiers;
+    if (!tiers || !f.heat || !f.layers.heatmap || f.clean) return null;
+    const cols = this.heatNewest ? [...this.heatCols, this.heatNewest] : this.heatCols;
+    const h = hoverAt(cols, t, tick, tiers, f.heat.filters);
+    if (!h) return null;
+    const newest = this.heatNewest !== null && h.t === this.heatNewest.t && h.source === 'LIVE';
+    const status: HeatStatus = f.replay ? 'RECORDED · replay' : h.source === 'RECORDED' ? 'HISTORICAL · recorded (gateway)' : newest && f.depthCurrent !== false ? 'CURRENT · live IBKR depth' : 'HISTORICAL · observed live this session';
+    return { ...h, status };
   }
 
   private drawHeat(ctx: CanvasRenderingContext2D, f: ChartFrame, tStart: number, tEnd: number, tickPx: number) {
@@ -648,7 +890,7 @@ export class OfpChartView implements ChartNavigable {
    * STRONG / MEDIUM bands (visualization only): where the classified level was actually observed in recorded or live
    * 15 s cells (never extended), plus a short marker at the plot edge for each level classified in the book NOW.
    */
-  private drawLiqBands(ctx: CanvasRenderingContext2D, f: ChartFrame, tStart: number, tEnd: number, plotW: number, tickPx: number) {
+  private drawLiqBands(ctx: CanvasRenderingContext2D, f: ChartFrame, tStart: number, tEnd: number, plotW: number, tickPx: number, outline = false) {
     const liq = f.liq!;
     const fl = f.liqFlags ?? DEFAULT_LIQ_FLAGS;
     const tick = f.view.recorder.tick;
@@ -661,7 +903,15 @@ export class OfpChartView implements ChartNavigable {
       if (x1 - x0 < 1) continue;
       const y = this.y(fromTick(b.tick, tick));
       const rgb = LIQ_RGB[b.cls][b.side];
-      if (b.cls === 'STRONG') {
+      if (outline) {
+        // heatmap ON: the class bands become outlines so the yellow / gold heat stays readable
+        ctx.strokeStyle = b.cls === 'STRONG' ? `rgba(${rgb},0.95)` : `rgba(${rgb},0.5)`;
+        ctx.lineWidth = b.cls === 'STRONG' ? 1.5 : 1;
+        ctx.setLineDash(b.cls === 'STRONG' ? [] : [4, 3]);
+        ctx.strokeRect(x0 + 0.5, y - hh / 2 - 1.5, x1 - x0 - 1, hh + 3);
+        ctx.setLineDash([]);
+        ctx.lineWidth = 1;
+      } else if (b.cls === 'STRONG') {
         ctx.fillStyle = `rgba(${rgb},0.82)`;
         ctx.fillRect(x0, y - hh / 2, x1 - x0, hh);
       } else {
@@ -1164,6 +1414,6 @@ export class OfpChartView implements ChartNavigable {
     const bid = shown ? f.view.book.bids.find(([p]) => toTick(p, tick) === k) : undefined;
     const ask = shown ? f.view.book.asks.find(([p]) => toTick(p, tick) === k) : undefined;
     const liq = f.depthCurrent === false ? null : (f.liq?.levels.find((l) => l.tick === k) ?? null);
-    this.cb.onHover?.({ t, price: fromTick(k, tick), bar, level: lv, resting: bid ? { side: 'BID', size: bid[1] } : ask ? { side: 'ASK', size: ask[1] } : null, liq });
+    this.cb.onHover?.({ t, price: fromTick(k, tick), bar, level: lv, resting: bid ? { side: 'BID', size: bid[1] } : ask ? { side: 'ASK', size: ask[1] } : null, liq, heat: this.heatHover(f, t, k) });
   }
 }
