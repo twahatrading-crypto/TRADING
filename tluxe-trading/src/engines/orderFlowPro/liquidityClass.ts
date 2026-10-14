@@ -41,6 +41,9 @@ export interface LiquidityParams {
   minValidShare: number;
 }
 
+/** Heatmap VERY STRONG tier quantile (display only). */
+export const VERY_STRONG_PCT = 0.97;
+
 export const DEFAULT_LIQ_PARAMS: LiquidityParams = {
   lookbackMs: 30 * 60_000,
   strongPct: 0.9,
@@ -104,6 +107,8 @@ export interface LiquidityOverlay {
   /** Thresholds in displayed contracts (null while collecting). */
   strongMin: number | null;
   mediumMin: number | null;
+  /** Heatmap VERY STRONG tier (p97 of the same reference); display only - no classification uses it. */
+  veryStrongMin: number | null;
   samples: number;
   levels: ClassifiedLevel[];
   bands: LiqBand[];
@@ -271,11 +276,12 @@ export function liquidityOverlay(rec: DepthRecorder, seed: RecordedSeed | null, 
   ref.sort((a, b) => a - b);
   const historyMs = recordedMs + liveMs;
   const base = { historyMs, recordedMs, liveMs, samples: ref.length, params: p };
-  if (historyMs < p.minHistoryMs || ref.length < 20) return { ...base, status: 'COLLECTING', strongMin: null, mediumMin: null, levels: [], bands: [] };
+  if (historyMs < p.minHistoryMs || ref.length < 20) return { ...base, status: 'COLLECTING', strongMin: null, mediumMin: null, veryStrongMin: null, levels: [], bands: [] };
   const strongMin = quantile(ref, p.strongPct);
   const mediumMin = quantile(ref, p.mediumPct);
+  const veryStrongMin = Math.max(strongMin, quantile(ref, VERY_STRONG_PCT));
   const bands = classifyBands(cols, rec.bucketMs, strongMin, mediumMin, p);
-  if (!bookValid) return { ...base, status: 'NO_BOOK', strongMin, mediumMin, levels: [], bands };
+  if (!bookValid) return { ...base, status: 'NO_BOOK', strongMin, mediumMin, veryStrongMin, levels: [], bands };
   const levels = classifyLevels(rec.levelStats(now), ref, strongMin, mediumMin, now, p, cols, rec.bucketMs);
-  return { ...base, status: 'READY', strongMin, mediumMin, levels, bands };
+  return { ...base, status: 'READY', strongMin, mediumMin, veryStrongMin, levels, bands };
 }

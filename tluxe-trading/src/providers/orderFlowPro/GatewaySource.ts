@@ -33,6 +33,7 @@ import {
   type GatewayTrade,
   type TradesPage,
 } from './gatewayMap';
+import { historyBudget } from './historyBudget';
 import type { OfpSource, SourceSink } from './source';
 
 /* ============================================================================
@@ -349,6 +350,8 @@ export class GatewaySource implements OfpSource {
     const span = to - from;
     const bucket = HEAT_BUCKETS_MS.find((b) => span / b <= 1500) ?? HEAT_BUCKETS_MS[HEAT_BUCKETS_MS.length - 1]!;
     try {
+      // the page-wide recorded-depth budget (shared with the heatmap history and the liquidity-history read)
+      if (!(await historyBudget.acquire())) throw new Error('recorded depth request budget exhausted');
       const h = parseHeatmap(await this.get(`/api/ibkr/heatmap?root=${root}&from=${Math.floor(from)}&to=${Math.ceil(to)}&bucket=${bucket}`, null), root);
       if (!h) throw new SchemaError('recorded depth: unexpected response');
       prov.depth.firstRecordedMs = h.firstRecordedMs;

@@ -112,6 +112,15 @@
 .ofp-liqkey--ma { color: rgb(255, 160, 170); }
 .ofp-liqkey--ma::before { background: rgba(255, 160, 170, 0.3); border: 1px dashed rgba(255, 160, 170, 0.8); }
 .ofp-liqinfo { color: var(--text-3); cursor: help; white-space: nowrap; }
+/* liquidity heatmap bar: toggles, intensity / opacity, tier legend, status */
+.ofp-heatbar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 4px 12px; border-bottom: 1px solid var(--ofp-line); background: var(--ofp-panel); font-size: 11px; }
+.ofp-heatbar.is-off .ofp-heatlegend, .ofp-heatbar.is-off .ofp-range { opacity: 0.5; }
+.ofp-range { display: inline-flex; align-items: center; gap: 6px; color: var(--text-2); }
+.ofp-range input[type='range'] { width: 90px; accent-color: #f2b21b; }
+.ofp-heatlegend { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; color: var(--text-2); cursor: help; }
+.ofp-heatlegend i { width: 18px; height: 6px; border-radius: 2px; margin-left: 6px; }
+.ofp-heatstatus { margin-left: auto; color: var(--text-3); }
+.ofp-heatstatus.warn { color: var(--amber); }
 .ofp-check { display: inline-flex; align-items: center; gap: 6px; color: var(--text-2); font-size: var(--fs-xs); cursor: pointer; }
 .ofp-check input { width: 14px; height: 14px; accent-color: var(--ofp-accent); margin: 0; }
 .ofp-hover { padding: 3px 12px; font-size: 11px; color: var(--text-2); border-bottom: 1px solid var(--ofp-line); min-height: 22px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }

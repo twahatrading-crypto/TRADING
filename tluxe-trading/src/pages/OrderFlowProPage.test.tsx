@@ -235,7 +235,8 @@ describe('Order Flow Pro chart controls + liquidity overlay (presentation only)'
     demo();
     render(<OrderFlowProPage />);
     await flush();
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Heatmap' }));
+    const layerGroup = () => within(screen.getByRole('group', { name: 'Chart layers' }));
+    fireEvent.click(layerGroup().getByRole('checkbox', { name: 'Heatmap' }));
     const layers = localStorage.getItem('tluxe.ofp.layers.v1');
     fireEvent.click(screen.getByTestId('ofp-clean'));
     await flush();
@@ -246,16 +247,17 @@ describe('Order Flow Pro chart controls + liquidity overlay (presentation only)'
     fireEvent.click(screen.getByTestId('ofp-clean'));
     await flush();
     expect(screen.getByRole('checkbox', { name: 'Footprint' })).toBeEnabled();
-    expect(screen.getByRole('checkbox', { name: 'Heatmap' })).not.toBeChecked();
+    expect(layerGroup().getByRole('checkbox', { name: 'Heatmap' })).not.toBeChecked();
   });
 
   it('BID / ASK / STRONG / MEDIUM / quantity / label toggles are independent and persisted', async () => {
     demo();
     render(<OrderFlowProPage />);
     await flush();
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Ask' }));
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Medium' }));
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Contracts' }));
+    const liqGroup = within(screen.getByRole('group', { name: 'Liquidity overlay' }));
+    fireEvent.click(liqGroup.getByRole('checkbox', { name: 'Ask' }));
+    fireEvent.click(liqGroup.getByRole('checkbox', { name: 'Medium' }));
+    fireEvent.click(liqGroup.getByRole('checkbox', { name: 'Contracts' }));
     expect(JSON.parse(localStorage.getItem('tluxe.ofp.liq.v1')!)).toEqual({ strong: true, medium: true, bid: true, ask: false, qty: false, lane: true });
   });
 
