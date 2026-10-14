@@ -76,8 +76,9 @@
 .ofp-q em { font-style: normal; color: var(--text-3); font-size: 11px; }
 
 /* ---------- main ---------- */
-.ofp-main { display: grid; grid-template-columns: 46px minmax(0, 1fr) 8px var(--ofp-side-w, 400px); column-gap: 0; height: clamp(460px, 60vh, 860px); }
-.ofp--chart .ofp-main { grid-template-columns: 46px minmax(0, 1fr); height: calc(100vh - 230px); min-height: 460px; }
+/* chart height: larger responsive default; the chart-height splitter (standard layout) stores --ofp-main-h */
+.ofp-main { display: grid; grid-template-columns: 46px minmax(0, 1fr) 8px var(--ofp-side-w, 400px); column-gap: 0; height: var(--ofp-main-h, clamp(560px, 72vh, 1100px)); }
+.ofp--chart .ofp-main { grid-template-columns: 46px minmax(0, 1fr); height: var(--ofp-main-h, calc(100vh - 230px)); min-height: 460px; }
 .ofp-main > .ofp-tools { margin-right: 8px; }
 .ofp-tools { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 0; border: 1px solid var(--ofp-line); border-radius: var(--radius); background: var(--ofp-panel); }
 .ofp-tools button { width: 34px; height: 34px; display: grid; place-items: center; border: 1px solid transparent; border-radius: var(--radius-sm); background: transparent; color: var(--text-2); cursor: pointer; }
@@ -93,6 +94,24 @@
 .ofp-dot--warn, .ofp-dot--demo { background: var(--amber); }
 .ofp-dot--bad { background: var(--ofp-ask); }
 .ofp-layers { display: flex; flex-wrap: wrap; gap: 4px 14px; }
+.ofp-chart__actions { display: flex; gap: 6px; margin-left: auto; }
+.ofp-btn--expand { border-color: var(--ofp-accent); color: #fff; background: var(--ofp-accent-soft); font-weight: 600; }
+.ofp-check:has(input:disabled) { opacity: 0.55; cursor: default; }
+/* liquidity overlay bar: toggles + legend (visualization only) */
+.ofp-liqbar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 4px 12px; border-bottom: 1px solid var(--ofp-line); background: var(--ofp-panel); font-size: 11px; }
+.ofp-liqbar.is-off { opacity: 0.6; }
+.ofp-liqlegend { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin-left: auto; color: var(--text-2); }
+.ofp-liqkey { display: inline-flex; align-items: center; gap: 5px; font-size: 10px; font-weight: 700; letter-spacing: 0.02em; }
+.ofp-liqkey::before { content: ''; width: 16px; height: 6px; border-radius: 2px; }
+.ofp-liqkey--sb { color: rgb(38, 208, 124); }
+.ofp-liqkey--sb::before { background: rgba(38, 208, 124, 0.85); }
+.ofp-liqkey--mb { color: rgb(150, 236, 186); }
+.ofp-liqkey--mb::before { background: rgba(150, 236, 186, 0.3); border: 1px dashed rgba(150, 236, 186, 0.8); }
+.ofp-liqkey--sa { color: rgb(239, 75, 95); }
+.ofp-liqkey--sa::before { background: rgba(239, 75, 95, 0.85); }
+.ofp-liqkey--ma { color: rgb(255, 160, 170); }
+.ofp-liqkey--ma::before { background: rgba(255, 160, 170, 0.3); border: 1px dashed rgba(255, 160, 170, 0.8); }
+.ofp-liqinfo { color: var(--text-3); cursor: help; white-space: nowrap; }
 .ofp-check { display: inline-flex; align-items: center; gap: 6px; color: var(--text-2); font-size: var(--fs-xs); cursor: pointer; }
 .ofp-check input { width: 14px; height: 14px; accent-color: var(--ofp-accent); margin: 0; }
 .ofp-hover { padding: 3px 12px; font-size: 11px; color: var(--text-2); border-bottom: 1px solid var(--ofp-line); min-height: 22px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
@@ -118,6 +137,11 @@
 .ofp-book th:nth-child(3) { width: 24%; }
 .ofp-book td { padding: 1px 6px; height: 20px; text-align: center; border-bottom: 1px solid rgba(24, 35, 58, 0.55); }
 .ofp-book td.dim { font-size: 11px; }
+.ofp-book.is-stale { opacity: 0.45; filter: grayscale(0.85); background: repeating-linear-gradient(135deg, transparent 0 8px, rgba(229, 163, 59, 0.05) 8px 16px); }
+/* depth not current (shared rule): status bar above the book / strength table */
+.ofp-stale { padding: 5px 10px; font-size: 11px; border-left: 3px solid var(--amber); background: rgba(229, 163, 59, 0.08); color: var(--amber); }
+.ofp-stale--bad { border-left-color: var(--ofp-ask); background: rgba(239, 75, 95, 0.08); color: #ff9aa6; }
+.ofp-stale--muted { border-left-color: var(--text-4); background: transparent; color: var(--text-2); }
 .ofp-book__px { font-weight: 600; }
 .ofp-book__sz { position: relative; font-weight: 700; color: #fff; }
 .ofp-book__sz span { position: relative; }
@@ -216,6 +240,11 @@
 .ofp-split--row { height: 8px; margin: -8px 0; cursor: row-resize; }
 .ofp-split--row::after { left: 45%; right: 45%; top: 3px; height: 2px; }
 
+/* ---------- expanded chart: chart + tools as a window-sized overlay (Esc exits; layout state untouched) ---------- */
+.ofp--chartmax .ofp-main { position: fixed; inset: 0; z-index: 1000; height: auto; min-height: 0; padding: 6px 8px; background: var(--ofp-bg); grid-template-columns: 46px minmax(0, 1fr); }
+.ofp--chartmax .ofp-main > .ofp-split, .ofp--chartmax .ofp-side { display: none; }
+.ofp--chartmax .ofp-chart { height: auto; min-height: 0; }
+
 /* ---------- full-screen workspace (fits 1920x1080 and up without page scrolling) ---------- */
 .ofp--ws { position: fixed; inset: 0; z-index: 60; overflow: hidden; padding: 6px 8px; gap: 6px; }
 .ofp--ws .ofp-split--row { margin: -6px 0; }
@@ -240,7 +269,7 @@ body[data-ofp-harness] .ofp--ws { bottom: 28px; }
 @media (max-width: 1280px) {
   .ofp--ws { overflow: auto; }
   .ofp-main { grid-template-columns: 46px minmax(0, 1fr); height: auto; }
-  .ofp-chart { height: 62vh; min-height: 420px; }
+  .ofp-chart { height: var(--ofp-main-h, 70vh); min-height: 420px; }
   .ofp-side { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .ofp-bottom { grid-template-columns: 1fr; height: auto; }
   .ofp-bottom .ofp-panel { height: 240px; }

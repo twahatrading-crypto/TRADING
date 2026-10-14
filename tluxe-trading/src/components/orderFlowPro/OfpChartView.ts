@@ -4,7 +4,9 @@ import { fromTick, toTick } from '../../engines/orderFlowPro/classify';
 import type { OfpView } from '../../engines/orderFlowPro/engine';
 import { bandTier, type BandTier } from '../../engines/orderFlowPro/depthRecorder';
 import { barPoc, imbalances, stackedImbalances, type FootprintBar } from '../../engines/orderFlowPro/footprint';
-import { spreadLabels, topKThreshold } from './ofpLayout';
+import type { ClassifiedLevel, LiqClass, LiquidityOverlay } from '../../engines/orderFlowPro/liquidityClass';
+import type { Side } from '../../engines/orderFlowPro/types';
+import { fmtQty, fmtRest, laneLabelSlots, spreadLabels, topKThreshold } from './ofpLayout';
 
 /* ============================================================================
  * Order Flow Pro main chart (this page only). Pure presentation of the engine view it is handed:
@@ -46,7 +48,45 @@ export interface ChartFrame {
   heatOpacity: number;
   bubbleOpacity: number;
   bubbleDensity: BubbleDensity;
+  /** STRONG / MEDIUM liquidity classes (visualization only; null = classic strong bands + tags). */
+  liq?: LiquidityOverlay | null;
+  liqFlags?: LiqFlags;
+  /** Depth freshness for the label lane: last book change (VPS time) and how long ago the book was confirmed. */
+  depth?: { lastChangeMs: number | null; confirmedAgoMs: number | null; state: string; detail: string | null } | null;
+  /** Clean view: candles only (layers and liquidity overlays hidden, settings untouched). */
+  clean?: boolean;
+  /**
+   * The shared depthFreshness() decision (live only). false -> nothing on the chart may look like current depth: no
+   * in-plot book strip, no resting size in the hover, no current-level tags / markers. Recorded history stays.
+   */
+  depthCurrent?: boolean;
 }
+
+/** In-plot book / resting hover: only for current live depth, or in replay (recorded book under the replay banner). */
+const bookShown = (f: ChartFrame) => f.replay || f.depthCurrent !== false;
+
+/** Independent liquidity-overlay toggles (presentation only). */
+export interface LiqFlags {
+  strong: boolean;
+  medium: boolean;
+  bid: boolean;
+  ask: boolean;
+  qty: boolean;
+  /** Right-hand label lane (candles never enter it). */
+  lane: boolean;
+}
+
+export const DEFAULT_LIQ_FLAGS: LiqFlags = { strong: true, medium: false, bid: true, ask: true, qty: true, lane: true };
+
+/** STRONG / MEDIUM x BID / ASK colours: bid green, ask red; MEDIUM lighter. */
+export const LIQ_RGB: Record<LiqClass, Record<Side, string>> = {
+  STRONG: { BID: '38,208,124', ASK: '239,75,95' },
+  MEDIUM: { BID: '150,236,186', ASK: '255,160,170' },
+};
+
+export const liqVisible = (fl: LiqFlags, cls: LiqClass, side: Side) => (cls === 'STRONG' ? fl.strong : fl.medium) && (side === 'BID' ? fl.bid : fl.ask);
+
+const LANE_W = 184;
 
 export type BubbleDensity = 'low' | 'medium' | 'high';
 /** Max bubbles per visible bar (adaptive: the K largest executed clusters in view are drawn). */
@@ -63,6 +103,8 @@ export interface HoverInfo {
   bar: FootprintBar | null;
   level: { buy: number; sell: number; unknown: number } | null;
   resting: { side: 'BID' | 'ASK'; size: number } | null;
+  /** STRONG / MEDIUM class of the resting level under the cursor (visualization only). */
+  liq?: ClassifiedLevel | null;
 }
 
 const AXIS_W = 70;
@@ -122,7 +164,9 @@ export class OfpChartView implements ChartNavigable {
   private rightOffset = 4;
   private manualPrice: { lo: number; hi: number } | null = null;
   private mouse: { x: number; y: number } | null = null;
-  private drag: { x: number; y: number; ro: number; mp: { lo: number; hi: number } | null; moved: boolean } | null = null;
+  private drag: { x: number; y: number; ro: number; bs: number; mp: { lo: number; hi: number } | null; moved: boolean; mode: 'pan' | 'price' | 'time' } | null = null;
+  /** Width of the liquidity label lane in the last frame (0 = hidden). */
+  private lane = 0;
   private trendStart: { t: number; p: number } | null = null;
   private lastScale = { lo: 0, hi: 1, tEnd: 0, pxPerMs: 0 };
   private disposed = false;
@@ -183,11 +227,35 @@ export class OfpChartView implements ChartNavigable {
   fitView() {
     const f = this.frame();
     const n = f?.view.bars.length ?? 0;
-    const plotW = this.w - AXIS_W;
+    const plotW = this.plotRight();
     if (n > 0 && plotW > 0) this.barSpacing = Math.max(2, Math.min(160, plotW / (n + 6)));
     this.rightOffset = 4;
     this.manualPrice = null;
     this.invalidate();
+  }
+  /** Vertical (price) zoom around the centre of the visible range. */
+  priceZoomIn() {
+    this.scalePrice(1 / 1.25);
+  }
+  priceZoomOut() {
+    this.scalePrice(1.25);
+  }
+  /** Back to the automatic price range (visible candles). Time zoom / pan are kept. */
+  autoPrice() {
+    this.manualPrice = null;
+    this.invalidate();
+  }
+  get priceAuto() {
+    return this.manualPrice === null;
+  }
+  private scalePrice(k: number, base = this.manualPrice ?? { lo: this.lastScale.lo, hi: this.lastScale.hi }) {
+    const mid = (base.lo + base.hi) / 2;
+    const half = Math.max(1e-9, ((base.hi - base.lo) / 2) * k);
+    this.manualPrice = { lo: mid - half, hi: mid + half };
+    this.invalidate();
+  }
+  private plotRight() {
+    return this.w - AXIS_W - this.lane;
   }
 
   invalidate() {
@@ -225,11 +293,11 @@ export class OfpChartView implements ChartNavigable {
   /* ---------------- coordinates ---------------- */
   private x(t: number) {
     const { tEnd, pxPerMs } = this.lastScale;
-    return this.w - AXIS_W - (tEnd - t) * pxPerMs;
+    return this.plotRight() - (tEnd - t) * pxPerMs;
   }
   private tAt(x: number) {
     const { tEnd, pxPerMs } = this.lastScale;
-    return tEnd - (this.w - AXIS_W - x) / (pxPerMs || 1);
+    return tEnd - (this.plotRight() - x) / (pxPerMs || 1);
   }
   private y(p: number) {
     const { lo, hi } = this.lastScale;
@@ -243,16 +311,26 @@ export class OfpChartView implements ChartNavigable {
   }
 
   /* ---------------- interaction (view only) ---------------- */
+  /** Which part of the canvas a point is on: the price axis, the time axis, or the plot (lane counts as plot). */
+  private zone(x: number, y: number): 'price' | 'time' | 'plot' {
+    if (x >= this.w - AXIS_W && y < this.h - TIME_H) return 'price';
+    if (y >= this.h - TIME_H && x < this.w - AXIS_W) return 'time';
+    return 'plot';
+  }
+
   private onWheel = (e: WheelEvent) => {
     e.preventDefault();
     const rect = this.canvas.getBoundingClientRect();
     const mx = e.clientX - rect.left;
-    const tUnder = this.tAt(mx);
+    const my = e.clientY - rect.top;
+    const tUnder = this.tAt(Math.min(mx, this.plotRight()));
     const tf = this.frame()?.view.tf;
-    const k = e.deltaY < 0 ? 1.12 : 1 / 1.12;
-    if (e.shiftKey && tf) {
+    // proportional to the wheel / trackpad delta (smooth on trackpads, ~1.12x per mouse notch), clamped per event
+    const dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * 400 : e.deltaY;
+    const k = Math.max(0.7, Math.min(1.4, Math.exp(-dy * 0.0011)));
+    if ((e.shiftKey || this.zone(mx, my) === 'price') && tf) {
       const { lo, hi } = this.lastScale;
-      const pm = this.pAt(e.clientY - rect.top);
+      const pm = this.pAt(Math.min(my, this.h - TIME_H));
       this.manualPrice = { lo: pm - (pm - lo) / k, hi: pm + (hi - pm) / k };
     } else {
       this.barSpacing = Math.max(2, Math.min(160, this.barSpacing * k));
@@ -260,7 +338,7 @@ export class OfpChartView implements ChartNavigable {
         // keep the time under the mouse fixed
         const msPerBar = OFP_TF_MS[tf];
         const pxPerMs = this.barSpacing / msPerBar;
-        const tEnd = tUnder + (this.w - AXIS_W - mx) / pxPerMs;
+        const tEnd = tUnder + (this.plotRight() - Math.min(mx, this.plotRight())) / pxPerMs;
         const last = this.lastBarEnd();
         this.rightOffset = Math.max(-200, Math.min(400, (tEnd - last) / msPerBar));
       }
@@ -281,15 +359,17 @@ export class OfpChartView implements ChartNavigable {
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
     const f = this.frame();
-    if (f?.tool === 'hline') {
+    const zone = this.zone(x, y);
+    if (zone === 'plot' && f?.tool === 'hline') {
       this.cb.onDrawing?.({ kind: 'hline', price: this.pAt(y) });
       return;
     }
-    if (f?.tool === 'trend') {
+    if (zone === 'plot' && f?.tool === 'trend') {
       this.trendStart = { t: this.tAt(x), p: this.pAt(y) };
       return;
     }
-    this.drag = { x: e.clientX, y: e.clientY, ro: this.rightOffset, mp: this.manualPrice ?? { lo: this.lastScale.lo, hi: this.lastScale.hi }, moved: false };
+    // plot: pan · price axis: drag = vertical (price) zoom · time axis: drag = horizontal (time) zoom
+    this.drag = { x: e.clientX, y: e.clientY, ro: this.rightOffset, bs: this.barSpacing, mp: this.manualPrice ?? { lo: this.lastScale.lo, hi: this.lastScale.hi }, moved: false, mode: zone === 'plot' ? 'pan' : zone };
   };
 
   private onMove = (e: PointerEvent) => {
@@ -300,14 +380,25 @@ export class OfpChartView implements ChartNavigable {
       const dx = e.clientX - this.drag.x;
       const dy = e.clientY - this.drag.y;
       if (Math.abs(dx) + Math.abs(dy) > 3) this.drag.moved = true;
-      if (tf) this.rightOffset = Math.max(-200, Math.min(400, this.drag.ro + dx / this.barSpacing));
-      if (Math.abs(dy) > 6 || this.manualPrice) {
-        const span = this.drag.mp!.hi - this.drag.mp!.lo;
-        const dp = (dy / Math.max(1, this.h - TIME_H)) * span;
-        this.manualPrice = { lo: this.drag.mp!.lo + dp, hi: this.drag.mp!.hi + dp };
+      if (this.drag.mode === 'price') {
+        // drag down = compress (zoom out), drag up = stretch (zoom in), around the range centre
+        this.scalePrice(Math.exp(dy * 0.006), this.drag.mp!);
+      } else if (this.drag.mode === 'time') {
+        this.barSpacing = Math.max(2, Math.min(160, this.drag.bs * Math.exp(dx * 0.006)));
+      } else {
+        if (tf) this.rightOffset = Math.max(-200, Math.min(400, this.drag.ro + dx / this.barSpacing));
+        if (Math.abs(dy) > 6 || this.manualPrice) {
+          const span = this.drag.mp!.hi - this.drag.mp!.lo;
+          const dp = (dy / Math.max(1, this.h - TIME_H)) * span;
+          this.manualPrice = { lo: this.drag.mp!.lo + dp, hi: this.drag.mp!.hi + dp };
+        }
       }
     }
     this.mouse = inside ? { x: e.clientX - rect.left, y: e.clientY - rect.top } : null;
+    if (!this.drag && this.mouse) {
+      const z = this.zone(this.mouse.x, this.mouse.y);
+      this.canvas.style.cursor = z === 'price' ? 'ns-resize' : z === 'time' ? 'ew-resize' : '';
+    }
     this.invalidate();
   };
 
@@ -331,18 +422,27 @@ export class OfpChartView implements ChartNavigable {
     }
   };
 
-  private onDbl = () => this.resetView();
+  private onDbl = (e: MouseEvent) => {
+    const rect = this.canvas.getBoundingClientRect();
+    // double-click on the price axis = automatic price range only; anywhere else = full reset
+    if (this.zone(e.clientX - rect.left, e.clientY - rect.top) === 'price') this.autoPrice();
+    else this.resetView();
+  };
 
   /* ---------------- drawing ---------------- */
   draw() {
     const ctx = this.ctx;
     const f = this.frame();
     if (!ctx || !f || this.w < 50 || this.h < 50) return;
-    const { view, layers } = f;
+    const { view } = f;
+    // clean view: candles, axes, drawings only - the user's layer choices are kept for when it is turned off
+    const layers: LayerFlags = f.clean ? { heatmap: false, footprint: false, bubbles: false, profile: false, levels: false, orderBook: false, reversals: false, strong: false } : f.layers;
+    const liqOn = !!f.liq && layers.strong;
+    this.lane = liqOn && f.liqFlags?.lane !== false && this.w >= 640 ? LANE_W : 0;
     const tf = view.tf;
     const msBar = OFP_TF_MS[tf];
     const tick = view.recorder.tick;
-    const plotW = this.w - AXIS_W;
+    const plotW = this.plotRight();
     const plotH = this.h - TIME_H;
     const pxPerMs = this.barSpacing / msBar;
     const tEnd = this.lastBarEnd() + this.rightOffset * msBar;
@@ -391,14 +491,15 @@ export class OfpChartView implements ChartNavigable {
 
     if (layers.heatmap) this.drawHeat(ctx, f, tStart, tEnd, tickPx);
     this.drawGaps(ctx, f, tStart, tEnd, plotH);
-    if (layers.strong) this.drawBands(ctx, f, tStart, tEnd, plotW, tickPx);
+    if (liqOn) this.drawLiqBands(ctx, f, tStart, tEnd, plotW, tickPx);
+    else if (layers.strong) this.drawBands(ctx, f, tStart, tEnd, plotW, tickPx);
     if (layers.profile) this.drawProfile(ctx, f, plotW, plotH, tickPx);
     if (layers.levels) this.drawLevelLines(ctx, f, plotW);
-    if (layers.orderBook) this.drawBook(ctx, f, plotW, tickPx);
+    if (layers.orderBook && bookShown(f)) this.drawBook(ctx, f, plotW, tickPx);
     this.drawCandles(ctx, vis, msBar, pxPerMs);
     if (layers.bubbles) this.drawBubbles(ctx, f, vis, msBar, tick);
     if (layers.footprint) this.drawFootprint(ctx, vis, msBar, tick, tickPx, f.precision);
-    if (layers.strong) this.drawStrongLabels(ctx, f, plotW, plotH);
+    if (layers.strong && !liqOn && bookShown(f)) this.drawStrongLabels(ctx, f, plotW, plotH);
     if (layers.levels) this.drawLevelLabels(ctx, f, plotW, plotH);
     if (layers.reversals) this.drawReversals(ctx, f, msBar);
     this.drawDrawings(ctx, f, plotW);
@@ -413,7 +514,9 @@ export class OfpChartView implements ChartNavigable {
     }
     ctx.restore();
 
-    this.drawAxes(ctx, f, tStart, tEnd, plotW, plotH, pStep, msBar);
+    if (this.lane) this.drawLane(ctx, f, plotW, plotH);
+    else if (liqOn) this.drawLiqNotice(ctx, f, plotW);
+    this.drawAxes(ctx, { ...f, layers }, tStart, tEnd, plotW, plotH, pStep, msBar);
     this.drawCrosshair(ctx, f, plotW, plotH, msBar);
   }
 
@@ -473,7 +576,7 @@ export class OfpChartView implements ChartNavigable {
     for (const g of f.view.gaps) {
       if (g.to < tStart || g.from > tEnd) continue;
       const x0 = Math.max(0, this.x(g.from));
-      const x1 = Math.min(this.w - AXIS_W, this.x(g.to));
+      const x1 = Math.min(this.plotRight(), this.x(g.to));
       if (x1 - x0 < 1) continue;
       ctx.save();
       ctx.fillStyle = 'rgba(239,93,93,0.06)';
@@ -538,6 +641,142 @@ export class OfpChartView implements ChartNavigable {
       ctx.fillStyle = `rgb(${rgb})`;
       ctx.fillText(text, x + 6, y);
     });
+    ctx.restore();
+  }
+
+  /**
+   * STRONG / MEDIUM bands (visualization only): where the classified level was actually observed in recorded or live
+   * 15 s cells (never extended), plus a short marker at the plot edge for each level classified in the book NOW.
+   */
+  private drawLiqBands(ctx: CanvasRenderingContext2D, f: ChartFrame, tStart: number, tEnd: number, plotW: number, tickPx: number) {
+    const liq = f.liq!;
+    const fl = f.liqFlags ?? DEFAULT_LIQ_FLAGS;
+    const tick = f.view.recorder.tick;
+    const hh = Math.max(3, Math.min(10, tickPx * 1.1));
+    ctx.save();
+    for (const b of liq.bands) {
+      if (b.to < tStart || b.from > tEnd || !liqVisible(fl, b.cls, b.side)) continue;
+      const x0 = Math.max(0, this.x(b.from));
+      const x1 = Math.min(plotW, this.x(b.to));
+      if (x1 - x0 < 1) continue;
+      const y = this.y(fromTick(b.tick, tick));
+      const rgb = LIQ_RGB[b.cls][b.side];
+      if (b.cls === 'STRONG') {
+        ctx.fillStyle = `rgba(${rgb},0.82)`;
+        ctx.fillRect(x0, y - hh / 2, x1 - x0, hh);
+      } else {
+        ctx.fillStyle = `rgba(${rgb},0.30)`;
+        ctx.fillRect(x0, y - hh * 0.35, x1 - x0, hh * 0.7);
+        ctx.strokeStyle = `rgba(${rgb},0.75)`;
+        ctx.setLineDash([4, 3]);
+        ctx.strokeRect(x0 + 0.5, y - hh * 0.35 + 0.5, x1 - x0 - 1, Math.max(1, hh * 0.7 - 1));
+        ctx.setLineDash([]);
+      }
+    }
+    for (const l of f.depthCurrent === false ? [] : liq.levels) {
+      if (!liqVisible(fl, l.cls, l.side)) continue;
+      const y = this.y(l.price);
+      ctx.fillStyle = `rgba(${LIQ_RGB[l.cls][l.side]},0.95)`;
+      ctx.fillRect(plotW - 10, y - hh / 2, 10, hh);
+    }
+    ctx.restore();
+  }
+
+  /** One-line status when the lane is hidden (narrow chart / lane toggled off). */
+  private drawLiqNotice(ctx: CanvasRenderingContext2D, f: ChartFrame, plotW: number) {
+    const text = this.liqStatusText(f);
+    if (!text) return;
+    ctx.save();
+    ctx.font = '600 10px Inter, system-ui, sans-serif';
+    const tw = ctx.measureText(text).width + 12;
+    ctx.fillStyle = 'rgba(6,10,18,0.88)';
+    ctx.fillRect(plotW - tw - 6, 6, tw, 16);
+    ctx.fillStyle = '#e5a33b';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, plotW - tw, 14);
+    ctx.restore();
+  }
+
+  private liqStatusText(f: ChartFrame): string | null {
+    const liq = f.liq;
+    if (!liq) return null;
+    if (f.replay) return 'Replay: recorded averages - no live resting levels';
+    if (f.depthCurrent === false) return `Depth ${(f.depth?.state ?? 'not current').replace('_', ' ')} - no current levels`;
+    if (liq.status === 'COLLECTING') return `Collecting depth history - ${fmtRest(liq.historyMs)} of ${fmtRest(liq.params.minHistoryMs)} needed`;
+    if (liq.status === 'NO_BOOK') return `Depth ${f.depth?.state && f.depth.state !== 'LIVE' ? f.depth.state.replace('_', ' ') : 'not valid'} - no current levels`;
+    return null;
+  }
+
+  /** Right-hand liquidity label lane: header (status / freshness) and de-overlapped two-line labels. */
+  private drawLane(ctx: CanvasRenderingContext2D, f: ChartFrame, plotW: number, plotH: number) {
+    const liq = f.liq!;
+    const fl = f.liqFlags ?? DEFAULT_LIQ_FLAGS;
+    const x0 = plotW;
+    const w = this.lane;
+    ctx.save();
+    ctx.fillStyle = '#070b13';
+    ctx.fillRect(x0, 0, w, plotH);
+    ctx.strokeStyle = 'rgba(120,140,180,0.18)';
+    ctx.beginPath();
+    ctx.moveTo(x0 + 0.5, 0);
+    ctx.lineTo(x0 + 0.5, plotH);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.rect(x0, 0, w, plotH);
+    ctx.clip();
+    ctx.textBaseline = 'middle';
+    ctx.font = '700 10px Inter, system-ui, sans-serif';
+    ctx.fillStyle = '#9aa4b6';
+    ctx.fillText('LIQUIDITY · displayed contracts', x0 + 8, 11);
+    ctx.font = '500 10px Inter, system-ui, sans-serif';
+    const status = this.liqStatusText(f);
+    const d = f.depth;
+    const fresh =
+      d && d.lastChangeMs !== null
+        ? `Depth ${new Date(d.lastChangeMs).toISOString().slice(11, 19)} UTC${d.confirmedAgoMs !== null ? ` · ${Math.max(0, Math.round(d.confirmedAgoMs / 1000))} s ago` : ''}`
+        : 'Depth: no update yet';
+    ctx.fillStyle = status ? '#e5a33b' : d && d.state === 'LIVE' ? '#7fd8a6' : '#e5a33b';
+    const head = status ?? fresh;
+    if (ctx.measureText(head).width > w - 14 && head.includes(' - ')) {
+      // two lines rather than clipping the status at the lane edge
+      const [a, ...rest] = head.split(' - ');
+      ctx.fillText(a!, x0 + 8, 25);
+      ctx.fillText(rest.join(' - '), x0 + 8, 38);
+    } else ctx.fillText(head, x0 + 8, 25);
+    if (!status && liq.strongMin !== null && liq.mediumMin !== null) {
+      ctx.fillStyle = '#6f7a8e';
+      ctx.fillText(`STRONG ≥ ${fmtQty(liq.strongMin)} · MEDIUM ≥ ${fmtQty(liq.mediumMin)}`, x0 + 8, 38);
+    }
+    const levels = f.depthCurrent === false ? [] : liq.levels.filter((l) => liqVisible(fl, l.cls, l.side));
+    const top = 56;
+    const slots = laneLabelSlots(levels.map((l) => this.y(l.price)), 30, top, plotH - 16);
+    levels.forEach((l, i) => {
+      const y = slots[i];
+      if (y === null || y === undefined) return;
+      const rgb = LIQ_RGB[l.cls][l.side];
+      const ly = this.y(l.price);
+      // leader from the price (at the plot edge) to the label
+      ctx.strokeStyle = `rgba(${rgb},0.7)`;
+      ctx.beginPath();
+      ctx.moveTo(x0, ly);
+      ctx.lineTo(x0 + 6, y);
+      ctx.stroke();
+      ctx.fillStyle = 'rgba(10,15,26,0.96)';
+      ctx.fillRect(x0 + 6, y - 13, w - 10, 26);
+      ctx.fillStyle = `rgb(${rgb})`;
+      ctx.fillRect(x0 + 6, y - 13, 3, 26);
+      ctx.font = '700 10px Inter, system-ui, sans-serif';
+      ctx.fillText(`${l.cls} ${l.side} ${l.price.toFixed(f.precision)}`, x0 + 13, y - 6);
+      ctx.font = '500 10px Inter, system-ui, sans-serif';
+      ctx.fillStyle = '#c4ccda';
+      const rest = `rest ${l.persistAtLeast ? '≥ ' : ''}${fmtRest(l.persistMs)}`;
+      ctx.fillText(fl.qty ? `${fmtQty(l.size)} contracts · ${rest}` : rest, x0 + 13, y + 6);
+    });
+    const hidden = slots.filter((s) => s === null).length;
+    if (hidden) {
+      ctx.fillStyle = '#6f7a8e';
+      ctx.fillText(`+${hidden} more (see Liquidity Strength)`, x0 + 8, plotH - 6);
+    }
     ctx.restore();
   }
 
@@ -818,23 +1057,24 @@ export class OfpChartView implements ChartNavigable {
     ctx.restore();
   }
 
-  private drawAxes(ctx: CanvasRenderingContext2D, f: ChartFrame, tStart: number, tEnd: number, plotW: number, plotH: number, pStep: number, msBar: number) {
+  private drawAxes(ctx: CanvasRenderingContext2D, f: ChartFrame, tStart: number, tEnd: number, _plotW: number, plotH: number, pStep: number, msBar: number) {
+    const ax = this.w - AXIS_W; // price axis (right of the liquidity lane)
     const { lo, hi } = this.lastScale;
     ctx.fillStyle = '#070a10';
-    ctx.fillRect(plotW, 0, AXIS_W, this.h);
+    ctx.fillRect(ax, 0, AXIS_W, this.h);
     ctx.fillRect(0, plotH, this.w, TIME_H);
     ctx.strokeStyle = 'rgba(120,140,180,0.18)';
     ctx.beginPath();
-    ctx.moveTo(plotW + 0.5, 0);
-    ctx.lineTo(plotW + 0.5, plotH);
+    ctx.moveTo(ax + 0.5, 0);
+    ctx.lineTo(ax + 0.5, plotH);
     ctx.moveTo(0, plotH + 0.5);
-    ctx.lineTo(plotW, plotH + 0.5);
+    ctx.lineTo(ax, plotH + 0.5);
     ctx.stroke();
     ctx.font = '500 11px Inter, system-ui, sans-serif';
     ctx.fillStyle = C.axis;
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
-    for (let p = Math.ceil(lo / pStep) * pStep; p <= hi; p += pStep) ctx.fillText(p.toFixed(f.precision), plotW + 8, this.y(p));
+    for (let p = Math.ceil(lo / pStep) * pStep; p <= hi; p += pStep) ctx.fillText(p.toFixed(f.precision), ax + 8, this.y(p));
     // time axis (UTC)
     const tStep = [60_000, 300_000, 900_000, 1_800_000, 3_600_000, 7_200_000, 14_400_000, 43_200_000].find((s) => s * this.lastScale.pxPerMs >= 80) ?? 86_400_000;
     ctx.textAlign = 'center';
@@ -850,9 +1090,9 @@ export class OfpChartView implements ChartNavigable {
         const y = ys[i]!;
         if (y < 0 || y > plotH) return;
         ctx.fillStyle = l.name === 'POC' ? '#5a3a06' : '#13235a';
-        ctx.fillRect(plotW + 1, y - 7, AXIS_W - 2, 14);
+        ctx.fillRect(ax + 1, y - 7, AXIS_W - 2, 14);
         ctx.fillStyle = l.name === 'POC' ? '#ffd27a' : '#b3c8ff';
-        ctx.fillText(`${l.name} ${l.price.toFixed(f.precision)}`, plotW + 4, y);
+        ctx.fillText(`${l.name} ${l.price.toFixed(f.precision)}`, ax + 4, y);
       });
     }
     // last price tag + bar countdown
@@ -865,23 +1105,23 @@ export class OfpChartView implements ChartNavigable {
       ctx.setLineDash([2, 3]);
       ctx.beginPath();
       ctx.moveTo(0, Math.round(y) + 0.5);
-      ctx.lineTo(plotW, Math.round(y) + 0.5);
+      ctx.lineTo(ax, Math.round(y) + 0.5);
       ctx.stroke();
       ctx.setLineDash([]);
       ctx.fillStyle = up ? '#14a35f' : '#c63447';
-      ctx.fillRect(plotW + 1, y - 10, AXIS_W - 2, 20);
+      ctx.fillRect(ax + 1, y - 10, AXIS_W - 2, 20);
       ctx.fillStyle = '#fff';
       ctx.textAlign = 'left';
       ctx.font = '700 11px Inter, system-ui, sans-serif';
-      ctx.fillText(last.toFixed(f.precision), plotW + 6, y);
+      ctx.fillText(last.toFixed(f.precision), ax + 6, y);
       const left = Math.max(0, lastBar.t + msBar - f.now);
       if (!f.replay && left > 0 && left <= msBar) {
         const s = Math.ceil(left / 1000);
         ctx.fillStyle = '#0d1a2b';
-        ctx.fillRect(plotW + 1, y + 10, AXIS_W - 2, 16);
+        ctx.fillRect(ax + 1, y + 10, AXIS_W - 2, 16);
         ctx.fillStyle = '#9fc2ff';
         ctx.font = '600 10px Inter, system-ui, sans-serif';
-        ctx.fillText(`${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`, plotW + 6, y + 18);
+        ctx.fillText(`${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`, ax + 6, y + 18);
       }
     }
   }
@@ -904,13 +1144,13 @@ export class OfpChartView implements ChartNavigable {
     ctx.stroke();
     ctx.setLineDash([]);
     ctx.fillStyle = '#273142';
-    ctx.fillRect(plotW + 1, m.y - 9, AXIS_W - 2, 18);
+    ctx.fillRect(this.w - AXIS_W + 1, m.y - 9, AXIS_W - 2, 18);
     ctx.fillRect(m.x - 34, plotH + 2, 68, TIME_H - 4);
     ctx.fillStyle = '#fff';
     ctx.font = '600 11px Inter, system-ui, sans-serif';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
-    ctx.fillText(price.toFixed(f.precision), plotW + 6, m.y);
+    ctx.fillText(price.toFixed(f.precision), this.w - AXIS_W + 6, m.y);
     ctx.textAlign = 'center';
     ctx.fillText(fmtUtc(t), m.x, plotH + TIME_H / 2);
     ctx.restore();
@@ -920,8 +1160,10 @@ export class OfpChartView implements ChartNavigable {
     const bar = f.view.bars.find((b) => b.t === bt) ?? null;
     const k = toTick(price, tick);
     const lv = bar?.levels.get(k) ?? null;
-    const bid = f.view.book.bids.find(([p]) => toTick(p, tick) === k);
-    const ask = f.view.book.asks.find(([p]) => toTick(p, tick) === k);
-    this.cb.onHover?.({ t, price: fromTick(k, tick), bar, level: lv, resting: bid ? { side: 'BID', size: bid[1] } : ask ? { side: 'ASK', size: ask[1] } : null });
+    const shown = bookShown(f);
+    const bid = shown ? f.view.book.bids.find(([p]) => toTick(p, tick) === k) : undefined;
+    const ask = shown ? f.view.book.asks.find(([p]) => toTick(p, tick) === k) : undefined;
+    const liq = f.depthCurrent === false ? null : (f.liq?.levels.find((l) => l.tick === k) ?? null);
+    this.cb.onHover?.({ t, price: fromTick(k, tick), bar, level: lv, resting: bid ? { side: 'BID', size: bid[1] } : ask ? { side: 'ASK', size: ask[1] } : null, liq });
   }
 }

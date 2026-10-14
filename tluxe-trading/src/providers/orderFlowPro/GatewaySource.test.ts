@@ -1009,3 +1009,198 @@ describe('Phase 3 - start-up state honesty under slow responses (regression: bro
     stop();
   });
 });
+
+describe('depth freshness: a book that depth polls stop confirming is withdrawn (never shown / recorded as current)', () => {
+  const DEPTH = /\/api\/ibkr\/(book|updates)/;
+
+  it('depth request failures (HTTP 503) -> gap from the last confirmation within depthConfirmMaxMs; trades stay LIVE', async () => {
+    const { gw, src } = setup();
+    gw.addTrade(4200.0, 1, 'B', T0 - 1000);
+    const r = recorder();
+    const stop = src.subscribe('GC', r.sink);
+    await tick(3000);
+    expect(r.last().provenance!.depth.state).toBe('LIVE');
+    const failFrom = Date.now();
+    gw.fail = 503;
+    gw.failPaths = DEPTH;
+    await tick(8000);
+    const g = r.of('gap').find((x) => /No IBKR depth confirmation/.test(x.reason));
+    expect(g).toBeDefined();
+    expect(g!.reason).toMatch(/HTTP 503.*book withdrawn; last confirmed \d\d:\d\d:\d\d UTC/);
+    expect(g!.from).toBeLessThanOrEqual(failFrom + 1000); // starts at the last confirmed poll, not "now"
+    const st = r.last();
+    expect(st.provenance!.depth.state).toBe('DISCONNECTED'); // well before the 25 s stream timeout
+    expect(st.provenance!.depth.detail).toMatch(/No IBKR depth confirmation/);
+    expect(st.feed).toBe('LIVE');
+    stop();
+  });
+
+  it('network failure of depth -> withdrawn as well', async () => {
+    const { gw, src } = setup();
+    gw.addTrade(4200.0, 1, 'B', T0 - 1000);
+    const r = recorder();
+    const stop = src.subscribe('GC', r.sink);
+    await tick(3000);
+    gw.fail = 'network';
+    gw.failPaths = DEPTH;
+    await tick(8000);
+    expect(r.of('gap').some((x) => /No IBKR depth confirmation.*Failed to fetch/.test(x.reason))).toBe(true);
+    stop();
+  });
+
+  it('recovery: a fresh snapshot is fetched and the book is current again (nothing carried over)', async () => {
+    const { gw, src } = setup();
+    gw.addTrade(4200.0, 1, 'B', T0 - 1000);
+    const r = recorder();
+    const stop = src.subscribe('GC', r.sink);
+    await tick(3000);
+    gw.fail = 503;
+    gw.failPaths = DEPTH;
+    await tick(8000);
+    const books = () => gw.requests.filter((x) => /\/api\/ibkr\/book/.test(x.path)).length;
+    const nBooks = books();
+    const nSnap = r.of('book').length;
+    gw.fail = null;
+    gw.failPaths = null;
+    await tick(40_000); // back-off after the failures is bounded
+    expect(books()).toBeGreaterThan(nBooks);
+    expect(r.of('book').length).toBeGreaterThan(nSnap);
+    expect(r.last().provenance!.depth.state).toBe('LIVE');
+    expect(r.last().provenance!.depth.detail ?? '').not.toMatch(/withdrawn/);
+    stop();
+  });
+
+  it('a quiet book (successful polls, no changes, idle back-off) is never withdrawn', async () => {
+    const { gw, src } = setup();
+    gw.addTrade(4200.0, 1, 'B', T0 - 1000);
+    const r = recorder();
+    const stop = src.subscribe('GC', r.sink);
+    await tick(90_000);
+    expect(r.of('gap').filter((x) => /No IBKR depth confirmation/.test(x.reason))).toEqual([]);
+    expect(['LIVE', 'QUIET']).toContain(r.last().provenance!.depth.state);
+    stop();
+  });
+
+  it('one transient failure shorter than the bound does not withdraw the book', async () => {
+    const { gw, src } = setup();
+    gw.addTrade(4200.0, 1, 'B', T0 - 1000);
+    const r = recorder();
+    const stop = src.subscribe('GC', r.sink);
+    await tick(3000);
+    gw.fail = 503;
+    gw.failPaths = DEPTH;
+    await tick(1100);
+    gw.fail = null;
+    gw.failPaths = null;
+    await tick(15_000);
+    expect(r.of('gap').filter((x) => /No IBKR depth confirmation/.test(x.reason))).toEqual([]);
+    expect(r.last().provenance!.depth.state).toBe('LIVE');
+    stop();
+  });
+
+  it('engine: the withdrawn book is no longer current and the outage is not recorded as valid book time', async () => {
+    const { gw, src } = setup();
+    gw.addTrade(4200.0, 1, 'B', T0 - 1000);
+    const ctl = new OfpController(src);
+    const release = ctl.acquire('GC');
+    await tick(5000);
+    const eng = ctl.engines.GC;
+    expect(eng.view('1m', 'ETH').bookValid).toBe(true);
+    const before = eng.view('1m', 'ETH').recorder.coverage(Date.now(), 3600_000).validMs;
+    gw.fail = 503;
+    gw.failPaths = DEPTH;
+    await tick(30_000);
+    const v = eng.view('1m', 'ETH');
+    expect(v.bookValid).toBe(false);
+    expect(v.book).toEqual({ bids: [], asks: [] });
+    expect(v.strong).toEqual([]);
+    const added = v.recorder.coverage(Date.now(), 3600_000).validMs - before;
+    // at most the confirmation bound (+ one poll) of the 30 s outage may have been integrated before the withdrawal
+    expect(added).toBeLessThanOrEqual(src.limits.depthConfirmMaxMs + 2000);
+    release();
+    ctl.dispose();
+  });
+});
+
+describe('depth freshness across a contract roll (no previous-contract watchdog state survives)', () => {
+  const DEPTH = /\/api\/ibkr\/(book|updates)/;
+  /** Environment that tracks the depth confirmation timers (identified by their arming call site). */
+  function tracked() {
+    const gw = new FakeGateway();
+    const watch = new Set<ReturnType<typeof setTimeout>>();
+    const env = {
+      fetch: gw.fetch as typeof fetch,
+      visibility: fakeVisibility(),
+      random: () => 0.5,
+      base: '',
+      setTimeout: (fn: () => void, ms: number) => {
+        const isWatch = /armDepthWatch/.test(new Error().stack ?? '');
+        const h: ReturnType<typeof setTimeout> = setTimeout(() => {
+          watch.delete(h);
+          fn();
+        }, ms);
+        if (isWatch) watch.add(h);
+        return h;
+      },
+      clearTimeout: (h: ReturnType<typeof setTimeout>) => {
+        watch.delete(h);
+        clearTimeout(h);
+      },
+    };
+    return { gw, watch, src: new GatewaySource(env, {}) };
+  }
+  const roll = (gw: FakeGateway) => {
+    gw.contract = 'GCG7';
+    gw.depthContract = 'GCG7';
+    gw.trades = [];
+    gw.addTrade(4230.0, 2, 'B', Date.now());
+  };
+
+  it('the old contract confirmation timer is cleared by the reset; the new contract arms its own; teardown clears it', async () => {
+    const { gw, watch, src } = tracked();
+    gw.addTrade(4200.0, 1, 'B', T0 - 1000);
+    const r = recorder();
+    let atReset = -1;
+    const stop = src.subscribe('GC', { ...r.sink, reset: (x) => (r.sink.reset!(x), queueMicrotask(() => (atReset = watch.size))) });
+    await tick(3000);
+    expect(watch.size).toBe(1); // armed for the valid GCZ6 book
+    roll(gw);
+    await tick(4000);
+    expect(r.resets.some((x) => /GCZ6 → GCG7/.test(x))).toBe(true);
+    expect(atReset).toBe(0); // nothing of GCZ6 left pending at the reset
+    expect(r.last().contract!.localSymbol).toBe('GCG7');
+    expect(r.last().provenance!.depth).toMatchObject({ state: 'LIVE', contract: 'GCG7' });
+    expect(watch.size).toBe(1); // GCG7's own deadline
+    stop();
+    expect(watch.size).toBe(0);
+  });
+
+  it('withdrawal then roll: the new contract never shows the old reason / confirmation time; correct status; recovers', async () => {
+    const { gw, src } = tracked();
+    gw.addTrade(4200.0, 1, 'B', T0 - 1000);
+    const r = recorder();
+    const stop = src.subscribe('GC', r.sink);
+    await tick(3000);
+    gw.fail = 503;
+    gw.failPaths = DEPTH;
+    await tick(8000);
+    expect(r.last().provenance!.depth.detail).toMatch(/No IBKR depth confirmation.*last confirmed/);
+    const resetAt = r.statuses.length;
+    roll(gw); // depth still failing for the new contract
+    await tick(4000);
+    expect(r.resets.some((x) => /GCZ6 → GCG7/.test(x))).toBe(true);
+    const g7 = r.statuses.slice(resetAt).filter((x) => x.contract?.localSymbol === 'GCG7');
+    expect(g7.length).toBeGreaterThan(0);
+    for (const x of g7) {
+      expect(x.provenance!.depth.detail ?? '').not.toMatch(/No IBKR depth confirmation|last confirmed/);
+      expect(x.provenance!.depth.contract).not.toBe('GCZ6');
+      expect(['DISCONNECTED', 'UNAVAILABLE']).toContain(x.provenance!.depth.state);
+    }
+    expect(r.last().provenance!.depth.detail).toMatch(/gateway depth request failing \(HTTP 503\)/);
+    gw.fail = null;
+    gw.failPaths = null;
+    await tick(40_000);
+    expect(r.last().provenance!.depth).toMatchObject({ state: 'LIVE', contract: 'GCG7' });
+    stop();
+  });
+});

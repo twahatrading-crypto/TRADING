@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { STRONG_PARAMS, type Alert, type OfpView } from '../../engines/orderFlowPro/engine';
 import { EVIDENCE_LABEL, type ReversalSignal } from '../../engines/orderFlowPro/reversal';
+import type { LiquidityOverlay } from '../../engines/orderFlowPro/liquidityClass';
 import type { CapabilityState, SourceStatus, StreamProvenance } from '../../engines/orderFlowPro/types';
 import { DEFAULT_OFP_LINK, isLoopbackUrl, loadOfpLink, OFP_BACKEND_AVAILABLE, saveOfpLink, type OfpLinkConfig } from '../../providers/orderFlowPro/config';
 import { ProfileMini } from './OfpCanvases';
-import { feedLabel, fmtExpiry, fmtNum, fmtSigned, fmtUtcTime } from './ofpFormat';
+import { feedLabel, fmtExpiry, fmtNum, fmtSigned, fmtUtcTime, type DepthFreshness } from './ofpFormat';
+import type { SeedState } from './liquidityHistory';
+import { fmtQty, fmtRest } from './ofpLayout';
 import { sourceText } from './ofpSourceText';
 
 function Empty({ text }: { text: string }) {
@@ -13,17 +16,72 @@ function Empty({ text }: { text: string }) {
 
 /* ---------------- right column ---------------- */
 
+/**
+ * Legend + status of the STRONG / MEDIUM liquidity overlay (visualization only): colours, what BID / ASK and the
+ * quantities mean, the current thresholds and where the history came from.
+ */
+export function LiquidityLegend({ liq, replay, calcMs, seed, depthLabel = null }: { liq: LiquidityOverlay; replay: boolean; calcMs: number; seed: SeedState | null; depthLabel?: string | null }) {
+  const status = replay
+    ? 'replay: recorded averages only'
+    : depthLabel
+      ? `${depthLabel} - no current levels`
+      : liq.status === 'COLLECTING'
+      ? `Collecting depth history ${fmtRest(liq.historyMs)} / ${fmtRest(liq.params.minHistoryMs)} - no class shown yet`
+      : liq.status === 'NO_BOOK'
+        ? 'depth not valid now - no current levels'
+        : `STRONG ≥ ${fmtQty(liq.strongMin!)} · MEDIUM ≥ ${fmtQty(liq.mediumMin!)} contracts`;
+  const src = `history ${fmtRest(liq.historyMs)}: recorded ${fmtRest(liq.recordedMs)} + live ${fmtRest(liq.liveMs)}${seed?.state === 'UNAVAILABLE' ? ` (${seed.detail})` : seed?.state === 'LOADING' ? ' (loading recorded depth…)' : ''}`;
+  return (
+    <span className="ofp-liqlegend" data-testid="ofp-liq-legend">
+      <span className="ofp-liqkey ofp-liqkey--sb">STRONG BID</span>
+      <span className="ofp-liqkey ofp-liqkey--mb">MEDIUM BID</span>
+      <span className="ofp-liqkey ofp-liqkey--sa">STRONG ASK</span>
+      <span className="ofp-liqkey ofp-liqkey--ma">MEDIUM ASK</span>
+      <span className={liq.status === 'READY' && !replay && !depthLabel ? 'dim' : 'warn'} data-testid="ofp-liq-status">
+        {status}
+      </span>
+      <span
+        className="ofp-liqinfo"
+        tabIndex={0}
+        title={[
+          'BID = resting buy-side liquidity · ASK = resting sell-side liquidity.',
+          'Quantities are IBKR displayed aggregate contracts per price level - not a count of individual orders.',
+          `STRONG = displayed size ≥ the ${Math.round(liq.params.strongPct * 100)}th percentile of this instrument's recorded book (time-weighted 15 s cells, last ${Math.round(liq.params.lookbackMs / 60_000)} min) and resting ≥ ${liq.params.minPersistMs / 1000} s.`,
+          `MEDIUM = ≥ the ${Math.round(liq.params.mediumPct * 100)}th percentile and resting ≥ ${liq.params.mediumPersistMs / 1000} s. Nothing is classified with less than ${Math.round(liq.params.minHistoryMs / 60_000)} min of valid history.`,
+          'Label "rest" = time this page observed the level at or above its class size (15 s cells, never overstated; "≥" = already there when observation began). The table\'s "Resting" = time the price level was displayed at any size. Bands appear only where the level was recorded.',
+          'Resting liquidity can be pulled at any time; a class does not mean a trade will happen at that price. Visualization only - alerts and the reversal detector are unchanged.',
+          `${src} · classified in ${calcMs.toFixed(1)} ms`,
+        ].join('\n')}
+      >
+        ⓘ {src}
+      </span>
+    </span>
+  );
+}
+
 const fmtDur = (ms: number) => (ms >= 3_600_000 ? `${(ms / 3_600_000).toFixed(1)} h` : ms >= 60_000 ? `${Math.floor(ms / 60_000)}m ${String(Math.floor((ms % 60_000) / 1000)).padStart(2, '0')}s` : `${Math.round(ms / 1000)} s`);
 
 /**
  * Visible IBKR book: cumulative depth from the touch, displayed size with a proportional bar, spread row between the
  * best ask and best bid, and a marker on levels that currently qualify as strong resting liquidity.
  */
-export function OrderBookPanel({ view, precision, rows }: { view: OfpView; precision: number; rows: number }) {
-  const asksNear = view.book.asks.slice(0, rows); // ascending from best ask
-  const bids = view.book.bids.slice(0, rows); // descending from best bid
+/** The last book that was CURRENT (kept by the page for one contract): shown only dimmed and labelled not current. */
+export interface LastConfirmedBook {
+  /** Time of the book's last change (IBKR depth service time; engine time for the local backend). */
+  t: number;
+  bids: Array<[number, number]>;
+  asks: Array<[number, number]>;
+}
+
+export function OrderBookPanel({ view, precision, rows, depth, lastBook = null }: { view: OfpView; precision: number; rows: number; depth?: DepthFreshness; lastBook?: LastConfirmedBook | null }) {
+  // A book is shown as current only under the shared depth-freshness rule; otherwise the last confirmed book (if
+  // any) is shown dimmed, timestamped and labelled NOT CURRENT - never as live liquidity.
+  const stale = depth ? !depth.current : !view.bookValid;
+  const book = !stale ? view.book : (lastBook ?? { bids: [], asks: [] });
+  const asksNear = book.asks.slice(0, rows); // ascending from best ask
+  const bids = book.bids.slice(0, rows); // descending from best bid
   const max = Math.max(1, ...asksNear.map((a) => a[1]), ...bids.map((b) => b[1]));
-  const strong = new Set(view.strong.map((x) => `${x.side}:${x.tick}`));
+  const strong = new Set(stale ? [] : view.strong.map((x) => `${x.side}:${x.tick}`));
   const tick = view.recorder.tick;
   const key = (side: string, p: number) => `${side}:${Math.round(p / tick)}`;
   let cum = 0;
@@ -53,7 +111,14 @@ export function OrderBookPanel({ view, precision, rows }: { view: OfpView; preci
         else userScrolled.current = true;
       }}
     >
-      <table className="ofp-book" aria-label="Order book">
+      {stale && depth && (
+        <div className={`ofp-stale ofp-stale--${depth.tone}`} data-testid="ofp-book-stale" role="status">
+          <b>{depth.label} · NOT CURRENT</b>
+          {lastBook ? <span> · showing the last confirmed book (historical; last change {fmtUtcTime(lastBook.t)} UTC)</span> : <span> · no confirmed book to show</span>}
+          {depth.detail && <span className="dim"> · {depth.detail}</span>}
+        </div>
+      )}
+      <table className={`ofp-book${stale && lastBook ? ' is-stale' : ''}`} aria-label={stale && lastBook ? 'Last confirmed order book (not current)' : 'Order book'}>
         <thead>
           <tr>
             <th title="Cumulative bid size from the best bid">Cum</th>
@@ -64,7 +129,7 @@ export function OrderBookPanel({ view, precision, rows }: { view: OfpView; preci
           </tr>
         </thead>
         <tbody>
-          {!view.bookValid && (
+          {stale && !lastBook && (
             <tr>
               <td colSpan={5} className="ofp-book__none">
                 No valid IBKR book {view.status.feed === 'DEMO' ? '' : '(not subscribed / not LIVE)'}
@@ -83,7 +148,7 @@ export function OrderBookPanel({ view, precision, rows }: { view: OfpView; preci
               <td className="dim">{c}</td>
             </tr>
           ))}
-          {view.bookValid && (
+          {!stale && (
             <tr className="ofp-book__spread">
               <td colSpan={5}>{spread !== null ? `Spread ${spread.toFixed(precision)} (${Math.round(spread / tick)} tick${Math.round(spread / tick) === 1 ? '' : 's'})` : 'Spread —'}</td>
             </tr>
@@ -114,7 +179,9 @@ const STRENGTH_LOOKBACK_MS = 30 * 60_000;
  * time, 30-min time-weighted average, observed adds / reductions. Book coverage is shown first; metrics the IBKR
  * price-level feed cannot provide are listed as unavailable.
  */
-export function LiquidityStrength({ view, precision, now }: { view: OfpView; precision: number; now: number }) {
+export function LiquidityStrength({ view, precision, now, liq = null, depth }: { view: OfpView; precision: number; now: number; liq?: LiquidityOverlay | null; depth?: DepthFreshness }) {
+  const current = depth ? depth.current : view.bookValid;
+  const cls = new Map((liq?.levels ?? []).map((l) => [`${l.side}${l.tick}`, l]));
   const rec = view.recorder;
   const cov = rec.coverage(now, STRENGTH_LOOKBACK_MS);
   const levels = rec.observedLevels(now, { ...STRONG_PARAMS, lookbackMs: STRENGTH_LOOKBACK_MS });
@@ -132,18 +199,24 @@ export function LiquidityStrength({ view, precision, now }: { view: OfpView; pre
         </div>
         <div>
           <dt>Levels observed now</dt>
-          <dd>{view.bookValid ? `${bids} bid · ${asks} ask` : '—'}</dd>
+          <dd>{current ? `${bids} bid · ${asks} ask` : '—'}</dd>
         </div>
         <div>
           <dt>Median displayed size</dt>
-          <dd>{median ?? '—'}</dd>
+          <dd>{current ? (median ?? '—') : '—'}</dd>
         </div>
         <div>
           <dt>Recorded since</dt>
           <dd>{cov.firstRecorded !== null ? `${fmtUtcTime(cov.firstRecorded).slice(0, 5)} UTC` : '—'}</dd>
         </div>
       </dl>
-      {levels.length === 0 ? (
+      {!current && depth ? (
+        <div className={`ofp-stale ofp-stale--${depth.tone}`} data-testid="ofp-strength-stale" role="status">
+          <b>{depth.label} · no current levels</b>
+          {depth.detail && <span className="dim"> · {depth.detail}</span>}
+          <span className="dim"> · coverage above is recorded history only</span>
+        </div>
+      ) : levels.length === 0 ? (
         <Empty text={view.bookValid ? 'Book is valid but empty' : 'No valid book - nothing observed to rank'} />
       ) : (
         <table className="ofp-table ofp-table--tight">
@@ -151,7 +224,8 @@ export function LiquidityStrength({ view, precision, now }: { view: OfpView; pre
             <tr>
               <th>Side</th>
               <th>Price</th>
-              <th title="Displayed size now">Size</th>
+              <th title="STRONG / MEDIUM class of the chart overlay (visualization only - see the legend)">Class</th>
+              <th title="Displayed aggregate contracts at this price level now (not an order count)">Contracts</th>
               <th title="Displayed size / median of the visible book (not a probability)">Strength</th>
               <th title="Time this level has been displayed continuously">Resting</th>
               <th title="Share of the last 30 min of VALID book time this price/side was displayed">Present</th>
@@ -164,6 +238,7 @@ export function LiquidityStrength({ view, precision, now }: { view: OfpView; pre
               <tr key={`${l.side}${l.tick}`} className={l.strong ? 'is-strong' : ''}>
                 <td className={l.side === 'BID' ? 'bid' : 'ask'}>{l.side}</td>
                 <td>{l.price.toFixed(precision)}</td>
+                <td className={cls.get(`${l.side}${l.tick}`) ? (l.side === 'BID' ? 'bid' : 'ask') : 'dim'}>{cls.get(`${l.side}${l.tick}`)?.cls ?? (liq?.status === 'COLLECTING' ? '…' : '—')}</td>
                 <td>{l.size}</td>
                 <td>
                   <span className="ofp-meter">

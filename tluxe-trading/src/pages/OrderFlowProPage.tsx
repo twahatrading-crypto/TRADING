@@ -1,12 +1,16 @@
-import { Crosshair, Eraser, Home, LayoutGrid, Maximize2, Minimize2, Minus, MousePointer2, Pause, Play, Radio, RotateCcw, Settings2, Square, TrendingUp, ZoomIn, ZoomOut } from 'lucide-react';
+import { Crosshair, Eraser, Expand, FoldVertical, Home, LayoutGrid, Maximize2, Minimize2, Minus, MousePointer2, MoveVertical, Pause, Play, Radio, RotateCcw, Settings2, Shrink, Square, TrendingUp, UnfoldVertical, ZoomIn, ZoomOut } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react';
 import { ChartStage } from '../components/chart/ChartStage';
 import { MiniSeries, DepthHeatmap } from '../components/orderFlowPro/OfpCanvases';
-import { DEFAULT_LAYERS, OfpChartView, type BubbleDensity, type ChartFrame, type DrawTool, type Drawing, type HoverInfo, type LayerFlags } from '../components/orderFlowPro/OfpChartView';
-import { AbsorptionTable, AlertsList, DiagnosticsPanel, HistoryCoverage, LiquidityStrength, OrderBookPanel, ReversalTable, SessionStatsPanel, SessionVpPanel, StrongTable, TradesTable } from '../components/orderFlowPro/OfpPanels';
+import { DEFAULT_LAYERS, DEFAULT_LIQ_FLAGS, OfpChartView, type BubbleDensity, type ChartFrame, type DrawTool, type Drawing, type HoverInfo, type LayerFlags, type LiqFlags } from '../components/orderFlowPro/OfpChartView';
+import { AbsorptionTable, AlertsList, DiagnosticsPanel, HistoryCoverage, LiquidityLegend, LiquidityStrength, OrderBookPanel, ReversalTable, SessionStatsPanel, SessionVpPanel, StrongTable, TradesTable, type LastConfirmedBook } from '../components/orderFlowPro/OfpPanels';
+import { cachedSeed, historyContract, loadRecordedSeed, usableSeed, type SeedState } from '../components/orderFlowPro/liquidityHistory';
+import { fmtQty, fmtRest } from '../components/orderFlowPro/ofpLayout';
+import { DEFAULT_LIQ_PARAMS, liquidityOverlay } from '../engines/orderFlowPro/liquidityClass';
+import { gatewaySourceEnabled } from '../providers/orderFlowPro/activation';
 import { replayText, sourceText } from '../components/orderFlowPro/ofpSourceText';
 import { OfpSplitter } from '../components/orderFlowPro/OfpSplitter';
-import { feedLabel, fmtExpiry, fmtNum, fmtSigned, fmtUtcTime, HEAT_LEGEND, scheduleLabel } from '../components/orderFlowPro/ofpFormat';
+import { depthFreshness, feedLabel, fmtExpiry, fmtNum, fmtSigned, fmtUtcTime, HEAT_LEGEND, scheduleLabel } from '../components/orderFlowPro/ofpFormat';
 import { INTENSITY_SCALES, isOfpRoot, isOfpSession, isOfpTf, OFP_PRECISION, OFP_ROOTS, OFP_SESSIONS, OFP_TFS, type IntensityScale, type OfpSession } from '../engines/orderFlowPro/config';
 import { isLiveFeed } from '../engines/orderFlowPro/engine';
 import { globexSchedule } from '../engines/orderFlowPro/nyTime';
@@ -45,11 +49,22 @@ interface Panes {
   side: number;
   metrics: number;
   bottom: number;
+  /** Chart area height in the standard (non-workspace) layout; 0 = responsive default. */
+  chart?: number;
 }
 const DEFAULT_PANES: Panes = { side: 470, metrics: 104, bottom: 232 };
-const PANE_LIMITS: Record<keyof Panes, [number, number]> = { side: [300, 640], metrics: [72, 220], bottom: [150, 460] };
+const PANE_LIMITS: Record<keyof Panes, [number, number]> = { side: [300, 640], metrics: [72, 220], bottom: [150, 460], chart: [380, 1600] };
 const isPanes = (v: unknown): v is Panes => !!v && typeof v === 'object' && (['side', 'metrics', 'bottom'] as const).every((k) => typeof (v as Record<string, unknown>)[k] === 'number');
 const clampPane = (k: keyof Panes, v: number) => Math.round(Math.min(PANE_LIMITS[k][1], Math.max(PANE_LIMITS[k][0], v)));
+const isLiqFlags = (v: unknown): v is LiqFlags => !!v && typeof v === 'object' && Object.keys(DEFAULT_LIQ_FLAGS).every((k) => typeof (v as Record<string, unknown>)[k] === 'boolean');
+const LIQ_TOGGLES: Array<[keyof LiqFlags, string, string]> = [
+  ['strong', 'Strong', 'STRONG resting liquidity'],
+  ['medium', 'Medium', 'MEDIUM resting liquidity'],
+  ['bid', 'Bid', 'BID = resting buy-side liquidity'],
+  ['ask', 'Ask', 'ASK = resting sell-side liquidity'],
+  ['qty', 'Contracts', 'Displayed contract quantity in the labels'],
+  ['lane', 'Labels', 'Liquidity label lane right of the candles'],
+];
 
 const LAYER_LABEL: Array<[keyof LayerFlags, string]> = [
   ['heatmap', 'Heatmap'],
@@ -97,6 +112,12 @@ export function OrderFlowProPage() {
   const [replaySpan, setReplaySpan] = useState<number>(60);
   const [replayErr, setReplayErr] = useState<string | null>(null);
   const [, setLinkVer] = useState(0);
+  const [liqFlags, setLiqFlags] = usePersistentState<LiqFlags>('tluxe.ofp.liq.v1', { ...DEFAULT_LIQ_FLAGS }, isLiqFlags);
+  const [clean, setClean] = usePersistentState<boolean>('tluxe.ofp.clean.v1', false, isBool);
+  // Expanded chart: a chart-only overlay of the browser window (not persisted; Escape exits). The canvas is not
+  // remounted, so zoom / pan survive expanding and restoring; the layout state is never touched.
+  const [expanded, setExpanded] = useState(false);
+  const [seeds, setSeeds] = useState<Record<string, SeedState>>({});
 
   // One ref-counted subscription per root (StrictMode / HMR safe; the controller lives outside React).
   useEffect(() => ctl.acquire(root), [ctl, root]);
@@ -116,8 +137,73 @@ export function OrderFlowProPage() {
   const sched = scheduleLabel(globexSchedule(now || Date.now()));
   const pane = livePanes ?? panes;
 
+  // ---- STRONG / MEDIUM liquidity (visualization only; the existing strong detector, alerts and reversals are untouched)
+  const depthProv = st.provenance?.depth ?? null;
+  const depthContract = depthProv?.contract ?? null;
+  // Contract-safe liquidity history: ONLY the verified trade (chart) contract, and only while the depth feed reports the
+  // same contract and nothing reports a mismatch. Otherwise no history is requested or used (and no STRONG / MEDIUM
+  // overlay is drawn at all), so another contract's recorded liquidity can never appear on this chart.
+  const contractMismatch = st.feed === 'CONTRACT_MISMATCH' || depthProv?.state === 'CONTRACT_MISMATCH' || (!!depthContract && !!st.contract && depthContract !== st.contract.localSymbol);
+  const histContract = replay ? null : historyContract(root, st.contract?.localSymbol, depthContract, contractMismatch);
+  const seedKey = histContract ? `${root}:${histContract}` : null;
+  const seedState = seedKey ? (seeds[seedKey] ?? cachedSeed(root, histContract!)) : null;
+  // ONE read of the gateway's recorded depth per instrument + verified contract (website gateway source only).
+  useEffect(() => {
+    if (!gatewaySourceEnabled() || demo || !histContract || !now || !seedKey) return;
+    let alive = true;
+    void loadRecordedSeed(root, histContract, now, DEFAULT_LIQ_PARAMS.lookbackMs).then((s) => alive && setSeeds((prev) => ({ ...prev, [seedKey]: s })));
+    return () => {
+      alive = false;
+    };
+    // `now` is read once when the contract becomes known; later clock ticks must not trigger new requests
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [root, histContract, demo, seedKey, !!now]);
+  // ONE depth-freshness rule for the chart overlay, the Order Book and the Liquidity Strength panels.
+  const depthF = depthFreshness(st, view.bookValid, !!replay);
+  const depthCurrent = depthF.current;
+  // The last CURRENT book per instrument + contract (presentation only): shown dimmed and labelled NOT CURRENT while
+  // depth is not current; never carried across a contract change.
+  const lastBooks = useRef(new Map<string, LastConfirmedBook>());
+  const bookKey = `${root}:${st.contract?.localSymbol ?? '-'}`;
+  useEffect(() => {
+    if (depthCurrent && (view.book.bids.length || view.book.asks.length)) lastBooks.current.set(bookKey, { t: depthProv?.lastMs ?? now, bids: view.book.bids, asks: view.book.asks });
+  }, [depthCurrent, view.book, bookKey, now, depthProv?.lastMs]);
+  const lastBook = !replay && !depthCurrent ? (lastBooks.current.get(bookKey) ?? null) : null;
+  const liqCalcMs = useRef(0);
+  const liq = useMemo(() => {
+    const t0 = performance.now();
+    const seed = usableSeed(seedState, histContract);
+    const o = liquidityOverlay(view.recorder, seed, depthCurrent && !contractMismatch, now);
+    // any contract mismatch: no STRONG / MEDIUM at all - neither current levels nor historical bands
+    if (contractMismatch) {
+      o.levels = [];
+      o.bands = [];
+    }
+    liqCalcMs.current = performance.now() - t0;
+    return o;
+    // recomputed once per engine update (view.version), never per mouse-move redraw
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view.version, view.recorder, seedState, histContract, depthCurrent, contractMismatch]);
+  const depthInfo = {
+    lastChangeMs: depthProv?.lastMs ?? null,
+    confirmedAgoMs: depthProv && depthProv.lastPollMs !== null ? Date.now() - depthProv.lastPollMs : null,
+    state: depthF.current ? 'LIVE' : depthF.state,
+    detail: depthF.detail,
+  };
+
+  useEffect(() => {
+    if (!expanded) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      setExpanded(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [expanded]);
+
   const frameRef = useRef<ChartFrame | null>(null);
-  frameRef.current = { view, precision, layers, scale, gain, drawings: drawings[root], tool, demo, replay: !!replay, now, heatOpacity, bubbleOpacity, bubbleDensity };
+  frameRef.current = { view, precision, layers, scale, gain, drawings: drawings[root], tool, demo, replay: !!replay, now, heatOpacity, bubbleOpacity, bubbleDensity, liq, liqFlags, depth: depthInfo, clean, depthCurrent: replay ? undefined : depthCurrent };
   const hostRef = useRef<HTMLDivElement | null>(null);
   const [chart, setChart] = useState<OfpChartView | null>(null);
   const hasBars = view.bars.length > 0;
@@ -139,10 +225,10 @@ export function OrderFlowProPage() {
 
   useEffect(() => {
     chart?.invalidate();
-  }, [chart, view, layers, scale, gain, heatOpacity, bubbleOpacity, bubbleDensity, drawings, tool, layout, workspace, pane]);
+  }, [chart, view, layers, scale, gain, heatOpacity, bubbleOpacity, bubbleDensity, drawings, tool, layout, workspace, pane, liq, liqFlags, clean, expanded]);
 
   const liveRef = useRef<Panes | null>(null);
-  const resize = (k: keyof Panes, sign: 1 | -1) => (delta: number, start: boolean) => {
+  const resize = (k: 'side' | 'metrics' | 'bottom', sign: 1 | -1) => (delta: number, start: boolean) => {
     if (start) dragBase.current = panes;
     liveRef.current = { ...dragBase.current, [k]: clampPane(k, dragBase.current[k] + sign * delta) };
     setLivePanes(liveRef.current);
@@ -176,10 +262,20 @@ export function OrderFlowProPage() {
   };
 
   const full = layout === 'full';
-  const style = { '--ofp-side-w': `${pane.side}px`, '--ofp-metrics-h': `${pane.metrics}px`, '--ofp-bottom-h': `${pane.bottom}px` } as CSSProperties;
+  const style = {
+    '--ofp-side-w': `${pane.side}px`,
+    '--ofp-metrics-h': `${pane.metrics}px`,
+    '--ofp-bottom-h': `${pane.bottom}px`,
+    ...(pane.chart ? { '--ofp-main-h': `${pane.chart}px` } : {}),
+  } as CSSProperties;
+  const startChartResize = (delta: number, start: boolean) => {
+    if (start) dragBase.current = { ...panes, chart: panes.chart || hostRef.current?.closest('.ofp-main')?.getBoundingClientRect().height || 640 };
+    liveRef.current = { ...dragBase.current, chart: clampPane('chart', (dragBase.current.chart ?? 640) + delta) };
+    setLivePanes(liveRef.current);
+  };
 
   return (
-    <div className={`ofp ofp--${layout}${workspace ? ' ofp--ws' : ''}`} style={style} data-testid="ofp-page">
+    <div className={`ofp ofp--${layout}${workspace ? ' ofp--ws' : ''}${expanded ? ' ofp--chartmax' : ''}${clean ? ' ofp--clean' : ''}`} style={style} data-testid="ofp-page">
       {demo && (
         <div className="ofp-banner ofp-banner--demo" role="status">
           DEMO FIXTURE — synthetic events for visual testing only · NOT MARKET DATA · NEVER LIVE
@@ -414,6 +510,16 @@ export function OrderFlowProPage() {
           <button type="button" aria-label="Fit" title="Fit all bars" onClick={() => chart?.fitView()}>
             <Crosshair size={17} />
           </button>
+          <hr />
+          <button type="button" aria-label="Price zoom in" title="Price zoom in (or drag the price axis up)" onClick={() => chart?.priceZoomIn()}>
+            <UnfoldVertical size={17} />
+          </button>
+          <button type="button" aria-label="Price zoom out" title="Price zoom out (or drag the price axis down)" onClick={() => chart?.priceZoomOut()}>
+            <FoldVertical size={17} />
+          </button>
+          <button type="button" aria-label="Auto price scale" title="Auto price scale (or double-click the price axis)" onClick={() => chart?.autoPrice()}>
+            <MoveVertical size={17} />
+          </button>
         </nav>
 
         <section className="ofp-chart" aria-label="Order flow chart">
@@ -424,10 +530,27 @@ export function OrderFlowProPage() {
             <div className="ofp-layers" role="group" aria-label="Chart layers">
               {LAYER_LABEL.map(([k, label]) => (
                 <label key={k} className="ofp-check">
-                  <input type="checkbox" checked={layers[k]} onChange={(e) => setLayers({ ...layers, [k]: e.target.checked })} /> {label}
+                  <input type="checkbox" checked={layers[k]} disabled={clean} onChange={(e) => setLayers({ ...layers, [k]: e.target.checked })} /> {label}
                 </label>
               ))}
             </div>
+            <div className="ofp-chart__actions">
+              <button type="button" className={`ofp-btn ${clean ? 'is-on' : ''}`} aria-pressed={clean} onClick={() => setClean(!clean)} title="Candles only - every overlay hidden; your layer choices are restored when turned off" data-testid="ofp-clean">
+                Clean view
+              </button>
+              <button type="button" className="ofp-btn ofp-btn--expand" onClick={() => setExpanded(!expanded)} aria-pressed={expanded} title={expanded ? 'Exit full screen chart (Esc)' : 'Expand the chart to the whole window'} data-testid="ofp-expand">
+                {expanded ? <Shrink size={14} /> : <Expand size={14} />} {expanded ? 'Exit full-screen chart (Esc)' : 'Expand chart'}
+              </button>
+            </div>
+          </div>
+          <div className={`ofp-liqbar${clean || !layers.strong ? ' is-off' : ''}`} role="group" aria-label="Liquidity overlay">
+            <span className="ofp-lbl">Liquidity</span>
+            {LIQ_TOGGLES.map(([k, label, title]) => (
+              <label key={k} className="ofp-check" title={title}>
+                <input type="checkbox" checked={liqFlags[k]} disabled={clean || !layers.strong} onChange={(e) => setLiqFlags({ ...liqFlags, [k]: e.target.checked })} /> {label}
+              </label>
+            ))}
+            <LiquidityLegend liq={liq} replay={!!replay} calcMs={liqCalcMs.current} seed={seedState} depthLabel={!replay && !depthCurrent ? depthF.label : null} />
           </div>
           <div className="ofp-hover" aria-live="off">
             {hover ? (
@@ -447,11 +570,18 @@ export function OrderFlowProPage() {
                     {hover.level.unknown ? ` / unknown ${hover.level.unknown}` : ''}
                   </>
                 )}
-                {hover.resting && ` · resting ${hover.resting.side.toLowerCase()} ${hover.resting.size}`}
+                {hover.resting && ` · resting ${hover.resting.side.toLowerCase()} ${hover.resting.size} contracts (displayed)`}
+                {hover.liq && (
+                  <span className={hover.liq.side === 'BID' ? 'bid' : 'ask'}>
+                    {' '}
+                    · {hover.liq.cls} {hover.liq.side} · {fmtQty(hover.liq.size)} contracts · rest {hover.liq.persistAtLeast ? '≥ ' : ''}
+                    {fmtRest(hover.liq.persistMs)}
+                  </span>
+                )}
               </>
             ) : (
               <span className="dim">
-                Wheel = zoom · drag = pan · Shift+wheel = price zoom · double-click = reset · bands = observed strong resting liquidity (cyan → green → yellow → white) · bubbles = executed prints
+                Wheel = time zoom · drag = pan · drag / wheel on the price axis = price zoom · double-click the price axis = auto scale · double-click = reset · bubbles = executed prints · Esc exits the expanded chart
               </span>
             )}
           </div>
@@ -478,11 +608,17 @@ export function OrderFlowProPage() {
               <section className="ofp-panel ofp-panel--book">
                 <header>
                   <h2 title={replay ? 'Recorded IBKR depth: time-weighted average displayed size per bucket - not an exact historical order book' : undefined}>{replay ? 'Recorded depth (IBKR, bucket averages)' : 'Order Book (IBKR)'}</h2>
-                  <span className="ofp-tag" title="Rows granted by IBKR (price levels, not full book)">
-                    {st.depthRows ? `${st.depthRows} × ${st.depthRows} rows` : 'no depth'}
-                  </span>
+                  {!replay && !depthF.current ? (
+                    <span className={`ofp-tag ofp-tag--warn tone-${depthF.tone}`} title={depthF.detail ?? undefined} data-testid="ofp-book-state">
+                      {depthF.label}
+                    </span>
+                  ) : (
+                    <span className="ofp-tag" title="Rows granted by IBKR (price levels, not full book)" data-testid="ofp-book-state">
+                      {st.depthRows ? `${st.depthRows} × ${st.depthRows} rows` : 'no depth'}
+                    </span>
+                  )}
                 </header>
-                <OrderBookPanel view={view} precision={precision} rows={10} />
+                <OrderBookPanel view={view} precision={precision} rows={10} depth={replay ? undefined : depthF} lastBook={lastBook} />
               </section>
               <section className="ofp-panel ofp-panel--grow">
                 <div role="tablist" className="ofp-tablist ofp-tablist--side">
@@ -494,7 +630,7 @@ export function OrderFlowProPage() {
                   </button>
                 </div>
                 {sideTab === 'strength' ? (
-                  <LiquidityStrength view={view} precision={precision} now={now} />
+                  <LiquidityStrength view={view} precision={precision} now={now} liq={liq} depth={replay ? undefined : depthF} />
                 ) : (
                   <div className="ofp-depth">
                     <DepthHeatmap recorder={view.recorder} center={view.last ?? view.quote?.bid ?? null} now={now} spanMs={30 * 60_000} rows={12} precision={precision} version={view.version} />
@@ -505,6 +641,9 @@ export function OrderFlowProPage() {
           </>
         )}
       </div>
+      {!workspace && !expanded && (
+        <OfpSplitter dir="row" label="Resize chart height" onDrag={startChartResize} onEnd={commitPanes} />
+      )}
 
       {full && (
         <>
