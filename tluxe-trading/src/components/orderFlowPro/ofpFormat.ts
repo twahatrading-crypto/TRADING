@@ -15,6 +15,36 @@ export const fmtExpiry = (yyyymmdd: string) => (/^\d{8}$/.test(yyyymmdd) ? `${yy
 
 export type Tone = 'ok' | 'warn' | 'bad' | 'muted' | 'demo';
 
+export interface DepthFreshness {
+  /** The displayed book may be presented as CURRENT liquidity. */
+  current: boolean;
+  /** LIVE · QUIET · STALE · DISCONNECTED · UNAVAILABLE · CONTRACT_MISMATCH · NO_BOOK · RECORDED (replay). */
+  state: string;
+  label: string;
+  tone: Tone;
+  detail: string | null;
+}
+
+/**
+ * ONE rule for every depth view (chart liquidity overlay, Order Book panel, Liquidity Strength panel): the book is
+ * current only while it is valid AND the depth stream is LIVE / QUIET (gateway source) and the feed has no contract
+ * mismatch. Anything else is labelled with its state and is never shown as current liquidity.
+ */
+export function depthFreshness(s: SourceStatus, bookValid: boolean, replay = false): DepthFreshness {
+  if (replay) return { current: false, state: 'RECORDED', label: 'RECORDED (replay)', tone: 'muted', detail: 'Recorded IBKR depth bucket averages - not the live book' };
+  const d = s.provenance?.depth;
+  if (s.feed === 'CONTRACT_MISMATCH') return { current: false, state: 'CONTRACT_MISMATCH', label: 'DEPTH CONTRACT MISMATCH', tone: 'bad', detail: 'Depth withheld: contracts are never mixed' };
+  if (d) {
+    const live = d.state === 'LIVE' || d.state === 'QUIET';
+    if (live && bookValid) return { current: true, state: d.state, label: d.state === 'QUIET' ? 'DEPTH LIVE · QUIET' : 'DEPTH LIVE', tone: 'ok', detail: d.detail };
+    if (live) return { current: false, state: 'NO_BOOK', label: 'DEPTH RE-SYNCING', tone: 'warn', detail: d.detail ?? 'waiting for a fresh IBKR snapshot' };
+    return { current: false, state: d.state, label: `DEPTH ${d.state.replace('_', ' ')}`, tone: d.state === 'STALE' ? 'warn' : 'bad', detail: d.detail };
+  }
+  return bookValid
+    ? { current: true, state: 'LIVE', label: 'DEPTH LIVE', tone: 'ok', detail: null }
+    : { current: false, state: 'NO_BOOK', label: 'NO VALID BOOK', tone: 'muted', detail: null };
+}
+
 /** Label + tone for a feed state. Only LIVE + REALTIME ever gets the green LIVE label. */
 export function feedLabel(s: SourceStatus): { text: string; tone: Tone; detail: string } {
   const f: FeedState = s.feed;

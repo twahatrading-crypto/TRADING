@@ -1,12 +1,13 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { offlineStatus } from '../engines/orderFlowPro/engine';
-import type { OfpFrame, OfpRoot, SourceStatus } from '../engines/orderFlowPro/types';
+import type { GatewayProvenance, OfpFrame, OfpRoot, SourceStatus, StreamLiveness } from '../engines/orderFlowPro/types';
 import { installOfpController, OfpController } from '../providers/orderFlowPro/controller';
 import type { OfpSource, SourceSink } from '../providers/orderFlowPro/source';
 import { DemoSource } from '../providers/orderFlowPro/testing/DemoSource';
 import { BackendSource } from '../providers/orderFlowPro/BackendSource';
 import { OrderFlowProPage } from './OrderFlowProPage';
+import { OfpChartView } from '../components/orderFlowPro/OfpChartView';
 
 // The controller coalesces notifications to one per animation frame: wait past a frame, then settle React.
 const flush = async () => {
@@ -199,5 +200,192 @@ describe('Order Flow Pro page', () => {
     await flush();
     expect(screen.queryByTestId('ofp-nodata')).toBeNull();
     expect(screen.getAllByText('4195.4').length).toBeGreaterThan(0);
+  });
+});
+
+describe('Order Flow Pro chart controls + liquidity overlay (presentation only)', () => {
+  beforeEach(() => localStorage.clear());
+  const demo = () => installOfpController(new OfpController(new DemoSource({ t0: Date.UTC(2026, 9, 9, 13), historySeconds: 900 }), true));
+
+  it('Expand chart: chart-only overlay; Escape restores the layout; the chart (and its zoom / pan) is never recreated', async () => {
+    demo();
+    const destroy = vi.spyOn(OfpChartView.prototype, 'destroy');
+    render(<OrderFlowProPage />);
+    await flush();
+    const page = screen.getByTestId('ofp-page');
+    const before = page.className;
+    const saved = { ...localStorage };
+    fireEvent.click(screen.getByTestId('ofp-expand'));
+    await flush();
+    expect(page.className).toMatch(/ofp--chartmax/);
+    expect(screen.getByTestId('ofp-expand')).toHaveTextContent(/Exit full-screen chart/);
+    // essential tools stay available while expanded
+    for (const name of ['Zoom in', 'Zoom out', 'Fit', 'Price zoom in', 'Price zoom out', 'Auto price scale']) expect(screen.getAllByRole('button', { name }).length).toBeGreaterThan(0); // toolbar (+ shared overlay for +/-)
+    fireEvent.keyDown(window, { key: 'Escape' });
+    await flush();
+    expect(page.className).toBe(before);
+    expect(screen.getByTestId('ofp-expand')).toHaveTextContent('Expand chart');
+    expect({ ...localStorage }).toEqual(saved); // layout / workspace / panes untouched
+    expect(destroy).not.toHaveBeenCalled();
+    // the existing Workspace full-screen button is still there and separate
+    expect(screen.getByRole('button', { name: /Exit full screen$/ })).toBeInTheDocument();
+  });
+
+  it('Clean view hides overlays without changing the saved layer choices, and restores them', async () => {
+    demo();
+    render(<OrderFlowProPage />);
+    await flush();
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Heatmap' }));
+    const layers = localStorage.getItem('tluxe.ofp.layers.v1');
+    fireEvent.click(screen.getByTestId('ofp-clean'));
+    await flush();
+    expect(screen.getByTestId('ofp-clean')).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('checkbox', { name: 'Footprint' })).toBeDisabled();
+    expect(screen.getByRole('checkbox', { name: 'Strong' })).toBeDisabled();
+    expect(localStorage.getItem('tluxe.ofp.layers.v1')).toBe(layers);
+    fireEvent.click(screen.getByTestId('ofp-clean'));
+    await flush();
+    expect(screen.getByRole('checkbox', { name: 'Footprint' })).toBeEnabled();
+    expect(screen.getByRole('checkbox', { name: 'Heatmap' })).not.toBeChecked();
+  });
+
+  it('BID / ASK / STRONG / MEDIUM / quantity / label toggles are independent and persisted', async () => {
+    demo();
+    render(<OrderFlowProPage />);
+    await flush();
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Ask' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Medium' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Contracts' }));
+    expect(JSON.parse(localStorage.getItem('tluxe.ofp.liq.v1')!)).toEqual({ strong: true, medium: true, bid: true, ask: false, qty: false, lane: true });
+  });
+
+  it('legend: four categories, contracts (never orders), and no class without enough depth history', async () => {
+    const s = scripted();
+    installOfpController(new OfpController(s.src));
+    render(<OrderFlowProPage />);
+    await flush();
+    const st = { ...offlineStatus('GC', 'LIVE', []), marketDataType: 'REALTIME', contract } as SourceStatus;
+    const t = Date.UTC(2026, 9, 9, 14, 0, 5);
+    s.push('GC', st, [{ root: 'GC', seq: 1, events: [{ kind: 'book', t, bids: [[4195.3, 4], [4195.2, 2], [4195.1, 1]], asks: [[4195.4, 3], [4195.5, 1]] }, { kind: 'trade', t, price: 4195.4, size: 3, aggressor: 'BUY', method: 'QUOTE_RULE', bid: 4195.3, ask: 4195.4 }] }], t + 60_000);
+    await flush();
+    const legend = screen.getByTestId('ofp-liq-legend');
+    for (const k of ['STRONG BID', 'MEDIUM BID', 'STRONG ASK', 'MEDIUM ASK']) expect(legend).toHaveTextContent(k);
+    expect(screen.getByTestId('ofp-liq-status')).toHaveTextContent(/Collecting depth history 1m 00s \/ 10m 00s/);
+    const info = legend.querySelector('.ofp-liqinfo')!.getAttribute('title')!;
+    expect(info).toMatch(/displayed aggregate contracts per price level - not a count of individual orders/);
+    expect(info).toMatch(/BID = resting buy-side liquidity · ASK = resting sell-side liquidity/);
+    expect(info).toMatch(/does not mean a trade will happen/);
+  });
+
+  it('no recorded-depth request outside the website gateway source (no extra polling)', async () => {
+    const f = vi.spyOn(globalThis, 'fetch');
+    demo();
+    render(<OrderFlowProPage />);
+    await flush();
+    await flush();
+    expect(f.mock.calls.filter((c) => String(c[0]).includes('/api/ibkr/heatmap'))).toEqual([]);
+  });
+
+  it('chart height handle in the standard layout, persisted; hidden in Workspace mode', async () => {
+    demo();
+    render(<OrderFlowProPage />);
+    await flush();
+    expect(screen.queryByRole('separator', { name: 'Resize chart height' })).toBeNull(); // workspace (default)
+    fireEvent.click(screen.getByRole('button', { name: /Exit full screen$/ }));
+    await flush();
+    const h = screen.getByRole('separator', { name: 'Resize chart height' });
+    fireEvent.keyDown(h, { key: 'ArrowDown' });
+    await flush();
+    const panes = JSON.parse(localStorage.getItem('tluxe.ofp.panes.v1')!);
+    expect(panes.chart).toBeGreaterThanOrEqual(380);
+    expect(screen.getByTestId('ofp-page').style.getPropertyValue('--ofp-main-h')).toBe(`${panes.chart}px`);
+  });
+});
+
+describe('depth freshness: Order Book, Liquidity Strength and the chart overlay agree; old depth is never current', () => {
+  beforeEach(() => localStorage.clear());
+  const prov = (depth: StreamLiveness, detail: string | null = null, c = 'GCZ6'): GatewayProvenance => {
+    const p = (state: StreamLiveness, d: string | null = null) => ({ state, provider: 'x', timeBasis: 'VPS_DEPTH_UPDATE' as const, contract: c, lastMs: Date.UTC(2026, 9, 9, 14), ageMs: 0, lastPollMs: Date.now(), detail: d });
+    return { trades: p('LIVE'), depth: p(depth, detail), bars: p('LIVE'), aggressor: 'EXCHANGE', quality: { tradesAccepted: 0, tradesDuplicate: 0, tradesRejected: 0, tradesOutOfOrder: 0, unknownSide: 0, depthChanges: 0, depthResyncs: 0, depthSeqGaps: 0, depthRejected: 0, gaps: 0, requestErrors: 0, rateLimited: 0 }, requests: 0 };
+  };
+  const status = (depth: StreamLiveness, detail: string | null = null, feed: SourceStatus['feed'] = 'LIVE', c = contract) => ({ ...offlineStatus('GC', feed, []), marketDataType: 'REALTIME', contract: c, depthRows: 10, provenance: prov(depth, detail, c.localSymbol) }) as SourceStatus;
+  const t = Date.UTC(2026, 9, 9, 14, 0, 5);
+  const book = { kind: 'book' as const, t, bids: [[4195.3, 4], [4195.2, 2], [4195.1, 1]] as Array<[number, number]>, asks: [[4195.4, 3], [4195.5, 1]] as Array<[number, number]> };
+  const trade = { kind: 'trade' as const, t, price: 4195.4, size: 1, aggressor: 'BUY' as const, method: 'EXCHANGE' as const, bid: 4195.3, ask: 4195.4 };
+
+  async function live() {
+    const s = scripted();
+    installOfpController(new OfpController(s.src));
+    render(<OrderFlowProPage />);
+    await flush();
+    s.push('GC', status('LIVE'), [{ root: 'GC', seq: 1, events: [book, trade] }], t + 1000);
+    await flush();
+    return s;
+  }
+
+  it('LIVE: the book is current in every view', async () => {
+    await live();
+    expect(screen.queryByTestId('ofp-book-stale')).toBeNull();
+    expect(screen.getByRole('table', { name: 'Order book' })).toHaveTextContent('4195.3');
+    expect(screen.queryByTestId('ofp-strength-stale')).toBeNull();
+    expect(screen.getByTestId('ofp-book-state')).toHaveTextContent('10 × 10 rows');
+  });
+
+  it('request failures: book withdrawn -> the last confirmed book is shown dimmed and labelled historical; every view agrees', async () => {
+    const s = await live();
+    const why = 'No IBKR depth confirmation for > 6 s (gateway depth request failing (HTTP 503)) - book withdrawn; last confirmed 14:00:06 UTC';
+    s.push('GC', status('DISCONNECTED', why), [{ root: 'GC', seq: 3, events: [{ kind: 'gap', from: t + 1000, to: t + 8000, reason: why }] }], t + 8000);
+    await flush();
+    const banner = screen.getByTestId('ofp-book-stale');
+    expect(banner).toHaveTextContent('DEPTH DISCONNECTED · NOT CURRENT');
+    expect(banner).toHaveTextContent(/showing the last confirmed book \(historical; last change \d\d:\d\d:\d\d UTC\)/);
+    expect(banner).toHaveTextContent(/HTTP 503/);
+    const old = screen.getByRole('table', { name: 'Last confirmed order book (not current)' });
+    expect(old).toHaveClass('is-stale');
+    expect(old).toHaveTextContent('4195.3'); // kept, but only as labelled history
+    expect(screen.queryByRole('table', { name: 'Order book' })).toBeNull();
+    expect(screen.getByTestId('ofp-book-state')).toHaveTextContent('DEPTH DISCONNECTED');
+    expect(screen.getByTestId('ofp-strength-stale')).toHaveTextContent('DEPTH DISCONNECTED · no current levels');
+    // chart overlay legend: the same rule and the same state
+    expect(screen.getByTestId('ofp-liq-status')).toHaveTextContent('DEPTH DISCONNECTED - no current levels');
+  });
+
+  it('STALE while the book is still valid (before any gap): already not current anywhere', async () => {
+    const s = await live();
+    s.push('GC', status('STALE', 'IBKR depth STALE'), [], t + 2000);
+    await flush();
+    expect(screen.getByTestId('ofp-book-stale')).toHaveTextContent('DEPTH STALE · NOT CURRENT');
+    expect(screen.getByTestId('ofp-strength-stale')).toBeInTheDocument();
+    expect(screen.getByTestId('ofp-liq-status')).toHaveTextContent('DEPTH STALE - no current levels');
+    expect(screen.getByTestId('ofp-book-state')).toHaveTextContent('DEPTH STALE');
+  });
+
+  it('contract mismatch: not current; a book from another contract is never shown', async () => {
+    const s = await live();
+    s.push('GC', status('LIVE', null, 'CONTRACT_MISMATCH'), [], t + 2000);
+    await flush();
+    expect(screen.getByTestId('ofp-book-stale')).toHaveTextContent('DEPTH CONTRACT MISMATCH · NOT CURRENT');
+    expect(screen.getByTestId('ofp-strength-stale')).toHaveTextContent('DEPTH CONTRACT MISMATCH · no current levels');
+    expect(screen.getByTestId('ofp-liq-status')).toHaveTextContent('DEPTH CONTRACT MISMATCH - no current levels');
+    // roll to another contract: the GCZ6 book is not offered as "last confirmed" for GCG7
+    const g7 = { ...contract, localSymbol: 'GCG7', expiry: '20270224' };
+    s.push('GC', status('DISCONNECTED', 'waiting', 'LIVE', g7), [{ root: 'GC', seq: 5, events: [{ kind: 'gap', from: t + 2000, to: t + 3000, reason: 'roll' }] }], t + 3000);
+    await flush();
+    expect(screen.getByTestId('ofp-book-stale')).toHaveTextContent('no confirmed book to show');
+    expect(screen.queryByRole('table', { name: 'Last confirmed order book (not current)' })).toBeNull();
+  });
+
+  it('recovery: a fresh snapshot makes the book current again and the historical label disappears', async () => {
+    const s = await live();
+    s.push('GC', status('DISCONNECTED', 'withdrawn'), [{ root: 'GC', seq: 3, events: [{ kind: 'gap', from: t + 1000, to: t + 8000, reason: 'withdrawn' }] }], t + 8000);
+    await flush();
+    expect(screen.getByTestId('ofp-book-stale')).toBeInTheDocument();
+    s.push('GC', status('LIVE'), [{ root: 'GC', seq: 4, events: [{ ...book, t: t + 9000, bids: [[4195.6, 5], [4195.5, 2], [4195.4, 1]], asks: [[4195.7, 3], [4195.8, 1]] }] }], t + 9500);
+    await flush();
+    expect(screen.queryByTestId('ofp-book-stale')).toBeNull();
+    expect(screen.getByRole('table', { name: 'Order book' })).toHaveTextContent('4195.6');
+    expect(screen.queryByTestId('ofp-strength-stale')).toBeNull();
+    expect(screen.getByTestId('ofp-liq-status')).not.toHaveTextContent(/no current levels/);
+    expect(screen.getByTestId('ofp-book-state')).toHaveTextContent('10 × 10 rows');
   });
 });

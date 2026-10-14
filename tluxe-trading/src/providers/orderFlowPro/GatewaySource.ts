@@ -101,6 +101,12 @@ export interface GatewayLimits {
   /** Idle back-off ceilings: a poll that returned nothing stretches the next interval (x1.5) up to these. */
   tradesIdleMaxMs: number;
   depthIdleMaxMs: number;
+  /**
+   * The displayed book is only current while depth polls keep confirming it. No successful depth poll for this long
+   * (>= 2x the slowest quiet-book poll) -> the book is withdrawn with an explicit gap and re-synchronised on recovery:
+   * a frozen book is never shown or recorded as current liquidity.
+   */
+  depthConfirmMaxMs: number;
 }
 
 export const DEFAULT_GATEWAY_LIMITS: Readonly<GatewayLimits> = Object.freeze({
@@ -127,6 +133,7 @@ export const DEFAULT_GATEWAY_LIMITS: Readonly<GatewayLimits> = Object.freeze({
   historyMaxPages: 30,
   tradesIdleMaxMs: 4000,
   depthIdleMaxMs: 3000,
+  depthConfirmMaxMs: 6000,
 });
 
 const HOUR = 3600_000;
@@ -442,6 +449,12 @@ class RootSession {
   private stopped = false;
   private paused = false;
   private timers: Partial<Record<StreamName, ReturnType<typeof setTimeout>>> = {};
+  /** Local timer only (no request): withdraws a book that depth polls stopped confirming. */
+  private depthWatch: ReturnType<typeof setTimeout> | undefined;
+  /** Gateway time of the last successful depth poll that left the book valid. */
+  private depthConfirmedAt: number | null = null;
+  /** Why the book was withdrawn for lack of confirmation (shown until a fresh snapshot is accepted). */
+  private depthWithdrawn: string | null = null;
   private busy = new Set<StreamName>();
   private fails: Record<StreamName, number> = { trades: 0, depth: 0, health: 0, bars: 0 };
   private lastOk: Record<StreamName, number | null> = { trades: null, depth: null, health: null, bars: null };
@@ -545,6 +558,7 @@ class RootSession {
     this.histCtl?.abort();
     this.ctl.abort();
     for (const s of STREAMS) this.clear(s);
+    this.clearDepthWatch();
     this.unlisten?.();
     this.unlisten = null;
   }
@@ -556,6 +570,7 @@ class RootSession {
     this.ctl.abort(); // cancel in-flight requests
     this.ctl = new AbortController();
     for (const s of STREAMS) this.clear(s);
+    this.clearDepthWatch(); // the book is re-synchronised on resume anyway
     this.publish();
   }
 
@@ -622,6 +637,7 @@ class RootSession {
       next = this.backoff(s, e);
     } finally {
       this.busy.delete(s);
+      if (s === 'depth' && !this.stopped && !this.paused) this.armDepthWatch();
       if (!this.stopped) {
         if (this.watermark !== null) this.sink.time(this.watermark);
         this.publish();
@@ -657,6 +673,13 @@ class RootSession {
     this.reasons = {};
     this.invalidateBook();
     this.needBook = true;
+    // depth confirmation state belongs to the previous contract: no old timer, reason or confirmation time survives
+    this.clearDepthWatch();
+    this.depthWithdrawn = null;
+    this.depthConfirmedAt = null;
+    this.depthState = null;
+    this.depthContract = null;
+    this.depthMismatch = null;
     this.barsNeeded = false;
     this.barsLoaded = false;
     this.cancelEarlier(null);
@@ -954,10 +977,44 @@ class RootSession {
     this.lastTop = null;
   }
 
-  private loseBook(reason: string) {
-    if (this.bookValid) this.gap(this.depthT ?? this.serverNow(), this.serverNow(), reason);
+  private loseBook(reason: string, from: number | null = null) {
+    if (this.bookValid) this.gap(from ?? this.depthT ?? this.serverNow(), this.serverNow(), reason);
     this.invalidateBook();
     this.needBook = true;
+    this.depthConfirmedAt = null;
+  }
+
+  private clearDepthWatch() {
+    if (this.depthWatch !== undefined) this.env.clearTimeout(this.depthWatch);
+    this.depthWatch = undefined;
+  }
+
+  /** (Re)arm the confirmation deadline of a valid book: last successful depth poll + depthConfirmMaxMs. */
+  private armDepthWatch() {
+    this.clearDepthWatch();
+    const ok = this.lastOk.depth;
+    if (!this.bookValid || ok === null) return;
+    const due = Math.max(0, ok + this.L.depthConfirmMaxMs - this.now());
+    this.depthWatch = this.env.setTimeout(() => {
+      this.depthWatch = undefined;
+      this.checkDepthConfirmed();
+    }, due + 1);
+  }
+
+  /**
+   * A valid book that no depth poll has confirmed for depthConfirmMaxMs is withdrawn: an explicit gap from the last
+   * confirmation (the engine's recorder stops treating it as valid), then a fresh snapshot once polls succeed again.
+   */
+  private checkDepthConfirmed() {
+    if (this.stopped || this.paused || !this.bookValid) return;
+    const ok = this.lastOk.depth;
+    if (ok !== null && this.now() - ok <= this.L.depthConfirmMaxMs) return this.armDepthWatch();
+    const last = this.depthConfirmedAt;
+    const why = this.lastErr.depth ? `gateway depth request failing (${this.lastErr.depth})` : 'no depth poll completed';
+    const reason = `No IBKR depth confirmation for > ${Math.round(this.L.depthConfirmMaxMs / 1000)} s (${why}) - book withdrawn${last !== null ? `; last confirmed ${new Date(last).toISOString().slice(11, 19)} UTC` : ''}`;
+    this.loseBook(reason, last);
+    this.depthWithdrawn = reason;
+    this.publish();
   }
 
   private async depth(signal: AbortSignal): Promise<'now' | 'idle' | void> {
@@ -992,8 +1049,10 @@ class RootSession {
       this.asks = new Map(b.asks);
       this.bookValid = true;
       this.needBook = false;
+      this.depthWithdrawn = null;
       const ev = toBookEvent(b);
       this.depthT = ev.t;
+      this.depthConfirmedAt = this.serverNow();
       const out: OfpEvent[] = [ev];
       const q = this.quote(ev.t);
       if (q) out.push(q);
@@ -1035,6 +1094,7 @@ class RootSession {
       this.loseBook(gapAt !== null ? `IBKR depth sequence gap at ${gapAt}` : `IBKR depth: ${u.rejected} malformed change(s) - book re-synchronised`);
       return 'now';
     }
+    if (this.bookValid) this.depthConfirmedAt = this.serverNow();
     return quietPoll ? 'idle' : undefined;
   }
 
@@ -1135,12 +1195,20 @@ class RootSession {
     } else if (this.stale('depth')) {
       state = 'DISCONNECTED';
       detail = this.lastErr.depth ? `gateway depth request failing (${this.lastErr.depth})` : this.lastOk.depth === null ? 'connecting' : 'no successful poll recently';
+    } else if (!this.bookValid && this.depthWithdrawn) {
+      state = 'DISCONNECTED';
+      detail = this.depthWithdrawn;
     } else if (this.bookValid && this.depthState?.state === 'LIVE') {
       state = age !== null && age > this.L.depthQuietMs ? 'QUIET' : 'LIVE';
     } else {
-      const st = this.depthState?.state ?? 'UNKNOWN';
+      const st = this.depthState?.state ?? null;
       state = st === 'STALE' ? 'STALE' : st === 'NOT_CONFIGURED' || st === 'NOT_ENTITLED' ? 'UNAVAILABLE' : 'DISCONNECTED';
-      detail = `IBKR depth ${st}${this.depthState?.detail ? `: ${this.depthState.detail}` : ''}`;
+      detail =
+        st === null
+          ? this.lastErr.depth
+            ? `gateway depth request failing (${this.lastErr.depth})`
+            : 'waiting for the first IBKR depth snapshot of this contract'
+          : `IBKR depth ${st}${this.depthState?.detail ? `: ${this.depthState.detail}` : ''}`;
     }
     return { ...base, state, detail };
   }
