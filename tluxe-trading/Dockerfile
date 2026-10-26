@@ -27,6 +27,23 @@ COPY cloud/gateway/entrypoint.py ./entrypoint.py
 COPY bridge/databento/run_bridge.py ./databento/run_bridge.py
 COPY bridge/databento/tluxe_databento_bridge ./databento/tluxe_databento_bridge
 COPY --from=web /web/dist-cloud ./web
+# The owner's original HLR dashboard is deliberately NOT copied here.
+#
+# It is proprietary strategy source (hlr-engine.js is readable, commented code), this repository is
+# public, and an image layer is not a private place either. So the copy reaches production only as a
+# RAILWAY VOLUME mounted at /app/private/hlr-original - it never enters git and never enters this image.
+#
+# /app/private is OUTSIDE the static root (/app/web). That is the point: the public static handler
+# cannot reach the strategy even in principle. Only the authenticated HLR route reads this path
+# (tluxe_gateway/hlr_page.py), and when the mount is absent or empty it answers a clean 404, so a
+# build without the volume is harmless rather than broken.
+#
+# The mount point is created here so a build WITHOUT the volume still has a valid (empty) path.
+# NOTE: the chown below runs at BUILD time and cannot decide the ownership of a volume that the
+# platform mounts over this path at RUN time - that is the platform's to set. Whether uid 10001
+# can read (or an upload can write) the mounted directory must be OBSERVED, not assumed:
+# GET /api/hlr/files reports the live owner, mode, readable and writable flags.
+RUN mkdir -p /app/private/hlr-original
 RUN useradd --create-home --uid 10001 tluxe && chown -R tluxe /app
 USER tluxe
 EXPOSE 8080

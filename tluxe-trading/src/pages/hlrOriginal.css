@@ -1,0 +1,124 @@
+/* HLR Original — Live.
+   Layout only, plus the data-source banner. Nothing in here styles the dashboard itself — it lives
+   in its own document and brings its own CSS, byte-for-byte as on the trading PC. */
+
+.hlrorig {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  /* The shell page area grows with content, so give the frame a floor as well as flex growth. */
+  min-block-size: calc(100vh - 140px);
+}
+
+.hlrorig__frame {
+  flex: 1 1 auto;
+  inline-size: 100%;
+  min-height: 0;
+  border: 0;
+  display: block;
+  /* The dashboard paints its own background; this only avoids a white flash while it loads. */
+  background: #0b0d12;
+}
+
+/* Names the account the data comes from. Deliberately plain and compact: it must be readable at a
+   glance without competing with the dashboard underneath it. */
+.hlrorig__banner {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  padding: 7px 12px;
+  border-block-end: 1px solid var(--line, #262c3a);
+  font-size: var(--fs-sm, 12px);
+  line-height: 1.45;
+}
+
+.hlrorig__banner b {
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+
+.hlrorig__banner span {
+  color: var(--text-3, #9aa0ad);
+  min-inline-size: 12ch;
+}
+
+.hlrorig__banner--demo {
+  background: color-mix(in srgb, #c9a45c 12%, transparent);
+  border-block-end-color: color-mix(in srgb, #c9a45c 45%, transparent);
+}
+.hlrorig__banner--demo b { color: #c9a45c; }
+
+.hlrorig__banner--broker {
+  background: color-mix(in srgb, #4ea67a 10%, transparent);
+  border-block-end-color: color-mix(in srgb, #4ea67a 40%, transparent);
+}
+.hlrorig__banner--broker b { color: #4ea67a; }
+
+.hlrorig__banner--unknown {
+  background: color-mix(in srgb, #9aa0ad 10%, transparent);
+}
+.hlrorig__banner--unknown b { color: var(--text-2, #c6cad3); }
+
+/* This page's own sign-in. Separate credential, separate from the site's own auth. */
+.hlrorig__gate {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 16px;
+}
+
+.hlrorig__card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  inline-size: min(380px, 100%);
+  padding: 22px 20px;
+  border: 1px solid var(--line, #262c3a);
+  border-radius: 10px;
+  background: var(--panel, #141821);
+}
+
+.hlrorig__card h1 { margin: 0; font-size: 15px; letter-spacing: 0.08em; color: var(--gold, #c9a45c); }
+.hlrorig__card-sub { margin: 0 0 6px; font-size: 12px; color: var(--text-3, #9aa0ad); }
+.hlrorig__card label { font-size: 11px; letter-spacing: 0.1em; color: var(--text-3, #9aa0ad); text-transform: uppercase; }
+
+.hlrorig__card input {
+  padding: 9px 10px;
+  border: 1px solid var(--line, #262c3a);
+  border-radius: 6px;
+  background: var(--bg, #0b0d12);
+  color: var(--text, #e8e6e1);
+  font: inherit;
+}
+
+.hlrorig__card button {
+  margin-block-start: 4px;
+  padding: 9px 12px;
+  border: 1px solid var(--line, #262c3a);
+  border-radius: 6px;
+  background: color-mix(in srgb, #c9a45c 18%, transparent);
+  color: var(--text, #e8e6e1);
+  font: inherit;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+}
+.hlrorig__card button:disabled { opacity: 0.55; cursor: default; }
+.hlrorig__card-err { margin: 2px 0 0; font-size: 12px; color: var(--bad, #ef5d5d); }
+.hlrorig__card-foot { margin: 8px 0 0; font-size: 11px; color: var(--text-3, #9aa0ad); text-align: center; }
+
+.hlrorig__signout {
+  margin-inline-start: auto;
+  padding: 3px 9px;
+  border: 1px solid var(--line, #262c3a);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-3, #9aa0ad);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.hlrorig__signout:hover { color: var(--text, #e8e6e1); }

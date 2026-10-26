@@ -94,6 +94,17 @@ class GatewayConfig:
     mt5_bridge_keys: tuple[Mt5BridgeKey, ...] = ()
     # IBKR COMEX Level-2 depth link from the cloud Windows VPS (/bridge/ibkr). Same hash format as the MT5 link key.
     ibkr_bridge_keys: tuple[Mt5BridgeKey, ...] = ()
+    #: HLR link credentials. Empty = the HLR data relay is not built into this deployment at all:
+    #: no /bridge/hlr, no /api/hlr/* routes, nothing to expose. One variable is the whole feature gate.
+    hlr_bridge_keys: tuple[Mt5BridgeKey, ...] = ()
+    #: HLR page credential - SEPARATE from the owner login and from this app's auth entirely.
+    #: Empty = the HLR page and its APIs are not registered at all (fail closed). Setting it does
+    #: NOT change public_market_data, so the rest of the site keeps behaving exactly as it does.
+    hlr_password_hash: Secret = field(default_factory=lambda: Secret(""), repr=False)
+    #: Where the copied HLR dashboard files live. A PRIVATE directory, deliberately OUTSIDE
+    #: TLUXE_STATIC_DIR: the public static handler can then never reach the strategy, even by
+    #: mistake. On Railway this is the mount path of a private volume.
+    hlr_files_dir: str = "/app/private/hlr-original"
     # IBKR COMEX price-level depth service on the VPS (https://depth.twahatrading.com), polled SERVER-SIDE with
     # `Authorization: Bearer <TLUXE_IBKR_DEPTH_TOKEN>`. The token never reaches a browser, a log or an API response.
     ibkr_depth: Upstream = field(default_factory=lambda: Upstream("ibkr-depth", "", Secret("")))
@@ -116,7 +127,7 @@ class GatewayConfig:
     def secrets(self) -> list[str]:
         """Every secret value (for log / response redaction)."""
         vals = [self.database_url.reveal(), self.owner_password_hash.reveal(), self.ai.token.reveal(), self.databento.token.reveal(), self.news.token.reveal(),
-                self.ibkr_depth.token.reveal()]
+                self.ibkr_depth.token.reveal(), self.hlr_password_hash.reveal()]
         pw = urlparse(self.database_url.reveal()).password if self.database_url else None
         return [v for v in vals + [pw or ""] if v]
 
@@ -242,6 +253,11 @@ def from_env(env: dict | None = None) -> GatewayConfig:
             if o == "*" or "*" in o:
                 errors.append("ALLOWED_ORIGINS must list exact origins (never *)")
                 break
+    hlr_files = (e.get("TLUXE_HLR_FILES_DIR") or "/app/private/hlr-original").strip()
+    hlr_pw = (e.get("TLUXE_HLR_PASSWORD_HASH") or "").strip()
+    if hlr_pw and not _HASH_RE.match(hlr_pw):
+        errors.append("TLUXE_HLR_PASSWORD_HASH must be a scrypt or pbkdf2_sha256 hash "
+                      "(tools/owner-password-hash.html or python -m tluxe_gateway.hashpw) - never a plain password")
     pw_hash = (e.get("TLUXE_OWNER_PASSWORD_HASH") or "").strip()
     if pw_hash and not _HASH_RE.match(pw_hash) and not prod:
         errors.append("TLUXE_OWNER_PASSWORD_HASH has an invalid format (tools/owner-password-hash.html or python -m tluxe_gateway.hashpw)")
@@ -258,6 +274,7 @@ def from_env(env: dict | None = None) -> GatewayConfig:
     ttl_h = check(_int, e, "TLUXE_SESSION_TTL_HOURS", 12, 1, 24 * 30, default=12)
     mt5_keys = check(_mt5_keys, e.get("TLUXE_MT5_BRIDGE_TOKEN_SHA256") or "", default=())
     ibkr_keys = check(_mt5_keys, e.get("TLUXE_IBKR_BRIDGE_TOKEN_SHA256") or "", "TLUXE_IBKR_BRIDGE_TOKEN_SHA256", default=())
+    hlr_keys = check(_mt5_keys, e.get("TLUXE_HLR_BRIDGE_TOKEN_SHA256") or "", "TLUXE_HLR_BRIDGE_TOKEN_SHA256", default=())
     if errors:
         raise ConfigError("; ".join(dict.fromkeys(errors)))
 
@@ -282,6 +299,9 @@ def from_env(env: dict | None = None) -> GatewayConfig:
         ibkr_depth_retention_days=_int(e, "TLUXE_IBKR_DEPTH_RETENTION_DAYS", 7, 1, 90),
         mt5_bridge_keys=mt5_keys,
         ibkr_bridge_keys=ibkr_keys,
+        hlr_bridge_keys=hlr_keys,
+        hlr_password_hash=Secret(hlr_pw),
+        hlr_files_dir=hlr_files,
         static_dir=(e.get("TLUXE_STATIC_DIR") or "").strip(),
         log_format=log_format,
         # No owner login configured yet -> read-only public market data only (login returns AUTH_NOT_CONFIGURED).

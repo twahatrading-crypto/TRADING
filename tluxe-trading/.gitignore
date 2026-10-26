@@ -16,3 +16,6 @@ coverage
 # Python caches (bridges, gateway)
 __pycache__/
 *.pyc
+
+# HLR original project, copied verbatim for reference. Never committed.
+/hlr-original/

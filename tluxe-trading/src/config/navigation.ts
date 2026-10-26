@@ -1,4 +1,4 @@
-import { GC_MAP_ROUTE, HEATMAP_ROUTE, HLE_ROUTE, HLR_ROUTE, LIQUIDITY_ROUTE, NEWS_ROUTE, OFP_ROUTE, ORDER_BLOCKS_ROUTE, SMC_ROUTE, SR_ROUTE, VP_ROUTE, FOOTPRINT_ROUTE } from './modules';
+import { GC_MAP_ROUTE, HEATMAP_ROUTE, HLE_ROUTE, HLR_ORIGINAL_ROUTE, HLR_ROUTE, LIQUIDITY_ROUTE, NEWS_ROUTE, OFP_ROUTE, ORDER_BLOCKS_ROUTE, SMC_ROUTE, SR_ROUTE, VP_ROUTE, FOOTPRINT_ROUTE } from './modules';
 
 /**
  * Trading Strategy pages shown under "Trading Strategy" in the sidebar.
@@ -7,7 +7,7 @@ import { GC_MAP_ROUTE, HEATMAP_ROUTE, HLE_ROUTE, HLR_ROUTE, LIQUIDITY_ROUTE, NEW
  * `route` — entries without a route render disabled ("Soon"), so unfinished
  * strategies can never be opened.
  */
-export type StrategyIcon = 'sr' | 'liquidity' | 'orderBlocks' | 'hlr' | 'hle' | 'heatmap' | 'liquidityMap' | 'smc' | 'volumeProfile' | 'footprint' | 'orderFlowPro' | 'news' | 'sweep';
+export type StrategyIcon = 'sr' | 'liquidity' | 'orderBlocks' | 'hlr' | 'hlrOriginal' | 'hle' | 'heatmap' | 'liquidityMap' | 'smc' | 'volumeProfile' | 'footprint' | 'orderFlowPro' | 'news' | 'sweep';
 
 export interface StrategyNavItem {
   id: string;
@@ -23,6 +23,7 @@ export const STRATEGY_NAV: readonly StrategyNavItem[] = [
   { id: 'order-blocks', label: 'Order Blocks', icon: 'orderBlocks', route: ORDER_BLOCKS_ROUTE },
   { id: 'high-low-reversal', label: 'High / Low Reversal', icon: 'hlr', route: HLR_ROUTE },
   { id: 'high-low-engine', label: 'High / Low Engine', icon: 'hle', route: HLE_ROUTE },
+  { id: 'hlr-original', label: 'HLR Original — Live', icon: 'hlrOriginal', route: HLR_ORIGINAL_ROUTE },
   { id: 'smc', label: 'SMC Analysis', icon: 'smc', route: SMC_ROUTE },
   { id: 'liquidity-heatmap', label: 'Liquidity Heatmap', icon: 'heatmap', route: HEATMAP_ROUTE },
   { id: 'gc-liquidity-map', label: 'GC Liquidity Map', icon: 'liquidityMap', route: GC_MAP_ROUTE },

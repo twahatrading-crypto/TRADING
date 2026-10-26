@@ -16,6 +16,7 @@ import {
   Map as MapIcon,
   Newspaper,
   Settings,
+  SquareActivity,
   type LucideIcon,
 } from 'lucide-react';
 import { SETTINGS_ROUTE } from '../../config/modules';
@@ -31,6 +32,7 @@ const STRATEGY_ICONS: Record<StrategyIcon, LucideIcon> = {
   liquidity: Droplets,
   orderBlocks: Boxes,
   hlr: ArrowDownUp,
+  hlrOriginal: SquareActivity,
   hle: Diamond,
   heatmap: Flame,
   liquidityMap: MapIcon,

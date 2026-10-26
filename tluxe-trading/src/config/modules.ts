@@ -38,6 +38,12 @@ export const FOOTPRINT_ROUTE = '/engines/volume-footprint';
 export const OFP_ROUTE = '/engines/order-flow-pro';
 /** News Analysis page (economic calendar, breaking news, event impact; analysis only). */
 export const NEWS_ROUTE = '/engines/news-analysis';
+/**
+ * HLR Original — Live. The owner's original High / Low Reversal dashboard, served byte-for-byte
+ * from /hlr-original/ inside a same-origin iframe. This is NOT the High / Low Reversal page above:
+ * that one is this app's own engine and is left exactly as it is.
+ */
+export const HLR_ORIGINAL_ROUTE = '/engines/hlr-original';
 
 /** Settings → Data Providers page. */
 export const SETTINGS_ROUTE = '/settings';

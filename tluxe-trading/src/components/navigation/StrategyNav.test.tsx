@@ -33,6 +33,8 @@ const EXPECTED: [string, string | null, RegExp | null][] = [
   ['Order Blocks', '/engines/order-blocks', null],
   ['High / Low Reversal', '/engines/high-low-reversal', null],
   ['High / Low Engine', '/engines/high-low-engine', null],
+  // The owner's original HLR dashboard in a same-origin iframe; a separate page from the two above.
+  ['HLR Original — Live', '/engines/hlr-original', null],
   ['SMC Analysis', '/engines/smc', /SMC Engine/],
   ['Liquidity Heatmap', '/engines/liquidity-heatmap', /Liquidity Heatmap/],
   ['GC Liquidity Map', '/engines/gc-liquidity-map', /GC Liquidity Map/],
@@ -46,7 +48,7 @@ const EXPECTED: [string, string | null, RegExp | null][] = [
 describe('Trading Strategy sidebar', () => {
   it('lists every strategy page once, in order, with the right route (Sweep / Reversal SOON)', () => {
     expect(STRATEGY_NAV.map((s) => [s.label, s.route])).toEqual(EXPECTED.map(([l, r]) => [l, r]));
-    expect(new Set(STRATEGY_NAV.map((s) => s.route).filter(Boolean)).size).toBe(12);
+    expect(new Set(STRATEGY_NAV.map((s) => s.route).filter(Boolean)).size).toBe(13);
   });
 
   it('each item opens its page, is highlighted as active, and the sidebar stays visible', async () => {
@@ -67,5 +69,7 @@ describe('Trading Strategy sidebar', () => {
       if (heading) expect(screen.getAllByRole('heading', { level: 1 }).some((h) => heading.test(h.textContent ?? ''))).toBe(true);
       expect(nav()).toBeInTheDocument();
     }
-  });
+    // 15 s, not the 5 s default: this walk mounts EVERY strategy page in turn, so its cost grows
+    // with the sidebar. It passes well inside 5 s alone, but not alongside the full suite.
+  }, 15_000);
 });

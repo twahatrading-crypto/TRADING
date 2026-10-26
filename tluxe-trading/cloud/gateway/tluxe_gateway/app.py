@@ -24,6 +24,9 @@ from . import __version__
 from .auth import COOKIE, ROTATE_AFTER_S, GlobalFailLimiter, LoginLimiter, new_session_id, sid_hash, verify_password
 from .config import GatewayConfig, Upstream
 from .health import ai_states, comp, databento_state, databento_summary, mt5_states, news_state
+from .hlr_page import HLR_DIR, files_status, hlr_assets, is_protected
+from .hlr_relay import HlrRelay, UPSTREAMS
+from .hlr_auth import DualLimiter, build as build_hlr_auth
 from .logs import Redactor
 from .depth_history import DepthRecorder, build_matrix, coverage_timeline, normalize_request
 from .ibkr_relay import IbkrRelay
@@ -42,6 +45,7 @@ K_CFG = web.AppKey("cfg", GatewayConfig)
 K_STORE = web.AppKey("store", object)
 K_RELAY = web.AppKey("relay", Mt5Relay)
 K_IBKR = web.AppKey("ibkr", IbkrRelay)
+K_HLR = web.AppKey("hlr", HlrRelay)
 K_DEPTH = web.AppKey("depth", DepthRecorder)
 K_HUB = web.AppKey("hub", StreamHub)
 K_STATE = web.AppKey("state", dict)
@@ -868,12 +872,15 @@ def make_app(cfg: GatewayConfig, store=None, workers: bool = True, http_session_
     app[K_CFG] = cfg
     app[K_STORE] = store or (PgStore(cfg.database_url.reveal()) if cfg.database_url else MemoryStore())
     app[K_HUB] = StreamHub()
-    app[K_STATE] = {"limiter": LoginLimiter(), "globalLimiter": GlobalFailLimiter(), "publicLimiter": PublicRateLimiter(), "tasks": []}
+    app[K_STATE] = {"limiter": LoginLimiter(), "globalLimiter": GlobalFailLimiter(), "publicLimiter": PublicRateLimiter(),
+                    # Separate from the owner login: HLR failures never lock the owner out, or vice versa.
+                    "hlrLimiter": DualLimiter(), "tasks": []}
 
     async def on_integrity(kind: str, detail: dict) -> None:
         await app[K_STORE].add_integrity("mt5", None, kind, detail)
 
     app[K_RELAY] = Mt5Relay(cfg.mt5_bridge_keys, on_integrity)
+    app[K_HLR] = HlrRelay(cfg.hlr_bridge_keys, on_integrity)
     # Pull mode (the VPS depth service) takes precedence over the older inbound VPS link: one depth source per book.
     pull = cfg.ibkr_depth.configured
     app[K_IBKR] = IbkrRelay(() if pull else cfg.ibkr_bridge_keys, pull=pull)
@@ -927,6 +934,71 @@ def make_app(cfg: GatewayConfig, store=None, workers: bool = True, http_session_
     app.on_shutdown.append(shutdown)
     app.on_cleanup.append(cleanup)
 
+    require_hlr_session, hlr_login, hlr_logout, hlr_me = build_hlr_auth(
+        cfg,
+        store_of=lambda r: r.app[K_STORE],
+        err=_err,
+        json_of=_json,
+        limiter_of=lambda r: r.app[K_STATE]["hlrLimiter"],
+    )
+
+    async def hlr_bridge_ws(request: web.Request) -> web.StreamResponse:
+        """The trading PC's outbound link. Token-authenticated; the PC never accepts an inbound connection."""
+        relay, store = request.app[K_HLR], request.app[K_STORE]
+        auth = request.headers.get("Authorization", "")
+        token = auth[7:] if auth.startswith("Bearer ") else ""
+        bridge_id = (request.headers.get("X-TLUXE-Bridge-Id") or "hlr-pc")[:64]
+        if not token_ok(token, request.app[K_CFG].hlr_bridge_keys):
+            relay.counts["authRejected"] += 1
+            await store.auth_event("HLR_BRIDGE_REJECTED", bridge_id)
+            return _err(401, "UNAUTHORIZED", "Invalid HLR bridge credential.")
+        ws = web.WebSocketResponse(heartbeat=None, max_msg_size=4_000_000)
+        await ws.prepare(request)
+        await relay.attach(ws, bridge_id)
+        await store.auth_event("HLR_BRIDGE_OK", bridge_id)
+        log.info("HLR link %s connected", bridge_id)
+        why = "closed"
+        try:
+            async for msg in ws:
+                if msg.type == WSMsgType.TEXT:
+                    await relay.on_message(msg.data)
+                elif msg.type in (WSMsgType.ERROR, WSMsgType.CLOSE):
+                    why = "error"
+                    break
+        finally:
+            relay.detach(ws, why)
+            log.info("HLR link %s disconnected (%s)", bridge_id, why)
+        return ws
+
+    @require_hlr_session
+    async def hlr_proxy(request: web.Request) -> web.Response:
+        """Browser -> HLR relay. HLR session only, GET only, strict pass-through."""
+        if request.method != "GET":
+            return _err(405, "READ_ONLY", "HLR access is read-only market data and analysis.")
+        upstream = request.match_info["upstream"]
+        if upstream not in UPSTREAMS:
+            return _err(404, "NOT_FOUND", "Unknown HLR upstream.")
+        path = "/" + request.match_info["path"] + (f"?{request.query_string}" if request.query_string else "")
+        try:
+            status, body = await request.app[K_HLR].request(upstream, path)
+        except RelayError as e:
+            return _err(e.status, e.code, e.message)
+        return _json(body if body is not None else {}, status)
+
+    @require_hlr_session
+    async def hlr_files(request: web.Request) -> web.Response:
+        """Is the private dashboard directory mounted and readable by this process (uid 10001)?
+        Reports presence and a count only - never a file name, never file contents."""
+        cfgx = request.app[K_CFG]
+        return _json({"dir": cfgx.hlr_files_dir, **files_status(Path(cfgx.hlr_files_dir))})
+
+    @require_hlr_session
+    async def hlr_status(request: web.Request) -> web.Response:
+        """Link health only - never market data, and never a cached snapshot."""
+        relay = request.app[K_HLR]
+        return _json({"configured": bool(request.app[K_CFG].hlr_bridge_keys),
+                      "link": relay.status(), "upstreams": relay.terminal()})
+
     r = app.router
     r.add_get("/healthz", healthz)
     r.add_get("/readyz", readyz)
@@ -950,6 +1022,26 @@ def make_app(cfg: GatewayConfig, store=None, workers: bool = True, http_session_
     r.add_get("/api/databento/{path:.+}", databento_proxy)
     r.add_get("/api/news/{path:.+}", news_proxy)
     r.add_route("*", "/api/mt5/{path:.+}", mt5_proxy)
+    # HLR Original is gated by its OWN credential, never the owner login, and the rest of the site
+    # is unaffected either way. No password configured -> these routes do not exist (fail closed).
+    # Registered before the {upstream} matcher so "auth" is never read as an upstream name.
+    if cfg.hlr_password_hash.reveal():
+        r.add_post("/api/hlr/auth/login", hlr_login)
+        r.add_post("/api/hlr/auth/logout", hlr_logout)
+        r.add_get("/api/hlr/auth/me", hlr_me)
+        r.add_get("/api/hlr/files", hlr_files)
+        # The dashboard is served from the PRIVATE directory, not the public static root, so
+        # this route does not depend on TLUXE_STATIC_DIR at all. Registered here - before the
+        # SPA catch-all below - so the gate always wins.
+        r.add_get(f"/{HLR_DIR}/{{tail:.*}}",
+                  hlr_assets(Path(cfg.hlr_files_dir), require_hlr_session,
+                             relay_enabled=bool(cfg.hlr_bridge_keys)))
+    # The data relay exists ONLY when its own credential is configured - a separate switch:
+    # the password says who may look, the bridge token says whether data flows.
+    if cfg.hlr_bridge_keys:
+        r.add_get("/bridge/hlr", hlr_bridge_ws)
+        r.add_get("/api/hlr/status", hlr_status)
+        r.add_route("*", "/api/hlr/{upstream}/{path:.+}", hlr_proxy)
     r.add_post("/api/alerts", post_alert)
     r.add_post("/api/snapshots", post_snapshot)
 
@@ -963,6 +1055,11 @@ def make_app(cfg: GatewayConfig, store=None, workers: bool = True, http_session_
         async def spa(request: web.Request) -> web.StreamResponse:
             rel = request.match_info.get("tail", "")
             f = (root / rel).resolve()
+            # The HLR copy is owner-only and has its own gated route. This handler would otherwise
+            # serve it to anyone - including through a `..` path that resolves back into it - so the
+            # whole subtree is refused here however the URL spelled it.
+            if is_protected(root, f):
+                raise web.HTTPNotFound(text="Not found.")
             if rel and f.is_file() and root in f.parents:
                 resp = web.FileResponse(f)
                 if "/assets/" in f"/{rel}":
@@ -972,6 +1069,9 @@ def make_app(cfg: GatewayConfig, store=None, workers: bool = True, http_session_
             resp.headers["Cache-Control"] = "no-cache"
             return resp
 
+        # Before the catch-all: every file of the copied dashboard is owner-only (it ships the
+        # strategy to the browser), and its entry document needs the same-origin framing the
+        # site-wide headers forbid. Both live in hlr_page.
         r.add_get("/{tail:.*}", spa)
     return app
 
