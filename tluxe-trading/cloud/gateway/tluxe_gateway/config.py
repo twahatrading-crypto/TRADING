@@ -105,6 +105,10 @@ class GatewayConfig:
     #: TLUXE_STATIC_DIR: the public static handler can then never reach the strategy, even by
     #: mistake. On Railway this is the mount path of a private volume.
     hlr_files_dir: str = "/app/private/hlr-original"
+    #: PUBLIC HLR PAGE. When true the dashboard and its APIs are served to ANYONE, with no
+    #: password - including hlr-engine.js, which is readable strategy source. Off by default;
+    #: turning it on is a deliberate decision to publish the strategy. See handoff docs.
+    hlr_public: bool = False
     # IBKR COMEX price-level depth service on the VPS (https://depth.twahatrading.com), polled SERVER-SIDE with
     # `Authorization: Bearer <TLUXE_IBKR_DEPTH_TOKEN>`. The token never reaches a browser, a log or an API response.
     ibkr_depth: Upstream = field(default_factory=lambda: Upstream("ibkr-depth", "", Secret("")))
@@ -254,6 +258,7 @@ def from_env(env: dict | None = None) -> GatewayConfig:
                 errors.append("ALLOWED_ORIGINS must list exact origins (never *)")
                 break
     hlr_files = (e.get("TLUXE_HLR_FILES_DIR") or "/app/private/hlr-original").strip()
+    hlr_public = (e.get("TLUXE_HLR_PUBLIC") or "").strip().lower() in ("1", "true", "yes", "on")
     hlr_pw = (e.get("TLUXE_HLR_PASSWORD_HASH") or "").strip()
     if hlr_pw and not _HASH_RE.match(hlr_pw):
         errors.append("TLUXE_HLR_PASSWORD_HASH must be a scrypt or pbkdf2_sha256 hash "
@@ -302,6 +307,7 @@ def from_env(env: dict | None = None) -> GatewayConfig:
         hlr_bridge_keys=hlr_keys,
         hlr_password_hash=Secret(hlr_pw),
         hlr_files_dir=hlr_files,
+        hlr_public=hlr_public,
         static_dir=(e.get("TLUXE_STATIC_DIR") or "").strip(),
         log_format=log_format,
         # No owner login configured yet -> read-only public market data only (login returns AUTH_NOT_CONFIGURED).

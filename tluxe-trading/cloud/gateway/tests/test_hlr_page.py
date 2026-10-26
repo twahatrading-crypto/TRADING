@@ -16,7 +16,7 @@ from aiohttp.test_utils import TestClient, TestServer
 from tluxe_gateway.app import make_app
 from tluxe_gateway.auth import COOKIE, hash_password
 from tluxe_gateway.config import from_env
-from tluxe_gateway.hlr_page import HLR_DOC_PATH, is_protected
+from tluxe_gateway.hlr_page import HLR_DOC_PATH, SHIM_NAME, is_protected
 from tluxe_gateway.store import MemoryStore
 
 PASSWORD = "correct horse battery staple 42"
@@ -69,6 +69,7 @@ class TestHlrGate(unittest.IsolatedAsyncioTestCase):
         (hlr / "deploy").mkdir()
         (hlr / "deploy" / "runner.js").write_bytes(b"// nested\n")
         self.root = root
+        self.hlr_dir = hlr
         self.cfg = from_env(dev_env(TLUXE_STATIC_DIR=str(root), TLUXE_HLR_FILES_DIR=str(root.parent / "private" / "hlr-original")))
         self.client = TestClient(TestServer(make_app(self.cfg, store=MemoryStore(), workers=False)))
         await self.client.start_server()
@@ -106,12 +107,44 @@ class TestHlrGate(unittest.IsolatedAsyncioTestCase):
         r = await self.client.get("/hlr-original/deploy/runner.js")
         self.assertEqual(r.status, 401)
 
-    async def test_owner_gets_every_file_byte_for_byte(self):
+    async def test_owner_gets_non_html_files_byte_for_byte(self):
+        """Strategy source is served exactly as uploaded - never rewritten, never filtered."""
         await self.login()
-        for path, expected in ((f"/{HLR_DOC_PATH}", DOC), ("/hlr-original/hlr-engine.js", ENGINE)):
-            r = await self.client.get(path)
-            self.assertEqual(r.status, 200, path)
-            self.assertEqual(await r.read(), expected, path)  # not rewritten, nothing injected
+        r = await self.client.get("/hlr-original/hlr-engine.js")
+        self.assertEqual(r.status, 200)
+        self.assertEqual(await r.read(), ENGINE)
+
+    async def test_html_differs_from_disk_by_exactly_the_shim_tag(self):
+        """The ONE documented difference between disk and wire, pinned so it cannot grow.
+
+        Every HTML document gets a single <script> tag added, which routes the dashboard's
+        hard-coded loopback URLs to this origin and opens the page on XAUUSD. Nothing else is
+        added, removed or reordered - and the file on disk is not touched at all.
+        """
+        await self.login()
+        r = await self.client.get(f"/{HLR_DOC_PATH}")
+        self.assertEqual(r.status, 200)
+        served = await r.read()
+        tag = b'<script src="' + SHIM_NAME.encode() + b'"></script>' + b"\n"
+        self.assertIn(tag, served)
+        self.assertEqual(served.replace(tag, b"", 1), DOC)   # remove it -> the original, exactly
+        self.assertEqual(served.count(b"<script"), DOC.count(b"<script") + 1)
+        self.assertEqual((self.hlr_dir / "hlr.html").read_bytes(), DOC)  # disk untouched
+
+    async def test_shim_is_served_without_a_relay_so_xauusd_default_applies(self):
+        """The XAUUSD default travels in the shim, so the shim cannot depend on the data relay.
+
+        No bridge token is configured in this fixture. The shim must still be fetchable, and must
+        still carry the switch to XAUUSD - otherwise the page opens on GC (hlr-gc.js ships
+        DEFAULT_MARKET = 'GC'), which is not what this deployment is for.
+        """
+        await self.login()
+        r = await self.client.get(f"/hlr-original/{SHIM_NAME}")
+        self.assertEqual(r.status, 200)
+        body = await r.read()
+        self.assertIn(b"XAUUSD", body)
+        self.assertIn(b"HLRGC", body)          # uses the dashboard's own public control
+        self.assertIn(b"switchTo", body)
 
     async def test_session_cookie_is_what_authorises_not_the_url(self):
         await self.login()

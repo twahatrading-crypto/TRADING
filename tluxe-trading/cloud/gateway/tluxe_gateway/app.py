@@ -934,13 +934,22 @@ def make_app(cfg: GatewayConfig, store=None, workers: bool = True, http_session_
     app.on_shutdown.append(shutdown)
     app.on_cleanup.append(cleanup)
 
-    require_hlr_session, hlr_login, hlr_logout, hlr_me = build_hlr_auth(
+    _require_hlr_session, hlr_login, hlr_logout, hlr_me = build_hlr_auth(
         cfg,
         store_of=lambda r: r.app[K_STORE],
         err=_err,
         json_of=_json,
         limiter_of=lambda r: r.app[K_STATE]["hlrLimiter"],
     )
+
+    # PUBLIC MODE: the owner has chosen to serve the HLR page to everyone. The gate becomes a
+    # pass-through - the routes still exist, they simply stop asking who is calling. Everything
+    # else is unchanged: GET-only allowlist, no order paths, no e-mail paths, no credentials.
+    def _open(fn):
+        return fn
+
+    require_hlr_session = _open if cfg.hlr_public else _require_hlr_session
+    hlr_enabled = bool(cfg.hlr_password_hash.reveal()) or cfg.hlr_public
 
     async def hlr_bridge_ws(request: web.Request) -> web.StreamResponse:
         """The trading PC's outbound link. Token-authenticated; the PC never accepts an inbound connection."""
@@ -988,9 +997,19 @@ def make_app(cfg: GatewayConfig, store=None, workers: bool = True, http_session_
     @require_hlr_session
     async def hlr_files(request: web.Request) -> web.Response:
         """Is the private dashboard directory mounted and readable by this process (uid 10001)?
-        Reports presence and a count only - never a file name, never file contents."""
+        Reports presence and a count only - never a file name, never file contents.
+
+        In PUBLIC mode this answers anonymous callers, so it reports only the one fact the page
+        actually needs - whether the dashboard is there - and withholds the operational detail
+        (mount path, uid/gid/mode, file count, writability). That detail exists to diagnose a
+        volume permission problem; it is the owner's business, not a visitor's, and publishing
+        the deployment's uid and mount path would be a free hint to anyone probing the host.
+        """
         cfgx = request.app[K_CFG]
-        return _json({"dir": cfgx.hlr_files_dir, **files_status(Path(cfgx.hlr_files_dir))})
+        st = files_status(Path(cfgx.hlr_files_dir))
+        if cfgx.hlr_public:
+            return _json({"entry": st["entry"]})
+        return _json({"dir": cfgx.hlr_files_dir, **st})
 
     @require_hlr_session
     async def hlr_status(request: web.Request) -> web.Response:
@@ -1025,17 +1044,19 @@ def make_app(cfg: GatewayConfig, store=None, workers: bool = True, http_session_
     # HLR Original is gated by its OWN credential, never the owner login, and the rest of the site
     # is unaffected either way. No password configured -> these routes do not exist (fail closed).
     # Registered before the {upstream} matcher so "auth" is never read as an upstream name.
-    if cfg.hlr_password_hash.reveal():
+    # Sign-in routes exist only when a password is configured AND the page is not public: in public
+    # mode there is nothing to sign in to, so the page skips the sign-in step entirely.
+    if cfg.hlr_password_hash.reveal() and not cfg.hlr_public:
         r.add_post("/api/hlr/auth/login", hlr_login)
         r.add_post("/api/hlr/auth/logout", hlr_logout)
         r.add_get("/api/hlr/auth/me", hlr_me)
+    if hlr_enabled:
         r.add_get("/api/hlr/files", hlr_files)
         # The dashboard is served from the PRIVATE directory, not the public static root, so
         # this route does not depend on TLUXE_STATIC_DIR at all. Registered here - before the
         # SPA catch-all below - so the gate always wins.
         r.add_get(f"/{HLR_DIR}/{{tail:.*}}",
-                  hlr_assets(Path(cfg.hlr_files_dir), require_hlr_session,
-                             relay_enabled=bool(cfg.hlr_bridge_keys)))
+                  hlr_assets(Path(cfg.hlr_files_dir), require_hlr_session))
     # The data relay exists ONLY when its own credential is configured - a separate switch:
     # the password says who may look, the bridge token says whether data flows.
     if cfg.hlr_bridge_keys:

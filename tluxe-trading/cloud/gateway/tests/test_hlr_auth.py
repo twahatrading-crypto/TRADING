@@ -18,6 +18,7 @@ from tluxe_gateway.app import make_app
 from tluxe_gateway.auth import COOKIE, hash_password
 from tluxe_gateway.config import ConfigError, from_env
 from tluxe_gateway.hlr_auth import HLR_COOKIE, DualLimiter, hlr_session_key, password_fingerprint
+from tluxe_gateway.hlr_page import HLR_DOC_PATH
 from tluxe_gateway.store import MemoryStore
 
 HLR_PASSWORD = "hlr page password 42"
@@ -289,6 +290,162 @@ class TestHlrAuth(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(b["files"], 0)
             # ...and the page answers a clean 404 rather than pretending.
             self.assertEqual((await client.get("/hlr-original/hlr.html")).status, 404)
+        finally:
+            await client.close()
+            tmp.cleanup()
+
+    # ------------------------------------------- framing of ERROR responses (ERR_BLOCKED_BY_RESPONSE)
+
+    async def test_a_401_from_the_hlr_route_is_still_frameable(self):
+        """A response the browser refuses to render in the iframe shows the viewer a blank frame and
+        no reason. The 401 stays a 401 - only its framing headers change."""
+        r = await self.client.get(f"/{HLR_DOC_PATH}")
+        self.assertEqual(r.status, 401)
+        self.assertEqual(r.headers["X-Frame-Options"], "SAMEORIGIN")
+        self.assertIn("frame-ancestors 'self'", r.headers["Content-Security-Policy"])
+        self.assertNotIn(b"HIGH / LOW REVERSAL", await r.read())
+
+    async def test_a_404_for_a_missing_dashboard_is_still_frameable(self):
+        """Exactly the production state after the password is set but before the upload."""
+        tmp = tempfile.TemporaryDirectory()
+        root = static_dir(tmp.name)
+        (Path(root).parent / "private" / "hlr-original" / "hlr.html").unlink()
+        cfg = from_env(env(TLUXE_STATIC_DIR=str(root), TLUXE_HLR_FILES_DIR=private_dir(root)))
+        client = TestClient(TestServer(make_app(cfg, store=MemoryStore(), workers=False)))
+        await client.start_server()
+        try:
+            await client.post("/api/hlr/auth/login", json={"password": HLR_PASSWORD},
+                              headers={"Origin": ORIGIN})
+            r = await client.get(f"/{HLR_DOC_PATH}")
+            self.assertEqual(r.status, 404)
+            self.assertEqual(r.headers["X-Frame-Options"], "SAMEORIGIN")
+            self.assertIn("frame-ancestors 'self'", r.headers["Content-Security-Policy"])
+            self.assertIn(b"have not been uploaded", await r.read())
+        finally:
+            await client.close()
+            tmp.cleanup()
+
+    async def test_the_rest_of_the_site_still_denies_framing_entirely(self):
+        """The relaxation must not have leaked anywhere else."""
+        await self.login()
+        for path in ("/", "/index.html", "/api/config", "/assets/index-abc.js",
+                     "/api/hlr/auth/me", "/api/hlr/files"):
+            r = await self.client.get(path)
+            self.assertEqual(r.headers["X-Frame-Options"], "DENY", path)
+            self.assertIn("frame-ancestors 'none'", r.headers["Content-Security-Policy"], path)
+
+    # ------------------------------------------------------- PUBLIC mode
+
+    async def test_public_mode_serves_the_dashboard_to_anyone(self):
+        """TLUXE_HLR_PUBLIC=1: no password, no sign-in, open to every visitor. This is the owner's
+        deliberate choice to publish the strategy; the test states exactly what it means."""
+        tmp = tempfile.TemporaryDirectory()
+        root = static_dir(tmp.name)
+        cfg = from_env({"TLUXE_ENV": "development", "TLUXE_HLR_PUBLIC": "1",
+                        "TLUXE_STATIC_DIR": str(root), "TLUXE_HLR_FILES_DIR": private_dir(root)})
+        self.assertTrue(cfg.hlr_public)
+        client = TestClient(TestServer(make_app(cfg, store=MemoryStore(), workers=False)))
+        await client.start_server()
+        try:
+            # No cookie at all - a random visitor.
+            r = await client.get("/hlr-original/hlr-engine.js")
+            self.assertEqual(r.status, 200)
+            self.assertIn(b"HIGH / LOW REVERSAL", await r.read())   # the strategy IS public now
+            self.assertEqual((await client.get(f"/{HLR_DOC_PATH}")).status, 200)
+            # /api/hlr/files answers, but tells an anonymous caller ONLY whether the dashboard is
+            # there - no mount path, no uid/gid/mode, no file count, no writability. Publishing the
+            # strategy is the owner's choice; publishing the host's internals is not part of it.
+            fr = await client.get("/api/hlr/files")
+            self.assertEqual(fr.status, 200)
+            body = await fr.json()
+            self.assertEqual(set(body), {"entry"})
+            for leak in ("dir", "uid", "gid", "mode", "processUid", "files", "writable"):
+                self.assertNotIn(leak, body)
+            # ...and there is nothing to sign in to.
+            self.assertEqual((await client.get("/api/hlr/auth/me")).status, 404)
+            self.assertEqual((await client.post("/api/hlr/auth/login",
+                                                json={"password": HLR_PASSWORD},
+                                                headers={"Origin": ORIGIN})).status, 404)
+            # The rest of the site is still untouched.
+            self.assertEqual((await client.get("/")).status, 200)
+            cfgd = await (await client.get("/api/config")).json()
+            self.assertFalse(cfgd["authRequired"])
+            self.assertTrue(cfgd["publicMarketData"])
+        finally:
+            await client.close()
+            tmp.cleanup()
+
+    async def test_public_mode_still_refuses_orders_and_email(self):
+        """Opening the page does not open anything else: the write paths stay refused."""
+        tmp = tempfile.TemporaryDirectory()
+        root = static_dir(tmp.name)
+        import hashlib
+        tok = hashlib.sha256(("t" * 48).encode()).hexdigest()
+        cfg = from_env({"TLUXE_ENV": "development", "TLUXE_HLR_PUBLIC": "1",
+                        "TLUXE_STATIC_DIR": str(root), "TLUXE_HLR_FILES_DIR": private_dir(root),
+                        "TLUXE_HLR_BRIDGE_TOKEN_SHA256": tok})
+        client = TestClient(TestServer(make_app(cfg, store=MemoryStore(), workers=False)))
+        await client.start_server()
+        try:
+            for path in ("/api/hlr/mt5/api/order", "/api/hlr/mt5/api/trade",
+                         "/api/hlr/mt5/api/position", "/api/hlr/mt5/api/alert-email",
+                         "/api/hlr/mt5/api/alert-test-email"):
+                self.assertEqual((await client.get(path)).status, 403, path)
+            r = await client.post("/api/hlr/mt5/api/status", headers={"Origin": ORIGIN})
+            self.assertEqual(r.status, 405)
+        finally:
+            await client.close()
+            tmp.cleanup()
+
+    async def test_public_mode_is_off_by_default(self):
+        """The strategy is not published by accident: it takes an explicit variable."""
+        self.assertFalse(self.cfg.hlr_public)
+        self.assertEqual((await self.client.get("/hlr-original/hlr-engine.js")).status, 401)
+
+    async def test_public_wins_while_the_old_password_is_still_configured(self):
+        """THE ROLLOUT STATE. Production has TLUXE_HLR_PASSWORD_HASH set today. Going public means
+        adding TLUXE_HLR_PUBLIC first and removing the hash afterwards, so for a while BOTH exist.
+
+        In that window the page must already be open and the sign-in must already be gone -
+        otherwise the owner would be staring at a login card wondering whether the deploy worked,
+        and would be tempted to delete the hash first, which takes the page away entirely.
+        """
+        tmp = tempfile.TemporaryDirectory()
+        root = static_dir(tmp.name)
+        cfg = from_env({"TLUXE_ENV": "development", "TLUXE_HLR_PUBLIC": "1",
+                        "TLUXE_HLR_PASSWORD_HASH": HLR_HASH,      # still set - mid-rollout
+                        "TLUXE_STATIC_DIR": str(root), "TLUXE_HLR_FILES_DIR": private_dir(root)})
+        self.assertTrue(cfg.hlr_public)
+        self.assertTrue(cfg.hlr_password_hash.reveal())           # both switches on at once
+        client = TestClient(TestServer(make_app(cfg, store=MemoryStore(), workers=False)))
+        await client.start_server()
+        try:
+            self.assertEqual((await client.get("/hlr-original/hlr-engine.js")).status, 200)
+            self.assertEqual((await client.get(f"/{HLR_DOC_PATH}")).status, 200)
+            self.assertEqual((await client.get("/api/hlr/auth/me")).status, 404)
+        finally:
+            await client.close()
+            tmp.cleanup()
+
+    async def test_removing_the_password_without_the_public_flag_closes_the_page(self):
+        """The WRONG order, pinned so its consequence is documented rather than discovered.
+
+        Delete the hash while TLUXE_HLR_PUBLIC is unset and the routes stop being registered: the
+        page reports itself unavailable. It fails CLOSED, which is the right failure - but it is
+        not what the owner would be expecting mid-rollout, so the order in the plan matters.
+        """
+        tmp = tempfile.TemporaryDirectory()
+        root = static_dir(tmp.name)
+        cfg = from_env({"TLUXE_ENV": "development",
+                        "TLUXE_STATIC_DIR": str(root), "TLUXE_HLR_FILES_DIR": private_dir(root)})
+        self.assertFalse(cfg.hlr_public)
+        self.assertFalse(cfg.hlr_password_hash.reveal())
+        client = TestClient(TestServer(make_app(cfg, store=MemoryStore(), workers=False)))
+        await client.start_server()
+        try:
+            self.assertEqual((await client.get("/hlr-original/hlr-engine.js")).status, 404)
+            self.assertEqual((await client.get("/api/hlr/files")).status, 404)
+            self.assertEqual((await client.get("/")).status, 200)      # site itself unaffected
         finally:
             await client.close()
             tmp.cleanup()

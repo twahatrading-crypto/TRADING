@@ -193,7 +193,40 @@ def files_status(files_dir: Path) -> dict:
         return out
 
 
-def hlr_assets(files_dir: Path, require_session, relay_enabled: bool = False):
+def _frameable(resp: web.StreamResponse) -> bool:
+    """Only what the browser may actually try to RENDER in the frame needs the relaxation:
+
+      * an HTML document - the dashboard's own pages, which the frame navigates between;
+      * any error - a 401 or 404 that would otherwise be blocked, leaving a blank frame and no
+        explanation for the viewer.
+
+    A script or stylesheet is never framed, so it keeps the site-wide `DENY`. Narrower is better.
+    """
+    if resp.status >= 400:
+        return True
+    ctype = (resp.headers.get("Content-Type") or "").lower()
+    return ctype.startswith("text/html")
+
+
+def _frame_headers(resp: web.StreamResponse) -> web.StreamResponse:
+    """Stamp this route's framing and caching headers on a response.
+
+    EVERY response from the HLR route needs these - 200, 401 and 404 alike. The site-wide middleware
+    applies `X-Frame-Options: DENY` and `frame-ancestors 'none'` by setdefault, so a response that
+    skips this (an auth failure, a missing file) is refused by the browser inside the iframe with
+    ERR_BLOCKED_BY_RESPONSE, and the viewer sees a blank frame instead of the reason. Setting them
+    here means the error is at least *displayable* - it does not weaken anything: the policy is still
+    `frame-ancestors 'self'`, scoped to this route, and the response itself is still a 401 or 404.
+    """
+    if _frameable(resp):
+        resp.headers["X-Frame-Options"] = "SAMEORIGIN"
+        resp.headers["Content-Security-Policy"] = HLR_CSP
+    resp.headers["Cache-Control"] = "no-store, private, max-age=0"
+    resp.headers["Vary"] = "Cookie"
+    return resp
+
+
+def hlr_assets(files_dir: Path, require_session):
     """Build the gated handler for everything under /hlr-original/.
 
     `files_dir` is the PRIVATE directory the dashboard was uploaded to - never the public static
@@ -203,11 +236,14 @@ def hlr_assets(files_dir: Path, require_session, relay_enabled: bool = False):
     guarded = Path(files_dir).resolve()
 
     @require_session
-    async def handler(request: web.Request) -> web.StreamResponse:
+    async def serve(request: web.Request) -> web.StreamResponse:
         rel = request.match_info.get("tail", "")
         if rel == SHIM_NAME:
-            if not relay_enabled:
-                raise web.HTTPNotFound(text="Not found.")
+            # Always available. It does two things: route the dashboard's hard-coded loopback URLs
+            # to this origin, and open the page on XAUUSD. The second must work even when the data
+            # relay is not configured, so neither is gated on it. With no relay the rewritten URLs
+            # simply 404 here instead of failing against 127.0.0.1 - the same outcome, stated more
+            # honestly, and the dashboard reports itself offline either way.
             resp = web.Response(text=SHIM_JS, content_type="application/javascript", charset="utf-8")
             resp.headers["Cache-Control"] = "no-store, private, max-age=0"
             resp.headers["Vary"] = "Cookie"
@@ -218,6 +254,12 @@ def hlr_assets(files_dir: Path, require_session, relay_enabled: bool = False):
             raise web.HTTPNotFound(text="Not found.")
         # Re-check containment AFTER resolution: `rel` may contain `..` segments.
         if not rel or not target.is_file() or not (target == guarded or guarded in target.parents):
+            # Distinguish "the dashboard has not been uploaded" from "no such file", because the
+            # first is an expected operational state and the second is a mistake. Neither reveals
+            # anything: the caller already holds a valid session to get this far.
+            if not (guarded / HLR_DOC).is_file():
+                raise web.HTTPNotFound(
+                    text="The HLR dashboard files have not been uploaded to this deployment yet.")
             raise web.HTTPNotFound(text="Not found.")
 
         if target.suffix.lower() == ".html":
@@ -230,17 +272,29 @@ def hlr_assets(files_dir: Path, require_session, relay_enabled: bool = False):
             # These are the only responses not sent straight from disk: with the relay built, one
             # <script> tag is added so the dashboard's hard-coded loopback URLs reach this origin.
             # The files themselves are untouched - compare their SHA-256 with the originals any time.
-            body = target.read_bytes()
-            if relay_enabled:
-                body = inject_shim(body)
-            resp = web.Response(body=body, content_type="text/html", charset="utf-8")
-            resp.headers["X-Frame-Options"] = "SAMEORIGIN"
-            resp.headers["Content-Security-Policy"] = HLR_CSP
-        else:
-            resp = web.FileResponse(target)
-        # Never cached anywhere: the session, not the URL, is what authorises this file.
-        resp.headers["Cache-Control"] = "no-store, private, max-age=0"
-        resp.headers["Vary"] = "Cookie"
-        return resp
+            body = inject_shim(target.read_bytes())
+            return web.Response(body=body, content_type="text/html", charset="utf-8")
+        return web.FileResponse(target)
+
+    async def handler(request: web.Request) -> web.StreamResponse:
+        """Wraps the gated handler so that EVERY outcome carries this route's framing headers.
+
+        Without this, a 401 (no session) or a 404 (volume not uploaded yet) leaves the middleware's
+        site-wide `X-Frame-Options: DENY` in place, and the browser blocks the response inside the
+        iframe with ERR_BLOCKED_BY_RESPONSE - the viewer sees a blank frame and no explanation. The
+        status codes are unchanged; only the headers that decide whether the answer can be *shown*.
+
+        The failure is turned into an ordinary Response rather than re-raised, for two reasons.
+        Re-raising loses the fix: the site-wide middleware catches HTTPException and rebuilds it
+        with `_err(...)`, which drops these headers and the browser blocks the frame again. And
+        aiohttp deprecated *returning* an HTTPException object (#2415) - it still works, but it
+        warns and is slated for removal. Copying it into a real Response avoids both.
+        """
+        try:
+            return _frame_headers(await serve(request))
+        except web.HTTPException as exc:
+            return _frame_headers(web.Response(
+                status=exc.status, reason=exc.reason, text=exc.text,
+                content_type=exc.content_type or "text/plain"))
 
     return handler

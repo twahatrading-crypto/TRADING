@@ -4,6 +4,9 @@ import './hlrOriginal.css';
 /** Whether this page's own credential has been accepted. Nothing here touches the site's own auth. */
 type Auth = 'checking' | 'required' | 'ok' | 'unavailable';
 
+/** Whether the dashboard files are actually present on the private volume. */
+type Files = 'checking' | 'present' | 'missing';
+
 /** What the MT5 bridge on the trading PC reports about the account behind the data. */
 type Source =
   | { state: 'loading' }
@@ -17,21 +20,28 @@ function isDemo(server: string, company: string | null): boolean {
   return /demo/i.test(server) || /metaquotes/i.test(company ?? '');
 }
 
-function useAuth(): [Auth, () => void] {
+function useAuth(): [Auth, () => void, boolean] {
   const [auth, setAuth] = useState<Auth>('checking');
+  // True only when a real session exists - i.e. a password is configured and we signed in.
+  const [hasSession, setHasSession] = useState(false);
   const check = useCallback(() => {
     void (async () => {
       try {
         const r = await fetch('/api/hlr/auth/me', { cache: 'no-store' });
-        // 404 = this deployment has no HLR credential configured, so the page does not exist here.
-        setAuth(r.ok ? 'ok' : r.status === 404 ? 'unavailable' : 'required');
+        if (r.ok) { setHasSession(true); return setAuth('ok'); }
+        if (r.status !== 404) return setAuth('required');
+        // 404: no sign-in exists here. Either the page is PUBLIC (no password configured, open to
+        // everyone) or the feature is absent. /api/hlr/files tells the two apart - it is registered
+        // whenever the page is, and in public mode it answers without a session.
+        const probe = await fetch('/api/hlr/files', { cache: 'no-store' });
+        setAuth(probe.ok ? 'ok' : 'unavailable');
       } catch {
         setAuth('unavailable');
       }
     })();
   }, []);
   useEffect(check, [check]);
-  return [auth, check];
+  return [auth, check, hasSession];
 }
 
 /**
@@ -130,8 +140,11 @@ function SignIn({ onSignedIn }: { onSignedIn: () => void }) {
   );
 }
 
-function SourceBanner({ source, onSignOut }: { source: Source; onSignOut: () => void }) {
-  const out = <button type="button" className="hlrorig__signout" onClick={onSignOut}>Sign out</button>;
+function SourceBanner({ source, onSignOut }: { source: Source; onSignOut: (() => void) | null }) {
+  // No sign-out when the page is public: there is no session to end.
+  const out = onSignOut
+    ? <button type="button" className="hlrorig__signout" onClick={onSignOut}>Sign out</button>
+    : null;
   if (source.state === 'loading') return null;
   if (source.state === 'unavailable') {
     return (
@@ -184,8 +197,25 @@ function SourceBanner({ source, onSignOut }: { source: Source; onSignOut: () => 
  * reads the dashboard's DOM, never fetches a price, and never takes part in its analysis.
  */
 export function HlrOriginalPage() {
-  const [auth, recheck] = useAuth();
+  const [auth, recheck, hasSession] = useAuth();
   const source = useSource(auth === 'ok', recheck);
+  const [files, setFiles] = useState<Files>('checking');
+
+  useEffect(() => {
+    if (auth !== 'ok') return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const r = await fetch('/api/hlr/files', { cache: 'no-store' });
+        if (cancelled) return;
+        const b = r.ok ? ((await r.json()) as { entry?: boolean }) : null;
+        setFiles(b?.entry === true ? 'present' : 'missing');
+      } catch {
+        if (!cancelled) setFiles('missing');
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [auth]);
 
   const signOut = useCallback(() => {
     void (async () => {
@@ -197,7 +227,7 @@ export function HlrOriginalPage() {
     })();
   }, [recheck]);
 
-  if (auth === 'checking') return <div className="hlrorig" />;
+  if (auth === 'checking' || (auth === 'ok' && files === 'checking')) return <div className="hlrorig" />;
   if (auth === 'unavailable') {
     return (
       <div className="hlrorig">
@@ -209,10 +239,26 @@ export function HlrOriginalPage() {
     );
   }
   if (auth === 'required') return <div className="hlrorig"><SignIn onSignedIn={recheck} /></div>;
+  if (files === 'missing') {
+    // Signed in, but nothing has been uploaded to the private volume. Say so plainly rather than
+    // framing a 404 the browser would refuse to display anyway.
+    return (
+      <div className="hlrorig">
+        <div className="hlrorig__banner hlrorig__banner--unknown" role="status">
+          <b>DASHBOARD FILES NOT UPLOADED</b>
+          <span>
+            You are signed in, but the private volume holds no dashboard yet, so there is nothing to
+            show. This is expected until the files are uploaded.
+          </span>
+          {hasSession && <button type="button" className="hlrorig__signout" onClick={signOut}>Sign out</button>}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="hlrorig">
-      <SourceBanner source={source} onSignOut={signOut} />
+      <SourceBanner source={source} onSignOut={hasSession ? signOut : null} />
       <iframe
         className="hlrorig__frame"
         src="/hlr-original/hlr.html"

@@ -10,7 +10,7 @@ import { HlrOriginalPage } from './HlrOriginalPage';
 const ACCOUNT = { server: 'MetaQuotes-Demo', company: 'MetaQuotes Ltd.' };
 
 /** A fetch stub answering only the endpoints this page is allowed to use. */
-function stub({ me = 200, account = ACCOUNT as unknown, login = 200 } = {}) {
+function stub({ me = 200, account = ACCOUNT as unknown, login = 200, files = true } = {}) {
   return vi.fn(async (url: string) => {
     const u = String(url);
     if (u === '/api/hlr/auth/me') return { ok: me === 200, status: me, json: async () => ({}) };
@@ -18,6 +18,8 @@ function stub({ me = 200, account = ACCOUNT as unknown, login = 200 } = {}) {
       return { ok: login === 200, status: login, json: async () => ({ error: { message: 'Sign-in failed.' } }) };
     }
     if (u === '/api/hlr/auth/logout') return { ok: true, status: 200, json: async () => ({}) };
+    // The page checks the private volume before framing anything.
+    if (u === '/api/hlr/files') return { ok: files, status: files ? 200 : 404, json: async () => ({ entry: files }) };
     if (u === '/api/hlr/mt5/api/status') return { ok: true, status: 200, json: async () => ({ account }) };
     throw new Error(`unexpected fetch: ${u}`);
   });
@@ -60,11 +62,21 @@ describe('HLR Original — Live page', () => {
     expect(frame()).toBeNull();
   });
 
-  it('says so plainly when this deployment has no HLR credential (404)', async () => {
-    vi.stubGlobal('fetch', stub({ me: 404 }));
+  it('says so plainly when the feature is absent from this deployment', async () => {
+    // No sign-in route AND no files route: the page is not configured here at all.
+    vi.stubGlobal('fetch', stub({ me: 404, files: false }));
     render(<HlrOriginalPage />);
     await waitFor(() => expect(screen.getByText(/NOT AVAILABLE HERE/i)).toBeInTheDocument());
     expect(frame()).toBeNull();
+  });
+
+  it('opens directly with no sign-in when the page is public', async () => {
+    // No sign-in route (404) but the files route answers: the deployment serves this page openly.
+    vi.stubGlobal('fetch', stub({ me: 404, files: true }));
+    render(<HlrOriginalPage />);
+    await waitFor(() => expect(frame()).not.toBeNull());
+    expect(screen.queryByLabelText(/password/i)).toBeNull();
+    expect(screen.queryByRole('button', { name: /sign out/i })).toBeNull();
   });
 
   it('offers sign-out once signed in', async () => {
@@ -128,7 +140,7 @@ describe('HLR Original — Live page', () => {
     render(<HlrOriginalPage />);
     await waitFor(() => expect(screen.getByText(/DEMO DATA/)).toBeInTheDocument());
     for (const call of f.mock.calls) {
-      expect(['/api/hlr/auth/me', '/api/hlr/mt5/api/status']).toContain(String(call[0]));
+      expect(['/api/hlr/auth/me', '/api/hlr/files', '/api/hlr/mt5/api/status']).toContain(String(call[0]));
     }
   });
 
