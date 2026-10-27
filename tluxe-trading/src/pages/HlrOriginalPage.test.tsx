@@ -9,8 +9,17 @@ import { HlrOriginalPage } from './HlrOriginalPage';
  */
 const ACCOUNT = { server: 'MetaQuotes-Demo', company: 'MetaQuotes Ltd.' };
 
-/** A fetch stub answering only the endpoints this page is allowed to use. */
-function stub({ me = 200, account = ACCOUNT as unknown, login = 200, files = true } = {}) {
+/**
+ * A fetch stub answering only the endpoints this page is allowed to use.
+ *
+ * `files` is whether the /api/hlr/files ROUTE answers at all; `entry` is whether the volume
+ * actually holds the dashboard. They are independent, and the difference matters: a PUBLIC
+ * deployment whose volume is still empty answers 200 with entry:false - which is exactly the state
+ * production is in before the upload. Defaults to `files` so existing callers are unaffected.
+ */
+function stub({ me = 200, account = ACCOUNT as unknown, login = 200, files = true, entry }:
+  { me?: number; account?: unknown; login?: number; files?: boolean; entry?: boolean } = {}) {
+  const hasEntry = entry ?? files;
   return vi.fn(async (url: string) => {
     const u = String(url);
     if (u === '/api/hlr/auth/me') return { ok: me === 200, status: me, json: async () => ({}) };
@@ -19,7 +28,7 @@ function stub({ me = 200, account = ACCOUNT as unknown, login = 200, files = tru
     }
     if (u === '/api/hlr/auth/logout') return { ok: true, status: 200, json: async () => ({}) };
     // The page checks the private volume before framing anything.
-    if (u === '/api/hlr/files') return { ok: files, status: files ? 200 : 404, json: async () => ({ entry: files }) };
+    if (u === '/api/hlr/files') return { ok: files, status: files ? 200 : 404, json: async () => ({ entry: hasEntry }) };
     if (u === '/api/hlr/mt5/api/status') return { ok: true, status: 200, json: async () => ({ account }) };
     throw new Error(`unexpected fetch: ${u}`);
   });
@@ -82,6 +91,27 @@ describe('HLR Original — Live page', () => {
   it('offers sign-out once signed in', async () => {
     render(<HlrOriginalPage />);
     await waitFor(() => expect(screen.getByRole('button', { name: /sign out/i })).toBeInTheDocument());
+  });
+
+  it('shows no sign-in language at all when public and the volume is still empty', async () => {
+    // PRODUCTION'S EXACT STATE once TLUXE_HLR_PUBLIC is set but before the 76 files are uploaded.
+    // The page must not offer, mention or imply a login anywhere - the whole point of public mode.
+    vi.stubGlobal('fetch', stub({ me: 404, files: true, entry: false }));
+    render(<HlrOriginalPage />);
+    await waitFor(() => expect(screen.getByText(/dashboard files not uploaded/i)).toBeInTheDocument());
+    expect(screen.queryByLabelText(/password/i)).toBeNull();
+    expect(screen.queryByRole('button', { name: /sign out/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /sign in/i })).toBeNull();
+    expect(document.body.textContent).not.toMatch(/signed in|sign in|password/i);
+  });
+
+  it('still says "signed in" when a password IS configured and the volume is empty', async () => {
+    // The other half of the same branch: password mode is unchanged by the public-mode copy.
+    vi.stubGlobal('fetch', stub({ me: 200, files: true, entry: false }));
+    render(<HlrOriginalPage />);
+    await waitFor(() => expect(screen.getByText(/dashboard files not uploaded/i)).toBeInTheDocument());
+    expect(document.body.textContent).toMatch(/you are signed in/i);
+    expect(screen.getByRole('button', { name: /sign out/i })).toBeInTheDocument();
   });
 
   // ---------------------------------------------------------------- the frame

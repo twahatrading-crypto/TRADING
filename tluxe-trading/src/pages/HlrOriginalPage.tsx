@@ -240,15 +240,18 @@ export function HlrOriginalPage() {
   }
   if (auth === 'required') return <div className="hlrorig"><SignIn onSignedIn={recheck} /></div>;
   if (files === 'missing') {
-    // Signed in, but nothing has been uploaded to the private volume. Say so plainly rather than
-    // framing a 404 the browser would refuse to display anyway.
+    // Nothing has been uploaded to the private volume. Say so plainly rather than framing a 404
+    // the browser would refuse to display anyway.
     return (
       <div className="hlrorig">
         <div className="hlrorig__banner hlrorig__banner--unknown" role="status">
           <b>DASHBOARD FILES NOT UPLOADED</b>
           <span>
-            You are signed in, but the private volume holds no dashboard yet, so there is nothing to
-            show. This is expected until the files are uploaded.
+            {/* Public mode has no sign-in at all, so this copy must not claim one. */}
+            {hasSession
+              ? 'You are signed in, but the private volume holds no dashboard yet, so there is nothing to show.'
+              : 'The private volume holds no dashboard yet, so there is nothing to show.'}{' '}
+            This is expected until the files are uploaded.
           </span>
           {hasSession && <button type="button" className="hlrorig__signout" onClick={signOut}>Sign out</button>}
         </div>
