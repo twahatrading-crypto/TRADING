@@ -1,5 +1,6 @@
 import { Cloud, LogOut } from 'lucide-react';
 import { COMPONENT_LABELS, logout } from '../../services/cloud/cloudApi';
+import { CloudAccount } from './CloudAccount';
 import { healthLabel, healthTone } from './cloudHealth';
 import type { StreamState } from '../../services/cloud/CloudStream';
 import { useStore } from '../../store/createStore';
@@ -29,7 +30,7 @@ function CloudStatusInner({ rt }: { rt: NonNullable<ReturnType<typeof useCloudRu
   const stream = useStore(rt.stream.store, (s) => s.state);
   const signOut = async () => {
     await logout();
-    window.location.reload();
+    window.location.replace('/login');
   };
   return (
     <Panel id="cloud-status" title="Cloud connections" icon={<Cloud size={15} />} subtitle="Managed on the server — credentials never reach this browser">
@@ -55,6 +56,7 @@ function CloudStatusInner({ rt }: { rt: NonNullable<ReturnType<typeof useCloudRu
         <button type="button" className="sbtn cloud-status__signout" onClick={() => void signOut()}>
           <LogOut size={13} /> Sign out
         </button>
+        <CloudAccount />
       </div>
     </Panel>
   );

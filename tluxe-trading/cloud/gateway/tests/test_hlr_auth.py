@@ -221,12 +221,12 @@ class TestHlrAuth(unittest.IsolatedAsyncioTestCase):
         """Even with a valid owner session, the HLR files stay closed."""
         tmp = tempfile.TemporaryDirectory()
         root = static_dir(tmp.name)
-        cfg = from_env({"TLUXE_ENV": "development", "TLUXE_OWNER_PASSWORD_HASH": OWNER_HASH,
+        cfg = from_env({"TLUXE_ENV": "development", "TLUXE_OWNER_PASSWORD_HASH": OWNER_HASH, "TLUXE_OWNER_EMAIL": "owner@example.com",
                         "TLUXE_HLR_PASSWORD_HASH": HLR_HASH, "TLUXE_STATIC_DIR": str(root), "TLUXE_HLR_FILES_DIR": private_dir(root), "TLUXE_HLR_FILES_DIR": private_dir(root)})
         client = TestClient(TestServer(make_app(cfg, store=MemoryStore(), workers=False)))
         await client.start_server()
         try:
-            self.assertEqual((await client.post("/api/auth/login", json={"password": OWNER_PASSWORD},
+            self.assertEqual((await client.post("/api/auth/login", json={"email": "owner@example.com", "password": OWNER_PASSWORD},
                                                 headers={"Origin": ORIGIN})).status, 200)
             self.assertEqual((await client.get("/api/auth/me")).status, 200)      # owner session is real
             r = await client.get("/hlr-original/hlr-engine.js")

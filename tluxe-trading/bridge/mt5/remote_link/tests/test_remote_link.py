@@ -149,13 +149,13 @@ class TestEndToEnd(unittest.IsolatedAsyncioTestCase):
 
         self.COOKIE = COOKIE
         self.local = FakeLocalBridge()
-        self.cfg = gw_env({"TLUXE_ENV": "development", "TLUXE_OWNER_PASSWORD_HASH": hash_password("owner-password-123456", n=2**12),
+        self.cfg = gw_env({"TLUXE_ENV": "development", "TLUXE_OWNER_PASSWORD_HASH": hash_password("owner-password-123456", n=2**12), "TLUXE_OWNER_EMAIL": "owner@example.com",
                            "TLUXE_MT5_BRIDGE_TOKEN_SHA256": hashlib.sha256(REMOTE_TOKEN.encode()).hexdigest()})
         self.app = make_app(self.cfg, workers=False)
         self.K_RELAY = K_RELAY
         self.client = TestClient(TestServer(self.app))
         await self.client.start_server()
-        r = await self.client.post("/api/auth/login", json={"password": "owner-password-123456"}, headers={"Origin": "http://localhost:5182"})
+        r = await self.client.post("/api/auth/login", json={"email": "owner@example.com", "password": "owner-password-123456"}, headers={"Origin": "http://localhost:5182"})
         self.sid = r.cookies[COOKIE].value
         self.h = {"Cookie": f"{COOKIE}={self.sid}", "Origin": "http://localhost:5182"}
         self.link_cfg = L.from_env(env(TLUXE_GATEWAY_BRIDGE_URL=f"ws://127.0.0.1:{self.client.port}/bridge/mt5", TLUXE_LINK_ALLOW_INSECURE_LOCAL="1",

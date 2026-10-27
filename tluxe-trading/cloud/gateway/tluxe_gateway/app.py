@@ -3,8 +3,9 @@
 Browser --HTTPS/WSS--> gateway --private network--> tluxe-ai · tluxe-databento · tluxe-news   (+ PostgreSQL)
                                       ^-- outbound WSS from the Windows VPS MT5 remote link (/bridge/mt5)
 
-Public, unauthenticated: /healthz (liveness), /readyz (readiness), static web assets, /api/auth/login, /api/config.
-Everything else requires the owner session cookie. Internal service tokens / provider credentials live only in the
+Public, unauthenticated: /healthz (liveness), /readyz (readiness), /api/auth/login, /api/config, the /login page.
+Once the owner login is configured everything else - the dashboard HTML and JavaScript included - requires the owner
+session cookie (see owner_login.py); before that, only the read-only market-data GET routes are public, as before. Internal service tokens / provider credentials live only in the
 gateway's environment and are never returned. Read-only market data and analysis only - no trading routes exist.
 """
 from __future__ import annotations
@@ -21,7 +22,8 @@ from urllib.parse import urlparse
 from aiohttp import ClientSession, ClientTimeout, WSMsgType, web
 
 from . import __version__
-from .auth import COOKIE, ROTATE_AFTER_S, GlobalFailLimiter, LoginLimiter, new_session_id, sid_hash, verify_password
+from .auth import COOKIE, ROTATE_AFTER_S, GlobalFailLimiter, LoginLimiter, hash_password, new_session_id, sid_hash, verify_password
+from . import owner_login as ol
 from .config import GatewayConfig, Upstream
 from .health import ai_states, comp, databento_state, databento_summary, mt5_states, news_state
 from .hlr_page import HLR_DIR, files_status, hlr_assets, is_protected
@@ -43,6 +45,7 @@ MAX_JSON = 256_000
 MAX_SNAPSHOT = 64_000
 DATABENTO_PATH = re.compile(r"^v1/(health|feed|book/(GC|SI)|trades/(GC|SI)|candles/(GC|SI))$")
 NEWS_PATH = re.compile(r"^v1/(health|calendar|headlines)$")
+STREAM_RECHECK_S = 30
 SAFE_QUERY = re.compile(r"^[A-Za-z0-9_=&.,%-]{0,300}$")
 
 K_CFG = web.AppKey("cfg", GatewayConfig)
@@ -74,7 +77,14 @@ async def _session(request: web.Request) -> str | None:
     sid = request.cookies.get(COOKIE)
     if not sid or len(sid) > 200:
         return None
-    return sid if await request.app[K_STORE].session_valid(sid_hash(sid)) else None
+    cfg = request.app[K_CFG]
+    # Owner sessions also end after the inactivity timeout (real activity only - see auth_activity).
+    return sid if await request.app[K_STORE].session_valid(sid_hash(sid), cfg.session_idle_s) else None
+
+
+def _owner_login(cfg) -> bool:
+    """The owner login is configured: the whole site is private."""
+    return not cfg.public_market_data
 
 
 def _set_cookie(resp: web.StreamResponse, cfg: GatewayConfig, sid: str) -> None:
@@ -184,12 +194,21 @@ def market_data_route(fn):
     return wrapped
 
 
+def _csrf_ok(request: web.Request) -> bool:
+    """State-changing request from the TLUXE web app itself: its Origin must be one of the allowed origins.
+    Production requires the header; development accepts its absence (local tools / tests)."""
+    origin = request.headers.get("Origin")
+    if origin is None:
+        return not request.app[K_CFG].production
+    return origin in request.app[K_CFG].allowed_origins
+
+
 def require_session(fn):
     async def wrapped(request: web.Request):
         sid = await _session(request)
         if sid is None:
             return _err(401, "UNAUTHORIZED", "Sign in to TLUXE.")
-        if request.method != "GET" and request.headers.get("Origin") is None and request.app[K_CFG].production:
+        if request.method not in ("GET", "HEAD") and not _csrf_ok(request):
             return _err(403, "ORIGIN_REQUIRED", "State-changing requests must come from the TLUXE web app.")
         request["sid"] = sid
         resp = await fn(request)
@@ -198,7 +217,10 @@ def require_session(fn):
         if iat.isdigit() and time.time() - int(iat) > ROTATE_AFTER_S and isinstance(resp, web.Response):
             new = new_session_id()
             store = request.app[K_STORE]
-            await store.session_create(sid_hash(new), request.app[K_CFG].session_ttl_s)
+            # The new id inherits the ORIGINAL sign-in and activity times: rotation never extends the 12 h
+            # maximum and never counts as activity.
+            times = await store.session_times(sid_hash(sid))
+            await store.session_create(sid_hash(new), request.app[K_CFG].session_ttl_s, *(times or (None, None)))
             await store.session_revoke(sid_hash(sid))
             await store.auth_event("ROTATE")
             _set_cookie(resp, request.app[K_CFG], new)
@@ -236,21 +258,28 @@ async def login(request: web.Request) -> web.Response:
     wait = max(limiter.locked(client), global_limiter.blocked())
     if wait:
         return _err(429, "LOCKED", f"Too many attempts - try again in {int(wait) + 1} s.")
-    if not cfg.owner_password_hash:
+    if not cfg.owner_password_hash or not cfg.owner_email:
+        # Fail closed: with a hash but no TLUXE_OWNER_EMAIL nobody can sign in, and the site stays locked.
         return _err(503, "AUTH_NOT_CONFIGURED", "Owner sign-in is not configured yet.")
+    if not _csrf_ok(request):
+        return _err(403, "ORIGIN_REQUIRED", "Sign in from the TLUXE web app.")
     try:
         body = await request.json()
     except (ValueError, UnicodeDecodeError):
         return _err(400, "INVALID_JSON", "Invalid request.")
     pw = body.get("password") if isinstance(body, dict) else None
-    if not isinstance(pw, str) or not (1 <= len(pw) <= 256):
-        return _err(400, "INVALID_BODY", "Password required.")
-    ok = await asyncio.get_running_loop().run_in_executor(None, verify_password, pw, cfg.owner_password_hash.reveal())
+    email = body.get("email") if isinstance(body, dict) else None
+    if not isinstance(pw, str) or not (1 <= len(pw) <= 256) or not isinstance(email, str) or not email.strip():
+        return _err(400, "INVALID_BODY", "E-mail and password required.")
+    stored = await ol.effective_hash(cfg, store)
+    # The hash is always checked - also for a wrong e-mail - so the answer time does not reveal which was wrong.
+    pw_ok = await asyncio.get_running_loop().run_in_executor(None, verify_password, pw, stored)
+    ok = pw_ok and ol.email_ok(email, cfg.owner_email)
     if not ok:
         limiter.fail(client)
         global_limiter.fail()
         await store.auth_event("LOGIN_FAIL", client)
-        return _err(401, "INVALID_CREDENTIALS", "Sign-in failed.")
+        return _err(401, "INVALID_CREDENTIALS", "E-mail or password is incorrect.")
     limiter.ok(client)
     sid = new_session_id()
     await store.session_create(sid_hash(sid), cfg.session_ttl_s)
@@ -273,7 +302,96 @@ async def logout(request: web.Request) -> web.Response:
 
 @require_session
 async def me(request: web.Request) -> web.Response:
-    return _json({"authenticated": True, "role": "owner", "readOnly": True})
+    cfg = request.app[K_CFG]
+    times = await request.app[K_STORE].session_times(sid_hash(request["sid"]))
+    return _json({"authenticated": True, "role": "owner", "readOnly": True, "email": cfg.owner_email or None,
+                  "signedInAtMs": times[0] if times else None, "maxAgeS": cfg.session_ttl_s, "idleTimeoutS": cfg.session_idle_s})
+
+
+@require_session
+async def auth_activity(request: web.Request) -> web.Response:
+    """The web app reports REAL owner activity (input / focus), at most about once a minute. Only this and the
+    sign-in itself move the inactivity clock - background polling and the stream never do."""
+    await request.app[K_STORE].session_mark_active(sid_hash(request["sid"]))
+    return _json({"ok": True})
+
+
+@require_session
+async def change_password(request: web.Request) -> web.Response:
+    """Owner password change: current password + new password. The new value is stored only as a scrypt hash; every
+    other session (HLR sessions included) is revoked and this browser gets a fresh session."""
+    cfg, store = request.app[K_CFG], request.app[K_STORE]
+    limiter: LoginLimiter = request.app[K_STATE]["limiter"]
+    client = _client(request)
+    wait = limiter.locked(client)
+    if wait:
+        return _err(429, "LOCKED", f"Too many attempts - try again in {int(wait) + 1} s.")
+    try:
+        body = await request.json()
+    except (ValueError, UnicodeDecodeError):
+        return _err(400, "INVALID_JSON", "Invalid request.")
+    cur = body.get("currentPassword") if isinstance(body, dict) else None
+    new = body.get("newPassword") if isinstance(body, dict) else None
+    if not isinstance(cur, str) or not (1 <= len(cur) <= 256):
+        return _err(400, "INVALID_BODY", "Current password required.")
+    loop = asyncio.get_running_loop()
+    if not await loop.run_in_executor(None, verify_password, cur, await ol.effective_hash(cfg, store)):
+        limiter.fail(client)
+        await store.auth_event("PASSWORD_CHANGE_FAIL", client)
+        return _err(401, "INVALID_CREDENTIALS", "The current password is incorrect.")
+    problem = ol.password_problem(new, cur, cfg.owner_email)
+    if problem:
+        return _err(400, "WEAK_PASSWORD", problem)
+    limiter.ok(client)
+    new_hash = await loop.run_in_executor(None, hash_password, new)
+    await store.owner_credential_set(new_hash, ol.env_fingerprint(cfg.owner_password_hash.reveal()))
+    fresh = new_session_id()
+    await store.session_create(sid_hash(fresh), cfg.session_ttl_s)
+    await store.session_revoke_others(sid_hash(fresh))
+    await store.auth_event("PASSWORD_CHANGED", client)
+    resp = _json({"ok": True})
+    _set_cookie(resp, cfg, fresh)
+    return resp
+
+
+async def monitor_health(request: web.Request) -> web.Response:
+    """Production monitoring with a DEDICATED credential (TLUXE_MONITOR_TOKEN_SHA256): feed states, contract codes,
+    ages and counters only - never a price, size, book row, candle or trade."""
+    cfg = request.app[K_CFG]
+    # A monitor polls every few minutes: a tight per-client budget keeps guessing (and audit rows) bounded.
+    if not request.app[K_STATE]["monitorLimiter"].allow(_client(request)):
+        return _err(429, "RATE_LIMITED", "Too many requests - slow down.")
+    auth = request.headers.get("Authorization", "")
+    if not token_ok(auth[7:] if auth.startswith("Bearer ") else "", cfg.monitor_keys):
+        await request.app[K_STORE].auth_event("MONITOR_REJECTED", _client(request))
+        return _err(401, "UNAUTHORIZED", "Monitoring credential required.")
+    now = int(time.time() * 1000)
+    age = lambda t: None if not t else max(0, now - int(t))  # noqa: E731
+    s, h, err = await _upstream_get(request.app, cfg.databento, "/v1/health", 6)
+    db = databento_state(h if s == 200 else None, cfg.databento.configured, err, now)
+    gc = ((h or {}).get("instruments") or {}).get("GC") or {} if s == 200 else {}
+    tape = ((h or {}).get("sessions") or {}).get("tape") or {} if s == 200 else {}
+    ib = request.app[K_IBKR].status()
+    roots = {r: {"state": (ib.get("roots") or {}).get(r, {}).get("state"),
+                 "contract": (((ib.get("roots") or {}).get(r) or {}).get("contract") or {}).get("localSymbol"),
+                 "lastUpdateAgeMs": age(((ib.get("roots") or {}).get(r) or {}).get("lastUpdateMs")),
+                 "depthSeq": ((ib.get("roots") or {}).get(r) or {}).get("depthSeq")} for r in ("GC", "SI")}
+    try:
+        stats = {f"{x.get('root')} {x.get('contract')}": {"observations": x.get("observations"), "lastAgeMs": age(x.get("lastMs")), "gapMarkers": x.get("gaps")}
+                 for x in await request.app[K_STORE].depth_stats()}
+    except Exception:  # noqa: BLE001
+        stats = {}
+    link = request.app[K_RELAY].status()
+    hlr = request.app[K_HLR].status() if K_HLR in request.app else None
+    return _json({
+        "timeMs": now,
+        "databento": {"state": db.get("state"), "connection": tape.get("state"), "contract": gc.get("contract"),
+                      "lastEventAgeMs": gc.get("lastEventAgeMs"), "trades": (gc.get("counts") or {}).get("trades"),
+                      "ohlcvBars": (gc.get("counts") or {}).get("ohlcv"), "unmapped": ((h or {}).get("metrics") or {}).get("unmapped") if s == 200 else None},
+        "ibkr": {"roots": roots, "observations": stats},
+        "mt5": {"connected": bool(link.get("connected")), "stale": bool(link.get("stale"))},
+        "hlr": {"connected": bool((hlr or {}).get("connected"))} if hlr is not None else None,
+    })
 
 
 # ------------------------------------------------------------------ proxies
@@ -451,7 +569,20 @@ async def stream_ws(request: web.Request) -> web.StreamResponse:
         return _err(401, "UNAUTHORIZED", "Sign in to TLUXE.")
     ws = web.WebSocketResponse(heartbeat=30, max_msg_size=64_000)
     await ws.prepare(request)
-    await request.app[K_HUB].serve(ws)
+
+    async def revalidate() -> None:
+        # An open socket must not outlive its session (sign-out, 12 h maximum, 2 h inactivity, password change).
+        while not ws.closed:
+            await asyncio.sleep(STREAM_RECHECK_S)
+            if await _session(request) is None:
+                await ws.close(code=4401, message=b"session ended")
+                return
+
+    guard = asyncio.create_task(revalidate())
+    try:
+        await request.app[K_HUB].serve(ws)
+    finally:
+        guard.cancel()
     return ws
 
 
@@ -899,7 +1030,7 @@ def make_app(cfg: GatewayConfig, store=None, workers: bool = True, http_session_
     app[K_CFG] = cfg
     app[K_STORE] = store or (PgStore(cfg.database_url.reveal()) if cfg.database_url else MemoryStore())
     app[K_HUB] = StreamHub()
-    app[K_STATE] = {"limiter": LoginLimiter(), "globalLimiter": GlobalFailLimiter(), "publicLimiter": PublicRateLimiter(),
+    app[K_STATE] = {"limiter": LoginLimiter(), "globalLimiter": GlobalFailLimiter(), "publicLimiter": PublicRateLimiter(), "monitorLimiter": PublicRateLimiter(rate_per_s=0.2, burst=10),
                     # Separate from the owner login: HLR failures never lock the owner out, or vice versa.
                     "hlrLimiter": DualLimiter(), "tasks": []}
 
@@ -976,7 +1107,28 @@ def make_app(cfg: GatewayConfig, store=None, workers: bool = True, http_session_
     def _open(fn):
         return fn
 
-    require_hlr_session = _open if cfg.hlr_public else _require_hlr_session
+    def owner_layer(fn, page: bool = False):
+        """Whole-site owner login in front of the HLR page (layer 1). The HLR credential stays as layer 2.
+        Without an owner login configured this is a pass-through - HLR behaves exactly as before."""
+        if not _owner_login(cfg):
+            return fn
+
+        async def wrapped(request: web.Request):
+            if await _session(request) is None:
+                return ol.deny(request) if page else _err(401, "UNAUTHORIZED", "Sign in to TLUXE.")
+            return await fn(request)
+
+        return wrapped
+
+    _hlr_layer2 = _open if cfg.hlr_public else _require_hlr_session
+
+    def require_hlr_session(fn):
+        return owner_layer(_hlr_layer2(fn))
+
+    def require_hlr_page(fn):
+        return owner_layer(_hlr_layer2(fn), page=True)
+
+    hlr_login, hlr_logout, hlr_me = owner_layer(hlr_login), owner_layer(hlr_logout), owner_layer(hlr_me)
     hlr_enabled = bool(cfg.hlr_password_hash.reveal()) or cfg.hlr_public
 
     async def hlr_bridge_ws(request: web.Request) -> web.StreamResponse:
@@ -1057,6 +1209,22 @@ def make_app(cfg: GatewayConfig, store=None, workers: bool = True, http_session_
     r.add_post("/api/auth/login", login)
     r.add_post("/api/auth/logout", logout)
     r.add_get("/api/auth/me", me)
+    r.add_post("/api/auth/activity", auth_activity)
+    r.add_post("/api/auth/password", change_password)
+    if cfg.monitor_keys:
+        r.add_get("/api/monitor/health", monitor_health)
+    if _owner_login(cfg):
+
+        async def login_page(request: web.Request) -> web.StreamResponse:
+            if await _session(request) is not None:  # already signed in: straight to the destination
+                raise web.HTTPFound(ol.safe_next(request.query.get("next")))
+            return ol.login_page_response()
+
+        async def login_asset(request: web.Request) -> web.StreamResponse:
+            return ol.login_asset_response(request.match_info["name"])
+
+        r.add_get("/login", login_page)
+        r.add_get("/login/assets/{name}", login_asset)
     r.add_get("/api/status", status_route)
     r.add_get("/api/stream", stream_ws)
     r.add_get("/bridge/mt5", bridge_ws)
@@ -1088,7 +1256,7 @@ def make_app(cfg: GatewayConfig, store=None, workers: bool = True, http_session_
         # this route does not depend on TLUXE_STATIC_DIR at all. Registered here - before the
         # SPA catch-all below - so the gate always wins.
         r.add_get(f"/{HLR_DIR}/{{tail:.*}}",
-                  hlr_assets(Path(cfg.hlr_files_dir), require_hlr_session))
+                  hlr_assets(Path(cfg.hlr_files_dir), require_hlr_page))
     # The data relay exists ONLY when its own credential is configured - a separate switch:
     # the password says who may look, the bridge token says whether data flows.
     if cfg.hlr_bridge_keys:
@@ -1105,8 +1273,14 @@ def make_app(cfg: GatewayConfig, store=None, workers: bool = True, http_session_
     if cfg.static_dir and Path(cfg.static_dir).is_dir():
         root = Path(cfg.static_dir).resolve()
 
+        gate = _owner_login(cfg)
+
         async def spa(request: web.Request) -> web.StreamResponse:
             rel = request.match_info.get("tail", "")
+            # Whole-site sign-in: the dashboard's HTML and every bundle are owner-only - checked on the server,
+            # so a direct URL, a bookmarked asset or a cached link gets nothing without a session.
+            if gate and await _session(request) is None:
+                return ol.deny(request)
             f = (root / rel).resolve()
             # The HLR copy is owner-only and has its own gated route. This handler would otherwise
             # serve it to anyone - including through a `..` path that resolves back into it - so the
@@ -1115,10 +1289,14 @@ def make_app(cfg: GatewayConfig, store=None, workers: bool = True, http_session_
                 raise web.HTTPNotFound(text="Not found.")
             if rel and f.is_file() and root in f.parents:
                 resp = web.FileResponse(f)
+                if gate:
+                    return ol.mark_private(resp, immutable="/assets/" in f"/{rel}")
                 if "/assets/" in f"/{rel}":
                     resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
                 return resp
             resp = web.FileResponse(root / "index.html")
+            if gate:
+                return ol.mark_private(resp, immutable=False)
             resp.headers["Cache-Control"] = "no-cache"
             return resp
 

@@ -232,7 +232,7 @@ class TestHistoryEndToEnd(unittest.IsolatedAsyncioTestCase):
     async def start(self):
         client = TestClient(TestServer(make_app(self.cfg, store=self.store, workers=True)))
         await client.start_server()
-        r = await client.post("/api/auth/login", json={"password": PASSWORD}, headers={"Origin": "http://localhost:5182"})
+        r = await client.post("/api/auth/login", json={"email": "owner@example.com", "password": PASSWORD}, headers={"Origin": "http://localhost:5182"})
         self.assertEqual(r.status, 200)
         return client
 

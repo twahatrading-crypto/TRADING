@@ -9,17 +9,18 @@ import './cloud.css';
  * stored in the browser by this form.
  */
 export function CloudSignIn({ onSignedIn, gatewayDown = false, fetchImpl }: { onSignedIn: () => void; gatewayDown?: boolean; fetchImpl?: FetchLike }) {
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [show, setShow] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(gatewayDown ? 'The TLUXE gateway is not reachable right now.' : null);
   const submit = async (e: FormEvent) => {
     e.preventDefault();
-    if (!password || busy) return;
+    if (!password || !email || busy) return;
     setBusy(true);
     setError(null);
     try {
-      await login(password, fetchImpl);
+      await login(password, fetchImpl, email.trim());
       setPassword('');
       onSignedIn();
     } catch (err) {
@@ -39,6 +40,12 @@ export function CloudSignIn({ onSignedIn, gatewayDown = false, fetchImpl }: { on
         <p className="cloud-signin__note">
           <LockKeyhole size={13} aria-hidden="true" /> Private owner access
         </p>
+        <label className="cloud-signin__field" htmlFor="tluxe-owner-email">
+          <span>Email</span>
+        </label>
+        <div className="cloud-signin__pw">
+          <input id="tluxe-owner-email" type="email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} required maxLength={254} spellCheck={false} autoCapitalize="off" />
+        </div>
         <label className="cloud-signin__field" htmlFor="tluxe-owner-password">
           <span>Password</span>
         </label>
@@ -49,7 +56,6 @@ export function CloudSignIn({ onSignedIn, gatewayDown = false, fetchImpl }: { on
             autoComplete="current-password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            autoFocus
             required
             maxLength={256}
             spellCheck={false}
@@ -64,7 +70,7 @@ export function CloudSignIn({ onSignedIn, gatewayDown = false, fetchImpl }: { on
             {error}
           </p>
         )}
-        <button type="submit" className="cloud-signin__btn" disabled={busy || !password}>
+        <button type="submit" className="cloud-signin__btn" disabled={busy || !password || !email}>
           {busy ? 'SIGNING IN…' : 'SIGN IN'}
         </button>
         <p className="cloud-signin__foot">Read-only market analysis · no trading, no orders</p>

@@ -19,6 +19,7 @@ DEV_PORT = 8780  # MT5 8765 · Databento 8766 · TLUXE AI 8767 · News 8768 · V
 DEV_ORIGINS = ("http://localhost:5182", "http://127.0.0.1:5182", "http://localhost:5181", "http://127.0.0.1:5181",
                "http://localhost:4181", "http://127.0.0.1:4181")
 _LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1", "0.0.0.0")
+_EMAIL_RE = re.compile(r"^[a-z0-9._%+-]{1,64}@[a-z0-9-]+(\.[a-z0-9-]+)+$")
 _HASH_RE = re.compile(r"^(scrypt\$\d+\$\d+\$\d+|pbkdf2_sha256\$\d+)\$[A-Za-z0-9+/=]+\$[A-Za-z0-9+/=]+$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
@@ -88,6 +89,15 @@ class GatewayConfig:
     database_url: Secret = field(repr=False)
     owner_password_hash: Secret = field(repr=False)
     session_ttl_s: int = 12 * 3600
+    #: The single owner account's e-mail (TLUXE_OWNER_EMAIL). Not a secret, never hard-coded. Empty while a
+    #: password hash is set -> sign-in is refused (fail closed) and the whole site stays locked.
+    owner_email: str = ""
+    #: Inactivity timeout: no real owner activity (sign-in or the web app's activity ping) for this long ends the
+    #: session. Background polling never counts as activity.
+    session_idle_s: int = 2 * 3600
+    #: Production monitoring credential (TLUXE_MONITOR_TOKEN_SHA256, sha256 hex list): /api/monitor/health only -
+    #: feed states, ages and counters, never prices, depth, candles or trades. Empty = the endpoint does not exist.
+    monitor_keys: tuple[Mt5BridgeKey, ...] = ()
     ai: Upstream = field(default_factory=lambda: Upstream("ai", "", Secret("")))
     databento: Upstream = field(default_factory=lambda: Upstream("databento", "", Secret("")))
     news: Upstream = field(default_factory=lambda: Upstream("news", "", Secret("")))
@@ -277,6 +287,11 @@ def from_env(env: dict | None = None) -> GatewayConfig:
     if log_format not in ("json", "text"):
         errors.append("LOG_FORMAT must be json or text")
     ttl_h = check(_int, e, "TLUXE_SESSION_TTL_HOURS", 12, 1, 24 * 30, default=12)
+    idle_min = check(_int, e, "TLUXE_SESSION_IDLE_MINUTES", 120, 5, 24 * 60, default=120)
+    owner_email = (e.get("TLUXE_OWNER_EMAIL") or "").strip().lower()
+    if owner_email and not _EMAIL_RE.match(owner_email):
+        errors.append("TLUXE_OWNER_EMAIL must be a single e-mail address")
+    monitor_keys = check(_mt5_keys, e.get("TLUXE_MONITOR_TOKEN_SHA256") or "", "TLUXE_MONITOR_TOKEN_SHA256", default=())
     mt5_keys = check(_mt5_keys, e.get("TLUXE_MT5_BRIDGE_TOKEN_SHA256") or "", default=())
     ibkr_keys = check(_mt5_keys, e.get("TLUXE_IBKR_BRIDGE_TOKEN_SHA256") or "", "TLUXE_IBKR_BRIDGE_TOKEN_SHA256", default=())
     hlr_keys = check(_mt5_keys, e.get("TLUXE_HLR_BRIDGE_TOKEN_SHA256") or "", "TLUXE_HLR_BRIDGE_TOKEN_SHA256", default=())
@@ -297,6 +312,9 @@ def from_env(env: dict | None = None) -> GatewayConfig:
         database_url=Secret((e.get("DATABASE_URL") or "").strip()),
         owner_password_hash=Secret(pw_hash),
         session_ttl_s=ttl_h * 3600,
+        owner_email=owner_email,
+        session_idle_s=idle_min * 60,
+        monitor_keys=monitor_keys,
         ai=upstream("ai", "TLUXE_AI_URL", "TLUXE_AI_TOKEN"),
         databento=upstream("databento", "TLUXE_DATABENTO_URL", "TLUXE_DB_BRIDGE_TOKEN"),
         news=upstream("news", "TLUXE_NEWS_URL", "TLUXE_NEWS_TOKEN"),

@@ -10,7 +10,7 @@ import { ServicesProvider } from './app/ServicesProvider';
 import { CloudRuntimeContext } from './components/cloud/cloudContext';
 import { CloudSignIn } from './components/cloud/CloudSignIn';
 import { IS_CLOUD } from './config/deployment';
-import { fetchRuntimeConfig, sessionStatus } from './services/cloud/cloudApi';
+import { fetchRuntimeConfig, sessionStatus, signInUrl } from './services/cloud/cloudApi';
 import { startCloudRuntime } from './services/cloud/cloudRuntime';
 import { connectServices, createServices, defaultProviders } from './services/registry';
 
@@ -30,7 +30,7 @@ function startApp(publicMarketData = false, ibkrDepth = false) {
   // Cloud only: gateway status stream, news notifications, alert persistence, session expiry -> sign-in again.
   // Public market-data mode (no owner login configured yet): no session, so no session-bound stream / status runtime;
   // Databento data still flows over the read-only /api/databento endpoints.
-  const cloud = IS_CLOUD && !publicMarketData ? startCloudRuntime(services, { onSessionExpired: () => window.location.reload() }) : null;
+  const cloud = IS_CLOUD && !publicMarketData ? startCloudRuntime(services, { onSessionExpired: () => window.location.replace(signInUrl(window.location, true)) }) : null;
   // If this module is ever re-executed by HMR, tear down the old polling first.
   import.meta.hot?.dispose(() => {
     cloud?.stop();
@@ -56,6 +56,8 @@ if (!IS_CLOUD) {
     if (rc.publicMarketData) return startApp(true, rc.ibkrDepth);
     const s = await sessionStatus();
     if (s === 'authenticated') startApp(false, rc.ibkrDepth);
-    else root.render(<CloudSignIn gatewayDown={s === 'unreachable'} onSignedIn={() => startApp(false, rc.ibkrDepth)} />);
+    // Signed out: the gateway's sign-in page (the server already redirects page loads there; this covers a cached shell).
+    else if (s === 'anonymous') window.location.replace(signInUrl(window.location));
+    else root.render(<CloudSignIn gatewayDown onSignedIn={() => startApp(false, rc.ibkrDepth)} />);
   });
 }

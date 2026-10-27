@@ -24,3 +24,15 @@
   .cloud-status__row { grid-template-columns: 1fr auto; }
   .cloud-status__detail { grid-column: 1 / -1; white-space: normal; }
 }
+.cloud-account { display: grid; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+.cloud-account__who { margin: 0; color: var(--text-2); font-size: 0.8rem; }
+.cloud-account__who small { color: var(--text-3); }
+.cloud-account__ok { margin: 0; color: var(--green, #34d399); font-size: 0.8rem; }
+.cloud-account__toggle { justify-self: start; display: inline-flex; align-items: center; gap: 6px; }
+.cloud-account__form { display: grid; gap: 8px; max-width: 360px; }
+.cloud-account__form label { display: grid; gap: 4px; color: var(--text-2); font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase; }
+.cloud-account__form input { padding: 8px 10px; background: var(--bg-raised); border: 1px solid var(--border-strong); border-radius: 6px; color: var(--text); font-size: 15px; }
+.cloud-account__form input:focus { outline: none; border-color: var(--blue); }
+.cloud-account__hint { color: var(--gold-bright); font-size: 0.75rem; }
+.cloud-account__actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.cloud-account__actions .sbtn { display: inline-flex; align-items: center; gap: 6px; }

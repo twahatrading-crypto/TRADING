@@ -41,11 +41,11 @@ APP = "https://tluxe.example.app"
 
 def prod_env(**over):
     return {"TLUXE_ENV": "production", "PUBLIC_APP_URL": APP, "ALLOWED_ORIGINS": APP, "DATABASE_URL": "postgresql://u:dbpass123@db.internal:5432/tluxe",
-            "TLUXE_OWNER_PASSWORD_HASH": PW_HASH, **over}
+            "TLUXE_OWNER_PASSWORD_HASH": PW_HASH, "TLUXE_OWNER_EMAIL": "owner@example.com", **over}
 
 
 def dev_env(**over):
-    return {"TLUXE_ENV": "development", "TLUXE_OWNER_PASSWORD_HASH": PW_HASH, "TLUXE_MT5_BRIDGE_TOKEN_SHA256": BRIDGE_SHA, **over}
+    return {"TLUXE_ENV": "development", "TLUXE_OWNER_PASSWORD_HASH": PW_HASH, "TLUXE_OWNER_EMAIL": "owner@example.com", "TLUXE_MT5_BRIDGE_TOKEN_SHA256": BRIDGE_SHA, **over}
 
 
 class TestConfig(unittest.TestCase):
@@ -334,7 +334,7 @@ class GatewayCase(unittest.IsolatedAsyncioTestCase):
         await self.news_srv.close()
 
     async def login(self) -> str:
-        r = await self.client.post("/api/auth/login", json={"password": PASSWORD}, headers={"Origin": self.origin})
+        r = await self.client.post("/api/auth/login", json={"email": "owner@example.com", "password": PASSWORD}, headers={"Origin": self.origin})
         self.assertEqual(r.status, 200, await r.text())
         return r.cookies[COOKIE].value
 
@@ -351,7 +351,7 @@ class TestGatewayDev(GatewayCase):
         self.assertEqual((await self.client.post("/api/ai/chat", json={})).status, 401)
 
     async def test_login_session_logout(self):
-        r = await self.client.post("/api/auth/login", json={"password": "wrong"}, headers={"Origin": self.origin})
+        r = await self.client.post("/api/auth/login", json={"email": "owner@example.com", "password": "wrong"}, headers={"Origin": self.origin})
         self.assertEqual(r.status, 401)
         sid = await self.login()
         r = await self.client.get("/api/auth/me", headers=self.ck(sid))
@@ -361,8 +361,8 @@ class TestGatewayDev(GatewayCase):
 
     async def test_login_rate_limited(self):
         for _ in range(5):
-            await self.client.post("/api/auth/login", json={"password": "wrong"}, headers={"Origin": self.origin})
-        r = await self.client.post("/api/auth/login", json={"password": PASSWORD}, headers={"Origin": self.origin})
+            await self.client.post("/api/auth/login", json={"email": "owner@example.com", "password": "wrong"}, headers={"Origin": self.origin})
+        r = await self.client.post("/api/auth/login", json={"email": "owner@example.com", "password": PASSWORD}, headers={"Origin": self.origin})
         self.assertEqual(r.status, 429)
 
     async def test_proxies_keep_tokens_server_side(self):
@@ -915,7 +915,7 @@ class TestGatewayProduction(PgGatewayCase):
                 pass
 
     async def test_secure_cookie_and_prod_headers(self):
-        r = await self.client.post("/api/auth/login", json={"password": PASSWORD}, headers={"Origin": APP})
+        r = await self.client.post("/api/auth/login", json={"email": "owner@example.com", "password": PASSWORD}, headers={"Origin": APP})
         sc = r.headers.getall("Set-Cookie")
         main = [c for c in sc if c.startswith(f"{COOKIE}=")][0]
         for attr in ("HttpOnly", "Secure", "SameSite=Strict", "Path=/"):
@@ -925,7 +925,7 @@ class TestGatewayProduction(PgGatewayCase):
         self.assertEqual((await self.client.get("/api/config", headers={"Origin": "http://localhost:5182"})).status, 403)
 
     async def test_state_change_requires_origin(self):
-        sid = (await self.client.post("/api/auth/login", json={"password": PASSWORD}, headers={"Origin": APP})).cookies[COOKIE].value
+        sid = (await self.client.post("/api/auth/login", json={"email": "owner@example.com", "password": PASSWORD}, headers={"Origin": APP})).cookies[COOKIE].value
         r = await self.client.post("/api/alerts", json={}, headers={"Cookie": f"{COOKIE}={sid}"})
         self.assertEqual(r.status, 403)
 
@@ -934,7 +934,7 @@ class TestGatewayProduction(PgGatewayCase):
 class TestOwnerModeProduction(PgGatewayCase):
     """Production WITH the owner hash configured: public market-data mode is OFF and every private route needs a session."""
 
-    extra_env = {"TLUXE_OWNER_PASSWORD_HASH": hash_password_pbkdf2(PASSWORD)}
+    extra_env = {"TLUXE_OWNER_PASSWORD_HASH": hash_password_pbkdf2(PASSWORD), "TLUXE_OWNER_EMAIL": "owner@example.com"}
 
     async def test_everything_private_is_denied_without_a_session(self):
         self.assertFalse(self.cfg.public_market_data)
@@ -956,7 +956,7 @@ class TestOwnerModeProduction(PgGatewayCase):
             await self.client.ws_connect("/api/stream", headers={"Origin": APP})
 
     async def test_owner_session_reads_market_data_then_logout_ends_it(self):
-        r = await self.client.post("/api/auth/login", json={"password": PASSWORD}, headers={"Origin": APP})
+        r = await self.client.post("/api/auth/login", json={"email": "owner@example.com", "password": PASSWORD}, headers={"Origin": APP})
         self.assertEqual(r.status, 200)
         sid = r.cookies[COOKIE].value
         hdr = {"Cookie": f"{COOKIE}={sid}", "Origin": APP}
@@ -970,24 +970,24 @@ class TestOwnerModeProduction(PgGatewayCase):
             await self.client.ws_connect("/api/stream", headers=hdr)
 
     async def test_login_and_logout_require_the_app_origin(self):
-        self.assertEqual((await self.client.post("/api/auth/login", json={"password": PASSWORD})).status, 403)
-        self.assertEqual((await self.client.post("/api/auth/login", json={"password": PASSWORD}, headers={"Origin": "https://evil.example"})).status, 403)
+        self.assertEqual((await self.client.post("/api/auth/login", json={"email": "owner@example.com", "password": PASSWORD})).status, 403)
+        self.assertEqual((await self.client.post("/api/auth/login", json={"email": "owner@example.com", "password": PASSWORD}, headers={"Origin": "https://evil.example"})).status, 403)
         self.assertEqual((await self.client.post("/api/auth/logout")).status, 403)
 
     async def test_failed_login_is_generic_and_lockout_is_per_real_client(self):
-        r = await self.client.post("/api/auth/login", json={"password": "not the password"}, headers={"Origin": APP, "X-Forwarded-For": "203.0.113.9"})
+        r = await self.client.post("/api/auth/login", json={"email": "owner@example.com", "password": "not the password"}, headers={"Origin": APP, "X-Forwarded-For": "203.0.113.9"})
         body = await r.json()
-        self.assertEqual((r.status, body["error"]["code"], body["error"]["message"]), (401, "INVALID_CREDENTIALS", "Sign-in failed."))
+        self.assertEqual((r.status, body["error"]["code"], body["error"]["message"]), (401, "INVALID_CREDENTIALS", "E-mail or password is incorrect."))
         for _ in range(4):
-            await self.client.post("/api/auth/login", json={"password": "not the password"}, headers={"Origin": APP, "X-Forwarded-For": "203.0.113.9"})
-        r = await self.client.post("/api/auth/login", json={"password": PASSWORD}, headers={"Origin": APP, "X-Forwarded-For": "203.0.113.9"})
+            await self.client.post("/api/auth/login", json={"email": "owner@example.com", "password": "not the password"}, headers={"Origin": APP, "X-Forwarded-For": "203.0.113.9"})
+        r = await self.client.post("/api/auth/login", json={"email": "owner@example.com", "password": PASSWORD}, headers={"Origin": APP, "X-Forwarded-For": "203.0.113.9"})
         self.assertEqual(r.status, 429)  # that client is locked out, even with the right password
-        r = await self.client.post("/api/auth/login", json={"password": PASSWORD}, headers={"Origin": APP, "X-Forwarded-For": "198.51.100.7"})
+        r = await self.client.post("/api/auth/login", json={"email": "owner@example.com", "password": PASSWORD}, headers={"Origin": APP, "X-Forwarded-For": "198.51.100.7"})
         self.assertEqual(r.status, 200)  # the owner on another address is not locked out by someone else's guesses
         self.assertNotIn("TLUXE_", json.dumps(body))
 
     async def test_session_survives_a_gateway_restart(self):
-        sid = (await self.client.post("/api/auth/login", json={"password": PASSWORD}, headers={"Origin": APP})).cookies[COOKIE].value
+        sid = (await self.client.post("/api/auth/login", json={"email": "owner@example.com", "password": PASSWORD}, headers={"Origin": APP})).cookies[COOKIE].value
         await self.client.close()
         app2 = make_app(self.cfg, store=self.store_factory(self.cfg), workers=False)
         self.client = TestClient(TestServer(app2))
@@ -1021,7 +1021,7 @@ class TestPublicMarketDataMode(PgGatewayCase):
             self.assertEqual(r.status, 401, f"{method} {path}")
         with self.assertRaises(Exception):
             await self.client.ws_connect("/api/stream", headers={"Origin": APP})
-        r = await self.client.post("/api/auth/login", json={"password": "anything-at-all"}, headers={"Origin": APP})
+        r = await self.client.post("/api/auth/login", json={"email": "owner@example.com", "password": "anything-at-all"}, headers={"Origin": APP})
         self.assertEqual((r.status, (await r.json())["error"]["code"]), (503, "AUTH_NOT_CONFIGURED"))
         self.assertIn("Strict-Transport-Security", (await self.client.get("/api/config")).headers)
 
@@ -1105,7 +1105,7 @@ class TestPostgres(unittest.IsolatedAsyncioTestCase):
         client = TestClient(TestServer(app))
         await client.start_server()
         try:
-            r = await client.post("/api/auth/login", json={"password": PASSWORD}, headers={"Origin": "http://localhost:5182"})
+            r = await client.post("/api/auth/login", json={"email": "owner@example.com", "password": PASSWORD}, headers={"Origin": "http://localhost:5182"})
             sid = r.cookies[COOKIE].value
             st = await (await client.get("/api/status", headers={"Cookie": f"{COOKIE}={sid}", "Origin": "http://localhost:5182"})).json()
             prev = st["previous"]

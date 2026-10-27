@@ -74,10 +74,26 @@ per-process.
     * open `tools/owner-password-hash.html` from a local copy of the repository in any current browser (WebCrypto,
       PBKDF2-HMAC-SHA256, 600,000 iterations; the page has a `default-src 'none'` CSP, so it cannot send anything), or
     * `python -m tluxe_gateway.hashpw` (scrypt; falls back to PBKDF2 when Python lacks `hashlib.scrypt`).
-  * While this variable is **absent**, the gateway runs in public read-only market-data mode (Databento / MT5 GETs
-    only). As soon as it is set, that mode is OFF: every `/api/*` route except `/api/config` and `/api/auth/login`
-    needs the owner session, and the web app shows the TLUXE sign-in page. Removing the variable returns to public
-    read-only mode (the recovery path if the owner password is ever lost - then generate a new hash).
+  * `TLUXE_OWNER_EMAIL` — the one owner e-mail allowed to sign in (set together with the hash; with the hash but no
+    e-mail the site stays locked and nobody can sign in).
+  * While the hash is **absent**, the gateway runs in public read-only market-data mode (Databento / MT5 / IBKR GETs
+    only). As soon as it is set, that mode is OFF and the WHOLE site is private: the dashboard HTML, its JavaScript
+    bundles, every `/api/*` route except `/api/config`, `/api/auth/login` (and `/api/monitor/health` with its own
+    token) and the browser WebSocket need the owner session. Visitors without one are sent to `/login`, a small page
+    served by the gateway that contains none of the dashboard's code. Served files are marked `private`, so
+    Cloudflare never stores them for anyone else - **purge the Cloudflare cache once after activating**, because
+    files cached while the site was public are still in it.
+  * Sessions: 12 h absolute maximum (`TLUXE_SESSION_TTL_HOURS`), 2 h inactivity timeout
+    (`TLUXE_SESSION_IDLE_MINUTES`; only real owner input in the web app counts). An open WebSocket is closed when its
+    session ends.
+  * Password change: Settings → Cloud connections → Change password. The new hash is stored in Postgres
+    (`owner_credential`) and every other session is signed out. **Break-glass reset:** put a NEW hash in
+    `TLUXE_OWNER_PASSWORD_HASH` - the stored one no longer matches it and is ignored. Removing the variable returns to
+    public read-only mode.
+  * HLR Original keeps its own password as a second layer: the owner sign-in comes first, then the HLR password.
+  * Monitoring: `TLUXE_MONITOR_TOKEN_SHA256` (optional) enables `GET /api/monitor/health` with
+    `Authorization: Bearer <token>` - feed states, contract codes, ages and counters only, never prices or book rows.
+    The token opens nothing else.
 * Internal services:
   * `TLUXE_AI_URL`, `TLUXE_AI_TOKEN`
   * `TLUXE_DATABENTO_URL`, `TLUXE_DB_BRIDGE_TOKEN`

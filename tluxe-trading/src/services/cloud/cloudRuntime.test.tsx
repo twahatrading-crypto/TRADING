@@ -1,12 +1,13 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CloudRuntimeContext } from '../../components/cloud/cloudContext';
+import { CloudAccount } from '../../components/cloud/CloudAccount';
 import { CloudSignIn } from '../../components/cloud/CloudSignIn';
 import { healthLabel, healthTone } from '../../components/cloud/cloudHealth';
 import { CloudStatusPanel } from '../../components/cloud/CloudStatusPanel';
 import { createStore } from '../../store/createStore';
 import type { AlertState, HLEAlertRecord } from '../highLowEngine/alerts';
-import { HEALTH_STATES, login, sessionStatus, type CloudStatus } from './cloudApi';
+import { HEALTH_STATES, login, sessionStatus, signInUrl, type CloudStatus } from './cloudApi';
 import { CloudStream, type CloudStreamOptions } from './CloudStream';
 import { startCloudRuntime, type CloudRuntime } from './cloudRuntime';
 
@@ -93,6 +94,7 @@ describe('cloud session API - the browser never holds a credential', () => {
     const gw = gateway({ 'POST /api/auth/login': () => (ok ? { status: 200, body: { ok: true } } : { status: 401, body: { error: { code: 'INVALID_CREDENTIALS', message: 'Sign-in failed.' } } }) });
     const onSignedIn = vi.fn();
     render(<CloudSignIn onSignedIn={onSignedIn} fetchImpl={gw.fetchImpl} />);
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'owner@example.com' } });
     fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'nope' } });
     fireEvent.click(screen.getByRole('button', { name: 'SIGN IN' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Sign-in failed.');
@@ -101,7 +103,19 @@ describe('cloud session API - the browser never holds a credential', () => {
     await waitFor(() => expect(onSignedIn).toHaveBeenCalledTimes(1));
   });
 
-  it('owner sign-in page: TLUXE | TRADING, password only, show/hide, no signup / social / recovery, nothing stored', async () => {
+  it('login sends the e-mail with the password when one is given', async () => {
+    const gw = gateway({ 'POST /api/auth/login': () => ({ status: 200, body: { ok: true } }) });
+    await login('owner-password', gw.fetchImpl, 'owner@example.com');
+    expect(JSON.parse(String(gw.calls[0]!.init?.body))).toEqual({ email: 'owner@example.com', password: 'owner-password' });
+  });
+
+  it('signInUrl keeps the page to return to (same-site path only) and flags an expired session', () => {
+    expect(signInUrl({ pathname: '/', search: '', hash: '' })).toBe('/login');
+    expect(signInUrl({ pathname: '/engines/gc', search: '?a=1', hash: '#x' })).toBe('/login?next=%2Fengines%2Fgc%3Fa%3D1%23x');
+    expect(signInUrl({ pathname: '/', search: '', hash: '' }, true)).toBe('/login?expired=1');
+  });
+
+  it('owner sign-in page: TLUXE | TRADING, e-mail + password, show/hide, no signup / social / recovery, nothing stored', async () => {
     const gw = gateway({ 'POST /api/auth/login': () => ({ status: 200, body: { ok: true } }) });
     const before = JSON.stringify({ ...localStorage });
     const { container } = render(<CloudSignIn onSignedIn={() => {}} fetchImpl={gw.fetchImpl} />);
@@ -112,11 +126,13 @@ describe('cloud session API - the browser never holds a credential', () => {
     expect(pw.type).toBe('text');
     fireEvent.click(screen.getByRole('button', { name: 'Hide password' }));
     expect(pw.type).toBe('password');
-    expect(container.querySelectorAll('input')).toHaveLength(1);
+    expect(container.querySelectorAll('input')).toHaveLength(2);
     expect(container.textContent).not.toMatch(/sign up|create account|register|forgot|google|facebook|apple/i);
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: ' owner@example.com ' } });
     fireEvent.change(pw, { target: { value: 'the owner password 123' } });
     fireEvent.click(screen.getByRole('button', { name: 'SIGN IN' }));
     await waitFor(() => expect(gw.calls.some((c) => c.url === '/api/auth/login' && c.init?.method === 'POST')).toBe(true));
+    expect(JSON.parse(String(gw.calls.find((c) => c.url === '/api/auth/login')!.init?.body))).toEqual({ email: 'owner@example.com', password: 'the owner password 123' });
     expect(JSON.stringify({ ...localStorage })).toBe(before);
     expect(JSON.stringify({ ...sessionStorage })).not.toContain('the owner password');
     expect(pw.value).toBe('');
@@ -177,6 +193,69 @@ describe('cloud runtime - status, news notifications, alert persistence, session
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('inactivity timeout - only real owner input is reported', () => {
+  it('reports activity at most once per interval, only after input, and never after stop', async () => {
+    vi.useFakeTimers();
+    try {
+      const gw = gateway({ 'GET /api/status': () => ({ status: 200, body: STATUS }), 'GET /api/auth/me': () => ({ status: 200, body: {} }), 'POST /api/auth/activity': () => ({ status: 200, body: { ok: true } }) });
+      const target = new EventTarget();
+      rt = startCloudRuntime(fakeServices().services, { fetchImpl: gw.fetchImpl, makeStream: streamWithHooks().makeStream, activityTarget: target, activityEveryMs: 1000, sessionCheckMs: 1e9 });
+      const pings = () => gw.calls.filter((c) => c.url === '/api/auth/activity').length;
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(pings()).toBe(0); // an unattended tab (polling, stream) never counts as activity
+      for (let i = 0; i < 5; i++) target.dispatchEvent(new Event('pointermove'));
+      target.dispatchEvent(new Event('keydown'));
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(pings()).toBe(1);
+      expect(gw.calls.find((c) => c.url === '/api/auth/activity')!.init?.method).toBe('POST');
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(pings()).toBe(1);
+      rt.stop();
+      rt = null;
+      target.dispatchEvent(new Event('keydown'));
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(pings()).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('owner account - who is signed in and the password change', () => {
+  const me = { status: 200, body: { authenticated: true, email: 'owner@example.com', signedInAtMs: 1, maxAgeS: 43200, idleTimeoutS: 7200 } };
+
+  it('shows the account and session limits, validates, and sends current + new once', async () => {
+    let status = 401;
+    const gw = gateway({
+      'GET /api/auth/me': () => me,
+      'POST /api/auth/password': () => (status === 200 ? { status: 200, body: { ok: true } } : { status: 401, body: { error: { code: 'INVALID_CREDENTIALS', message: 'The current password is incorrect.' } } }),
+    });
+    render(<CloudAccount fetchImpl={gw.fetchImpl} />);
+    expect(await screen.findByText('owner@example.com')).toBeInTheDocument();
+    expect(screen.getByTestId('cloud-account')).toHaveTextContent('12 h, or 120 min without activity');
+    fireEvent.click(screen.getByRole('button', { name: /Change password/ }));
+    const save = screen.getByRole('button', { name: 'Save new password' });
+    fireEvent.change(screen.getByLabelText('Current password'), { target: { value: 'current owner pass' } });
+    fireEvent.change(screen.getByLabelText('New password'), { target: { value: 'short' } });
+    expect(screen.getByText('At least 12 characters.')).toBeInTheDocument();
+    expect(save).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('New password'), { target: { value: 'A new owner pass 2468' } });
+    fireEvent.change(screen.getByLabelText('Confirm new password'), { target: { value: 'A new owner pass 2469' } });
+    expect(screen.getByText('The two new passwords do not match.')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Confirm new password'), { target: { value: 'A new owner pass 2468' } });
+    expect(save).toBeEnabled();
+    fireEvent.click(save);
+    expect(await screen.findByRole('alert')).toHaveTextContent('The current password is incorrect.');
+    status = 200;
+    fireEvent.click(screen.getByRole('button', { name: 'Save new password' }));
+    expect(await screen.findByRole('status')).toHaveTextContent('Password changed');
+    const sent = gw.calls.filter((c) => c.url === '/api/auth/password').map((c) => JSON.parse(String(c.init?.body)));
+    expect(sent.at(-1)).toEqual({ currentPassword: 'current owner pass', newPassword: 'A new owner pass 2468' });
+    expect(gw.calls.every((c) => c.init?.credentials === 'same-origin')).toBe(true);
+    expect(screen.queryByLabelText('New password')).toBeNull(); // the form (and the typed passwords) are gone
   });
 });
 

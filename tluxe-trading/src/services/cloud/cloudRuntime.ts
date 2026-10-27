@@ -1,6 +1,6 @@
 import { createStore, type Store } from '../../store/createStore';
 import type { Services } from '../registry';
-import { fetchStatus, persistAlert, sessionStatus, type CloudStatus, type FetchLike } from './cloudApi';
+import { fetchStatus, persistAlert, reportActivity, sessionStatus, type CloudStatus, type FetchLike } from './cloudApi';
 import { CloudStream, streamUrl, type CloudStreamOptions, type StreamMessage } from './CloudStream';
 
 export interface CloudRuntimeState {
@@ -24,6 +24,10 @@ export interface CloudRuntimeDeps {
   /** Session re-check interval (the gateway rotates sessions; an expired one returns the app to the sign-in screen). */
   sessionCheckMs?: number;
   onSessionExpired?: () => void;
+  /** Where owner input is observed for the inactivity timeout (default: window / document). */
+  activityTarget?: Pick<EventTarget, 'addEventListener' | 'removeEventListener'> | null;
+  /** How often real activity is reported to the gateway (default 60 s; nothing is sent while idle). */
+  activityEveryMs?: number;
 }
 
 /**
@@ -78,6 +82,21 @@ export function startCloudRuntime(services: Pick<Services, 'newsBridge' | 'highL
   });
 
   const sessionTimer = setInterval(() => void checkSession(), deps.sessionCheckMs ?? 60_000);
+
+  // 2 h inactivity timeout: only REAL owner input counts. Background polling and the stream never report activity,
+  // so an unattended tab signs itself out; at most one tiny POST per interval while the owner is active.
+  const target = deps.activityTarget !== undefined ? deps.activityTarget : typeof window !== 'undefined' ? window : null;
+  let active = false;
+  const markActive = () => {
+    active = true;
+  };
+  const ACTIVITY_EVENTS = ['pointerdown', 'pointermove', 'keydown', 'wheel', 'touchstart', 'focus'] as const;
+  for (const e of ACTIVITY_EVENTS) target?.addEventListener(e, markActive, { passive: true } as AddEventListenerOptions);
+  const activityTimer = setInterval(() => {
+    if (!active || store.getState().session === 'expired') return;
+    active = false;
+    void reportActivity(fetchImpl);
+  }, deps.activityEveryMs ?? 60_000);
   return {
     store,
     stream,
@@ -85,6 +104,8 @@ export function startCloudRuntime(services: Pick<Services, 'newsBridge' | 'highL
       stopStream();
       stopAlerts();
       clearInterval(sessionTimer);
+      clearInterval(activityTimer);
+      for (const e of ACTIVITY_EVENTS) target?.removeEventListener(e, markActive);
     },
   };
 }

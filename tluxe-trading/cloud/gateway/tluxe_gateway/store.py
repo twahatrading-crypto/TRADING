@@ -41,6 +41,7 @@ class MemoryStore:
     def __init__(self) -> None:
         self.status: dict[str, dict] = {}
         self.sessions: dict[str, dict] = {}
+        self.owner_credential: tuple[str, str] | None = None
         self.calendar: dict[str, dict] = {}
         self.headlines: dict[str, dict] = {}
         self.alerts: dict[str, dict] = {}
@@ -68,16 +69,39 @@ class MemoryStore:
     async def last_statuses(self) -> dict[str, dict]:
         return dict(self.status)
 
-    async def session_create(self, sid_hash: str, ttl_s: int) -> None:
-        self.sessions[sid_hash] = {"expires": time.time() + ttl_s, "revoked": False}
+    async def session_create(self, sid_hash: str, ttl_s: int, auth_at_ms: int | None = None, active_at_ms: int | None = None) -> None:
+        now = time.time()
+        auth_at = auth_at_ms / 1000 if auth_at_ms is not None else now
+        self.sessions[sid_hash] = {"expires": auth_at + ttl_s, "revoked": False, "auth_at": auth_at,
+                                   "active_at": active_at_ms / 1000 if active_at_ms is not None else now}
 
-    async def session_valid(self, sid_hash: str) -> bool:
+    async def session_valid(self, sid_hash: str, idle_s: int | None = None) -> bool:
         s = self.sessions.get(sid_hash)
-        return bool(s) and not s["revoked"] and s["expires"] > time.time()
+        now = time.time()
+        return bool(s) and not s["revoked"] and s["expires"] > now and (idle_s is None or s["active_at"] > now - idle_s)
+
+    async def session_times(self, sid_hash: str) -> tuple[int, int] | None:
+        s = self.sessions.get(sid_hash)
+        return None if not s else (int(s["auth_at"] * 1000), int(s["active_at"] * 1000))
+
+    async def session_mark_active(self, sid_hash: str) -> None:
+        if sid_hash in self.sessions:
+            self.sessions[sid_hash]["active_at"] = time.time()
 
     async def session_revoke(self, sid_hash: str) -> None:
         if sid_hash in self.sessions:
             self.sessions[sid_hash]["revoked"] = True
+
+    async def session_revoke_others(self, keep_sid_hash: str) -> None:
+        for k, v in self.sessions.items():
+            if k != keep_sid_hash:
+                v["revoked"] = True
+
+    async def owner_credential_get(self) -> tuple[str, str] | None:
+        return self.owner_credential
+
+    async def owner_credential_set(self, password_hash: str, env_fingerprint: str) -> None:
+        self.owner_credential = (password_hash, env_fingerprint)
 
     async def auth_event(self, kind: str, detail: str | None = None) -> None:
         self.auth.append({"kind": kind, "detail": detail})
@@ -225,15 +249,42 @@ class PgStore:
             rows = await cur.fetchall()
         return {r[1]: {"kind": r[0], "component": r[1], "state": r[2], "detail": r[3], "marketOpen": r[4], "observedAt": int(r[5].timestamp() * 1000)} for r in rows}
 
-    async def session_create(self, sid_hash: str, ttl_s: int) -> None:
-        await self._exec("INSERT INTO sessions (id_sha256, expires_at) VALUES (%s, now() + make_interval(secs => %s))", (sid_hash, ttl_s))
+    async def session_create(self, sid_hash: str, ttl_s: int, auth_at_ms: int | None = None, active_at_ms: int | None = None) -> None:
+        # expires_at is measured from the ORIGINAL sign-in (auth_at), so rotation never extends the maximum.
+        await self._exec(
+            "INSERT INTO sessions (id_sha256, auth_at, active_at, expires_at) VALUES (%s, COALESCE(%s, now()), COALESCE(%s, now()), "
+            "COALESCE(%s, now()) + make_interval(secs => %s))",
+            (sid_hash, _ts(auth_at_ms), _ts(active_at_ms), _ts(auth_at_ms), ttl_s))
 
-    async def session_valid(self, sid_hash: str) -> bool:
-        row = await self._one("UPDATE sessions SET last_seen_at = now() WHERE id_sha256 = %s AND revoked_at IS NULL AND expires_at > now() RETURNING 1", (sid_hash,))
+    async def session_valid(self, sid_hash: str, idle_s: int | None = None) -> bool:
+        if idle_s is None:
+            row = await self._one("UPDATE sessions SET last_seen_at = now() WHERE id_sha256 = %s AND revoked_at IS NULL AND expires_at > now() RETURNING 1", (sid_hash,))
+        else:
+            row = await self._one("UPDATE sessions SET last_seen_at = now() WHERE id_sha256 = %s AND revoked_at IS NULL AND expires_at > now() "
+                                  "AND active_at > now() - make_interval(secs => %s) RETURNING 1", (sid_hash, idle_s))
         return row is not None
+
+    async def session_times(self, sid_hash: str) -> tuple[int, int] | None:
+        row = await self._one("SELECT auth_at, active_at FROM sessions WHERE id_sha256 = %s", (sid_hash,))
+        return None if row is None else (int(row[0].timestamp() * 1000), int(row[1].timestamp() * 1000))
+
+    async def session_mark_active(self, sid_hash: str) -> None:
+        await self._exec("UPDATE sessions SET active_at = now() WHERE id_sha256 = %s AND revoked_at IS NULL", (sid_hash,))
 
     async def session_revoke(self, sid_hash: str) -> None:
         await self._exec("UPDATE sessions SET revoked_at = now() WHERE id_sha256 = %s AND revoked_at IS NULL", (sid_hash,))
+
+    async def session_revoke_others(self, keep_sid_hash: str) -> None:
+        await self._exec("UPDATE sessions SET revoked_at = now() WHERE id_sha256 <> %s AND revoked_at IS NULL", (keep_sid_hash,))
+
+    async def owner_credential_get(self) -> tuple[str, str] | None:
+        row = await self._one("SELECT password_hash, env_fingerprint FROM owner_credential WHERE id = 1")
+        return None if row is None else (row[0], row[1])
+
+    async def owner_credential_set(self, password_hash: str, env_fingerprint: str) -> None:
+        await self._exec("INSERT INTO owner_credential (id, password_hash, env_fingerprint, updated_at) VALUES (1, %s, %s, now()) "
+                         "ON CONFLICT (id) DO UPDATE SET password_hash = EXCLUDED.password_hash, env_fingerprint = EXCLUDED.env_fingerprint, updated_at = now()",
+                         (password_hash, env_fingerprint))
 
     async def auth_event(self, kind: str, detail: str | None = None) -> None:
         await self._exec("INSERT INTO auth_events (kind, detail) VALUES (%s, %s)", (kind, (detail or "")[:300] or None))

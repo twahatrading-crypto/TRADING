@@ -87,7 +87,7 @@ export async function sessionStatus(fetchImpl: FetchLike = f): Promise<'authenti
   }
 }
 
-export async function login(password: string, fetchImpl: FetchLike = f): Promise<void> {
+export async function login(password: string, fetchImpl: FetchLike = f, email?: string): Promise<void> {
   let res: Response;
   try {
     res = await fetchImpl('/api/auth/login', {
@@ -95,7 +95,7 @@ export async function login(password: string, fetchImpl: FetchLike = f): Promise
       credentials: 'same-origin',
       cache: 'no-store',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password }),
+      body: JSON.stringify(email === undefined ? { password } : { email, password }),
     });
   } catch {
     throw new CloudAuthError('UNREACHABLE', 'The TLUXE gateway is not reachable.', 0);
@@ -103,6 +103,62 @@ export async function login(password: string, fetchImpl: FetchLike = f): Promise
   if (res.ok) return;
   const err = (await json<{ error?: { code?: string; message?: string } }>(res))?.error;
   throw new CloudAuthError(err?.code ?? 'ERROR', err?.message ?? `Sign-in failed (HTTP ${res.status}).`, res.status);
+}
+
+/** The owner's REAL activity (input / focus) - the only thing besides signing in that moves the 2 h inactivity clock. */
+export async function reportActivity(fetchImpl: FetchLike = f): Promise<void> {
+  try {
+    await fetchImpl('/api/auth/activity', { method: 'POST', credentials: 'same-origin', cache: 'no-store' });
+  } catch {
+    /* the next interaction reports again */
+  }
+}
+
+export interface OwnerAccount {
+  email: string | null;
+  signedInAtMs: number | null;
+  maxAgeS: number | null;
+  idleTimeoutS: number | null;
+}
+
+export async function fetchAccount(fetchImpl: FetchLike = f): Promise<OwnerAccount | null> {
+  try {
+    const res = await fetchImpl('/api/auth/me', { credentials: 'same-origin', cache: 'no-store' });
+    if (!res.ok) return null;
+    const b = await json<Partial<OwnerAccount>>(res);
+    return { email: typeof b?.email === 'string' ? b.email : null, signedInAtMs: b?.signedInAtMs ?? null, maxAgeS: b?.maxAgeS ?? null, idleTimeoutS: b?.idleTimeoutS ?? null };
+  } catch {
+    return null;
+  }
+}
+
+/** Change the owner password (current + new). The gateway stores only a hash and ends every other session. */
+export async function changePassword(currentPassword: string, newPassword: string, fetchImpl: FetchLike = f): Promise<void> {
+  let res: Response;
+  try {
+    res = await fetchImpl('/api/auth/password', {
+      method: 'POST',
+      credentials: 'same-origin',
+      cache: 'no-store',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ currentPassword, newPassword }),
+    });
+  } catch {
+    throw new CloudAuthError('UNREACHABLE', 'The TLUXE gateway is not reachable.', 0);
+  }
+  if (res.ok) return;
+  const err = (await json<{ error?: { code?: string; message?: string } }>(res))?.error;
+  throw new CloudAuthError(err?.code ?? 'ERROR', err?.message ?? `Password change failed (HTTP ${res.status}).`, res.status);
+}
+
+/** Where a signed-out browser goes: the server-rendered sign-in page, back to the same view afterwards. */
+export function signInUrl(loc: Pick<Location, 'pathname' | 'search' | 'hash'>, expired = false): string {
+  const next = `${loc.pathname}${loc.search}${loc.hash}`;
+  const q = new URLSearchParams();
+  if (expired) q.set('expired', '1');
+  if (next && next !== '/') q.set('next', next);
+  const qs = q.toString();
+  return `/login${qs ? `?${qs}` : ''}`;
 }
 
 export async function logout(fetchImpl: FetchLike = f): Promise<void> {
