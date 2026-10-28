@@ -146,6 +146,41 @@ class TestHlrGate(unittest.IsolatedAsyncioTestCase):
         self.assertIn(b"HLRGC", body)          # uses the dashboard's own public control
         self.assertIn(b"switchTo", body)
 
+    async def test_shim_empties_the_synthetic_generator_not_the_formatters(self):
+        """REAL MT5 DATA OR NOTHING - the shim must empty the data PRODUCERS and nothing else.
+
+        data.js ships MKT.generate (fake candles) alongside MKT.fmt / sma / ema, which the UI uses
+        to format REAL numbers. Emptying the formatters would break the live display, so the test
+        pins both halves: producers emptied, formatters untouched.
+        """
+        await self.login()
+        body = (await (await self.client.get(f"/hlr-original/{SHIM_NAME}")).read()).decode()
+        for producer in ("MKT", "generate", "SYNTH", "history", "tick"):
+            self.assertIn(producer, body, f"{producer} must be handled")
+        # The formatters must NOT be named as targets of the emptying helper.
+        for keep in ("fmt", "sma", "ema", "bollinger", "rsi"):
+            self.assertNotIn(f"'{keep}'", body, f"{keep} formats real numbers - must not be emptied")
+        self.assertIn("OFFLINE", body)          # an honest label, not 'Demo data'
+        # feed.js exports `global.FEED` (upper case). Wrapping `Feed` would silently do
+        # nothing - which is exactly the bug this line was added to catch.
+        self.assertIn("window.FEED", body)
+        self.assertNotIn("window.Feed", body)
+
+    async def test_shim_never_throws_even_if_the_generator_is_frozen(self):
+        """It must fail safe. A frozen MKT must not take the whole dashboard down with it."""
+        await self.login()
+        body = (await (await self.client.get(f"/hlr-original/{SHIM_NAME}")).read()).decode()
+        self.assertIn("catch", body)
+        self.assertIn("typeof obj[name] !== 'function'", body)   # guards a missing global
+
+    async def test_the_no_synthetic_guard_ships_on_every_dashboard_page(self):
+        """All four pages frame the same engine, so all four need the guard - not just hlr.html."""
+        await self.login()
+        for page in ("hlr.html", "index.html", "vpr.html", "sweep.html"):
+            r = await self.client.get(f"/hlr-original/{page}")
+            self.assertEqual(r.status, 200, page)
+            self.assertIn(SHIM_NAME.encode(), await r.read(), page)
+
     async def test_session_cookie_is_what_authorises_not_the_url(self):
         await self.login()
         self.assertEqual((await self.client.get("/hlr-original/hlr-engine.js")).status, 200)

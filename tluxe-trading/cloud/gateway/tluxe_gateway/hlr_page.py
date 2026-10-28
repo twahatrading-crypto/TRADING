@@ -118,6 +118,81 @@ SHIM_JS = """/* TLUXE: routes the original dashboard's hard-coded loopback URLs 
     }
     setTimeout(hold, 120);
   })();
+
+  /* ---- Real MT5 data, or nothing -------------------------------------------------------------
+     THE RULE THIS ENFORCES: the cloud copy must never draw a candle it did not get from MT5.
+
+     The dashboard ships a synthetic generator (data.js) and falls back to it whenever its bridge
+     is unreachable - feed.js sets provider='demo' in init() and refreshStatus(), and every
+     consumer then branches on `provider !== 'mt5'`. On the owner's PC that fallback is a
+     convenience. Served from the cloud it would be a lie: invented prices on a page that looks
+     live. Worse, it is silent - the page keeps rendering and only a small label changes.
+
+     WHY THE GENERATOR, NOT THE BRANCHES. Wrapping feed.js's call sites would mean finding every
+     one of them and trusting that no future path appears. Instead this empties the generator
+     itself, which is the single place fake candles can come from. Any caller - known, unknown or
+     added later - gets nothing, so the dashboard falls through to the WAITING FOR DATA / DATA
+     SOURCE UNKNOWN state it already renders natively when a feed returns nothing.
+
+     WHAT IS DELIBERATELY LEFT ALONE. MKT also carries fmt / sma / ema / bollinger / rsi, which the
+     UI uses to FORMAT real numbers. Emptying those would break the live display. Only the data
+     PRODUCERS are emptied: MKT.generate, SYNTH.history, SYNTH.tick. SYNTH.isSynthetic and
+     SYNTH.meta stay, because the symbol plumbing calls them on real symbols too.
+
+     STALE AND DISCONNECTED ARE THE SAME PATH. The relay closes a stale link itself, and answers
+     an offline link with an error rather than a cached body, so both end as a failed probe - and
+     a failed probe now yields no candles instead of invented ones.
+
+     No file among the 76 is modified. This runs after they load and empties three functions. */
+  (function noSynthetic() {
+    var EMPTY_BARS = [];
+    function emptied(obj, name, value) {
+      if (!obj || typeof obj[name] !== 'function') return false;
+      try {
+        obj[name] = function () { return typeof value === 'function' ? value() : value; };
+        return true;
+      } catch (e) { return false; }   /* frozen object: report it, never throw */
+    }
+    function apply() {
+      var done = 0;
+      if (window.MKT)   done += emptied(window.MKT, 'generate', function () { return EMPTY_BARS.slice(); });
+      if (window.SYNTH) {
+        done += emptied(window.SYNTH, 'history', function () { return EMPTY_BARS.slice(); });
+        done += emptied(window.SYNTH, 'tick', null);
+        done += emptied(window.SYNTH, 'list', function () { return []; });
+      }
+      return done;
+    }
+    apply();
+    /* The scripts load after this one, so re-apply until they exist. Bounded, not forever. */
+    var tries = 0;
+    (function retry() {
+      if (++tries > 100) return;              /* ~12 s, then stop */
+      apply();
+      label();                                 /* FEED appears on the same schedule */
+      setTimeout(retry, 120);
+    })();
+    /* A visible, honest label when the feed is not MT5. The dashboard shows 'Demo data' there by
+       default, which would be wrong twice over: there is no demo data any more, and the viewer
+       needs to know the feed is DOWN. The global is FEED (feed.js: `global.FEED = {...}`). */
+    var wrapped = false;
+    function label() {
+      if (wrapped) return true;
+      var F = window.FEED;
+      if (!F || typeof F.sourceLabel !== 'function') return false;
+      try {
+        var orig = F.sourceLabel;
+        F.sourceLabel = function () {
+          try {
+            return F.provider === 'mt5' ? orig.apply(this, arguments) : 'OFFLINE - DATA UNAVAILABLE';
+          } catch (e) { return 'OFFLINE - DATA UNAVAILABLE'; }
+        };
+        wrapped = true;
+      } catch (e) { /* never break the dashboard over a label */ }
+      return wrapped;
+    }
+    label();
+  })();
 })();
 """
 
