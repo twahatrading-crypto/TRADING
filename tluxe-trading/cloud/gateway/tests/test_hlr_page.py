@@ -166,6 +166,33 @@ class TestHlrGate(unittest.IsolatedAsyncioTestCase):
         self.assertIn("window.FEED", body)
         self.assertNotIn("window.Feed", body)
 
+    async def test_shim_names_databento_for_gc_candles_not_ibkr(self):
+        """hlr-gc.js hard-codes 'IBKR CONNECTED' for GC, but GC candles come from Databento.
+
+        The file may not be edited, and connLabel is private, so the badge is corrected where it
+        lands - in #hConnText - from the snapshot's own provenance. These assertions pin that the
+        correction exists, reads the right source of truth, and is scoped to GC alone.
+        """
+        await self.login()
+        body = (await (await self.client.get(f"/hlr-original/{SHIM_NAME}")).read()).decode()
+        self.assertIn("hConnText", body)                 # corrects the badge, not the strategy
+        self.assertIn("provenance", body)                # truth comes from the snapshot
+        self.assertIn("DATABENTO OFFLINE", body)
+        self.assertIn("IBKR DEPTH LIVE", body)           # IBKR named for depth only
+        self.assertIn("d.fresh === true", body)          # ...and only when depth says it is fresh
+        self.assertIn("'GC'", body)                      # scoped to GC
+
+    async def test_shim_gc_label_never_touches_xauusd_or_the_strategy(self):
+        """Scope check. The correction must read a status and write a status - nothing more."""
+        await self.login()
+        body = (await (await self.client.get(f"/hlr-original/{SHIM_NAME}")).read()).decode()
+        block = body[body.index("gcSourceLabel"):]
+        # it must gate on the GC market before writing anything
+        self.assertIn("market() === 'GC'", block)
+        # and must never reach into analysis, scoring or trade levels
+        for forbidden in ("analyze", "score", "tradeLevels", "entry", "sl", "tp1", "CFG"):
+            self.assertNotIn(forbidden, block, f"the label fix must not touch {forbidden}")
+
     async def test_shim_never_throws_even_if_the_generator_is_frozen(self):
         """It must fail safe. A frozen MKT must not take the whole dashboard down with it."""
         await self.login()

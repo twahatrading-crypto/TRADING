@@ -193,6 +193,85 @@ SHIM_JS = """/* TLUXE: routes the original dashboard's hard-coded loopback URLs 
     }
     label();
   })();
+
+  /* ---- GC: name the source that actually supplied the candles ---------------------------------
+     THE PROBLEM. hlr-gc.js was written when IBKR was the intended GC source, and its connection
+     badge says so in plain text:
+
+         if (s.analysis_enabled) return ['live', 'IBKR CONNECTED'];     // hlr-gc.js:207
+
+     GC candles now come from DATABENTO; IBKR supplies depth and nothing else. So the badge credits
+     the wrong vendor for the data on screen, and it would keep saying IBKR CONNECTED while IBKR was
+     down - the one moment the label matters.
+
+     WHY THIS IS DONE IN THE DOM. connLabel is a private function inside hlr-gc.js's closure and the
+     string is not data-driven, so no snapshot value can reach it. HLRGC exposes only market,
+     switchTo, snapshot, generation and BASE. The badge text is therefore corrected where it lands,
+     in #hConnText, from the snapshot's OWN provenance - which is the authority on where the candles
+     came from.
+
+     WHAT THIS DOES NOT TOUCH. Only the connection badge, and only while the market is GC. XAUUSD
+     passes through untouched. No strategy, analysis, signal, score, entry, stop or target is read
+     or altered - this reads a status string and writes a status string. No file is modified. */
+  (function gcSourceLabel() {
+    var EL = 'hConnText';
+    function snapshot() {
+      try { return (window.HLRGC && window.HLRGC.snapshot && window.HLRGC.snapshot()) || null; }
+      catch (e) { return null; }
+    }
+    function isGc() {
+      try { return !!(window.HLRGC && window.HLRGC.market && window.HLRGC.market() === 'GC'); }
+      catch (e) { return false; }
+    }
+    /* The honest label, derived only from what the snapshot reports about itself. Nothing is
+       assumed: no snapshot means OFFLINE, not "probably still fine". */
+    function truth() {
+      var s = snapshot();
+      if (!s) return 'DATABENTO OFFLINE';
+      if (!s.connected) return 'DATABENTO OFFLINE';
+      var candles = (s.provenance && s.provenance.candles) || '';
+      var vendor = /databento/i.test(candles) ? 'DATABENTO'
+                 : candles ? candles.split(':')[0].toUpperCase() : 'SOURCE';
+      var base;
+      if (s.analysis_enabled && s.market_status === 'LIVE') base = vendor + ' LIVE';
+      else if (s.market_status === 'STALE') base = vendor + ' STALE';
+      else if (s.market_status === 'OFFLINE' || s.market_status === 'NO_DATA') base = vendor + ' OFFLINE';
+      else base = vendor + ' - ANALYSIS GATED';
+      /* IBKR is mentioned ONLY for depth, and only when the depth feed itself says it is fresh.
+         Its health is verified separately from the candle feed, because the two fail apart. */
+      var d = s.depth_context;
+      if (d && d.fresh === true) base += ' · IBKR DEPTH LIVE';
+      else if (d) base += ' · IBKR DEPTH STALE';
+      return base;
+    }
+    var last = null;
+    function apply() {
+      if (!isGc()) { last = null; return; }        /* XAUUSD is never touched */
+      var el = document.getElementById(EL);
+      if (!el) return;
+      var want = truth();
+      if (el.textContent !== want) { el.textContent = want; }
+      last = want;
+    }
+    /* The dashboard repaints the badge on its own schedule, so watch the node and re-assert after
+       it writes. An observer costs nothing while nothing changes. */
+    function watch() {
+      var el = document.getElementById(EL);
+      if (!el) return false;
+      try {
+        new MutationObserver(function () { apply(); })
+          .observe(el, { childList: true, characterData: true, subtree: true });
+        return true;
+      } catch (e) { return false; }
+    }
+    var tries = 0;
+    (function hold() {
+      if (++tries > 200) return;                   /* ~24 s, then stop trying to attach */
+      if (!watch()) { setTimeout(hold, 120); return; }
+      apply();
+      setInterval(apply, 2000);                    /* belt: covers a full re-render of the node */
+    })();
+  })();
 })();
 """
 
