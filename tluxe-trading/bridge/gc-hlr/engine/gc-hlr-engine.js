@@ -368,8 +368,14 @@
       }
       /* The previous day's extremes are only final - and only knowable - once
          that day has ended. That instant is d1, never the bar that set them. */
-      if (n >= 4) return { high: high, low: low, day: d0, bars: n, endIndex: endIdx,
-                           validFrom: d1 };
+        /* The caller uses `day + DAY` as the level's formedAt, which in the
+           original equals the end of that UTC day. A GC session is 23 hours,
+           not 24, so returning its START here would put formedAt an hour after
+           the session actually closed and shift the freshness component of the
+           rating. Anchor on the end instead, so `day + DAY === d1` exactly as
+           the original intended. */
+        if (n >= 4) return { high: high, low: low, day: d1 - DAY, bars: n, endIndex: endIdx,
+                             validFrom: d1, sessionStart: d0, sessionEnd: d1 };
     }
     return null;
   }
