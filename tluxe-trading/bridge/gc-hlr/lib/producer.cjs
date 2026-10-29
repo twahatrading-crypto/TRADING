@@ -40,6 +40,10 @@ const MIN_BARS = { '1m': 120, '5m': 120, '15m': 150, '1h': 120, '4h': 60 };
 /** How old the newest bar may be, per timeframe, before the feed is called stale. */
 const STALE_AFTER_MS = { '1m': 5 * 60e3, '5m': 15 * 60e3, '15m': 45 * 60e3,
                          '1h': 3 * 3600e3, '4h': 10 * 3600e3 };
+/* Depth is a different feed with a different failure mode, so it gets its own
+   freshness budget - far tighter than a candle's, because an order book that is
+   a minute old is not a book. */
+const DEPTH_STALE_AFTER_S = 20;
 const GC_DIGITS = 1;          // GC quotes to 0.1; XAUUSD is 2 (hlr-gc.js:197)
 const GC_TICK = 0.1;
 
@@ -92,26 +96,36 @@ function validateSeries(tf, payload, now) {
  * This is where rule 2 lives: the calendar says what should exist, the candles say what does.
  */
 function checkLastSession(h1Bars, now) {
-  let key = cal.sessionDayKey(now);
+  const key = cal.sessionDayKey(now);
+  const ms = h1Bars.map((x) => ({ t: x.time * 1000 }));
   for (let back = 1; back <= 10; back++) {
     const dayKey = key - back * cal.DAY;
     const st = cal.sessionStatus(dayKey);
+    if (st.status === 'CALENDAR_EXPIRED') {
+      return { ok: false, day: st.date, expired: true,
+               gate: `CALENDAR EXPIRED for ${st.date} - ${st.reason}` };
+    }
     if (st.status === 'UNKNOWN') {
-      return { ok: false, gate: `calendar unknown for ${st.date} (${st.reason})`, day: st.date };
+      return { ok: false, day: st.date, gate: `calendar unknown for ${st.date} (${st.reason})` };
     }
     if (st.status === 'WEEKEND' || st.status === 'HOLIDAY') continue;   // legitimately no session
+
     const b = cal.sessionBounds(dayKey);
-    const n = h1Bars.filter((x) => x.time * 1000 >= b.start && x.time * 1000 < b.end).length;
-    const need = cal.expectedMinBars(dayKey);
-    if (n === 0) {
+    const inside = ms.filter((x) => x.t >= b.start && x.t < b.end);
+    if (inside.length === 0) {
       return { ok: false, day: st.date,
                gate: `CME calendar says ${st.date} traded, but no candles were delivered - data gap, not a holiday` };
     }
-    if (n < need) {
-      return { ok: false, day: st.date,
-               gate: `${st.date} delivered ${n} of at least ${need} expected H1 candles - incomplete session` };
+    /* Boundaries and contiguity, NOT a candle count. A count cannot tell an
+       early close from a feed that dropped the last four hours, and relaxing
+       the count on early-close days would hide an outage on exactly the day
+       the check is weakest. See cme-calendar.sessionCoverage. */
+    const cov = cal.sessionCoverage(inside, dayKey, 3600000);
+    if (!cov.ok) {
+      return { ok: false, day: st.date, gate: `${st.date}: ${cov.reason}` };
     }
-    return { ok: true, day: st.date, bars: n, earlyClose: st.earlyClose };
+    return { ok: true, day: st.date, bars: inside.length, earlyClose: st.earlyClose,
+             spanHours: cov.spanHours, lastBarEt: cov.lastBarEt, note: cov.reason };
   }
   return { ok: false, gate: 'no completed session found in the last 10 days', day: null };
 }
@@ -225,9 +239,24 @@ async function buildSnapshot({ engine, fetchTf, depth = null, now = Date.now() }
     gates.push('engine: threw');
   }
 
-  if (depth) snap.depth_context = depth;   // display only; never reaches the engine
+  /* DEPTH: display context only, never an engine input - and its freshness is
+     stated separately so the UI can verify IBKR connectivity INDEPENDENTLY of
+     the candle feed. The two sources fail apart: Databento can be healthy while
+     IBKR is down, and a label that conflates them would be wrong in exactly the
+     moment it matters. `fresh` is computed here, not asserted by the caller. */
+  if (depth) {
+    const asOfMs = typeof depth.asOfMs === 'number' ? depth.asOfMs : null;
+    const ageSec = asOfMs === null ? null : Math.max(0, Math.round((now - asOfMs) / 1000));
+    snap.depth_context = Object.assign({}, depth, {
+      asOfMs,
+      ageSec,
+      fresh: ageSec !== null && ageSec <= DEPTH_STALE_AFTER_S,
+      source: 'ibkr:COMEX PRICE_LEVEL',
+      note: 'display only - not used by the strategy',
+    });
+  }
   return snap;
 }
 
 module.exports = { buildSnapshot, validateSeries, checkLastSession, barOk, toWire, toEngine,
-                   TFS, DB_TF, MIN_BARS, STALE_AFTER_MS, GC_DIGITS, GC_TICK };
+                   TFS, DB_TF, MIN_BARS, STALE_AFTER_MS, GC_DIGITS, GC_TICK, DEPTH_STALE_AFTER_S };

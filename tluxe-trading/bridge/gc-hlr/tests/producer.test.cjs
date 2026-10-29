@@ -39,8 +39,47 @@ ok('known full closure recognised', cal.sessionStatus(Date.UTC(2026, 11, 25)).st
 ok('known early close recognised', cal.sessionStatus(Date.UTC(2026, 6, 3)).earlyClose === true);
 ok('ordinary weekday trades', cal.sessionStatus(Date.UTC(2026, 9, 28)).status === 'TRADING');
 ok('Saturday has no session', cal.sessionStatus(Date.UTC(2026, 9, 24)).status === 'WEEKEND');
+// A Sunday KEY spans Sat 18:00 -> Sun 17:00 ET: the week has not opened. Reporting it as
+// TRADING made the producer call every Monday a data gap. Pinned so it cannot come back.
+ok('Sunday has no session either', cal.sessionStatus(Date.UTC(2026, 9, 25)).status === 'WEEKEND',
+   cal.sessionStatus(Date.UTC(2026, 9, 25)).status);
+ok('Monday DOES trade (it carries the Sunday 18:00 ET open)',
+   cal.sessionStatus(Date.UTC(2026, 9, 26)).status === 'TRADING');
 const beyond = cal.sessionStatus(Date.UTC(2030, 0, 2));
-ok('past VALID_THROUGH returns UNKNOWN, not a guess', beyond.status === 'UNKNOWN', beyond.status);
+ok('past VALID_THROUGH -> CALENDAR_EXPIRED, not a guess', beyond.status === 'CALENDAR_EXPIRED', beyond.status);
+ok('CALENDAR_EXPIRED carries a remedy an operator can act on', typeof beyond.remedy === 'string' && beyond.remedy.includes('cmegroup.com'));
+ok('2027 is expired (CME had not published it)', cal.sessionStatus(Date.UTC(2027, 0, 4)).status === 'CALENDAR_EXPIRED');
+ok('an expired session withholds, it does not analyse',
+   P.checkLastSession([{ time: Math.floor(Date.UTC(2027, 0, 5) / 1000), open: 1, high: 2, low: 0, close: 1, volume: 1 }],
+                      Date.UTC(2027, 0, 6)).expired === true);
+
+console.log('');
+console.log('=== 1b. completeness is judged on BOUNDARIES, not a candle count (req 2) ===');
+{
+  const H1 = 3600e3;
+  const day = cal.sessionDayKey(Date.UTC(2026, 9, 28, 12, 0, 0));
+  const b2 = cal.sessionBounds(day);
+  const full = []; for (let t = b2.start; t < b2.end; t += H1) full.push({ t });
+  ok('a full contiguous session passes', cal.sessionCoverage(full, day, H1).ok);
+  // Same COUNT as an early close, but the hours are missing from the START.
+  const lateStart = full.slice(6);
+  const lateCov = cal.sessionCoverage(lateStart, day, H1);
+  ok('missing the session OPEN is caught even though the count looks plausible',
+     lateCov.ok === false && /after the 18:00 ET open/.test(lateCov.reason), lateCov.reason);
+  // A hole in the middle is data loss, not a maintenance break.
+  const holed = full.slice(0, 5).concat(full.slice(12));
+  const holeCov = cal.sessionCoverage(holed, day, H1);
+  ok('an oversized interior gap is caught', holeCov.ok === false && /interruption/.test(holeCov.reason), holeCov.reason);
+  // One short break is the legitimate daily maintenance pause.
+  const oneBreak = full.slice(0, 10).concat(full.slice(11));
+  ok('a single maintenance break is tolerated', cal.sessionCoverage(oneBreak, day, H1).ok);
+  // An early close must NOT relax the start/contiguity checks.
+  const ecDay = cal.sessionDayKey(Date.UTC(2026, 10, 27, 12, 0, 0));
+  const ecB = cal.sessionBounds(ecDay);
+  const ecLate = []; for (let t = ecB.start + 6 * H1; t < ecB.end; t += H1) ecLate.push({ t });
+  ok('an early-close day still fails if the OPEN is missing',
+     cal.sessionCoverage(ecLate, ecDay, H1).ok === false);
+}
 
 console.log('\n=== 2. missing candles are NOT treated as a holiday (req 7, the key rule) ===');
 const now = Date.UTC(2026, 9, 28, 14, 0, 0);          // Wed 28 Oct 2026, a trading day
