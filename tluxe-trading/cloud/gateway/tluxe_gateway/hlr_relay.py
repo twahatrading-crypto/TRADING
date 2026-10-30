@@ -27,9 +27,12 @@ THREE RULES THIS FILE ENFORCES.
 """
 from __future__ import annotations
 
+import logging
 import re
 
 from .mt5_relay import Mt5Relay, RelayError
+
+log = logging.getLogger("tluxe.gateway.hlr")
 
 #: Loopback services the link may read, named so no URL or port ever reaches the browser.
 UPSTREAMS = ("mt5", "gc", "tracker")
@@ -64,6 +67,17 @@ class HlrRelay(Mt5Relay):
     """The HLR dialect over the same audited transport."""
 
     OFFLINE = "The HLR link on the trading PC is not connected."
+    LABEL = "HLR link"
+    LOGGER = log
+    #: WHY 120 s AND NOT THE MT5 RELAY'S 30 s. bridge/hlr-link sends its heartbeat only
+    #: after probing each local upstream in turn, and link.py allows LOCAL_TIMEOUT_S = 12 s
+    #: per probe: 3 upstreams x 12 s + the 10 s sleep = 46 s between heartbeats on a trading
+    #: PC whose local services are merely SLOW. At 30 s the gateway would close that healthy
+    #: link, which is the one thing this change must not do, so the threshold is set above
+    #: TWICE the worst case (92 s) and left finite where today it is infinite. A dead TCP
+    #: socket is caught long before this by the WebSocket ping now enabled on /bridge/hlr;
+    #: this check is the backstop for a client that is silent but still connected.
+    STALE_S = 120
 
     async def request(self, upstream: str, path: str, timeout: float = 15.0) -> tuple[int, object]:  # type: ignore[override]
         if not allowed_path(upstream, path):

@@ -57,6 +57,15 @@ class RelayError(Exception):
 
 
 class Mt5Relay:
+    #: How this link names itself in logs and in the errors a browser sees, which logger it
+    #: writes to, and how long it may stay silent before it is treated as dead. A subclass
+    #: overrides these so its events are not reported as another link's - HlrRelay used to
+    #: inherit the literal text "MT5 bridge link", and an HLR reconnect was then read as MT5
+    #: link activity for two days running.
+    LABEL = "MT5 bridge link"
+    LOGGER = log
+    STALE_S = STALE_AFTER_S
+
     def __init__(self, keys: tuple[Mt5BridgeKey, ...], on_integrity: Callable[[str, dict], Awaitable[None]] | None = None,
                  clock: Callable[[], float] = time.time) -> None:
         self.keys = keys
@@ -79,7 +88,7 @@ class Mt5Relay:
         return int(self.clock() * 1000)
 
     def status(self) -> dict:
-        stale = self.ws is not None and self.last_rx is not None and self.clock() - self.last_rx > STALE_AFTER_S
+        stale = self.ws is not None and self.last_rx is not None and self.clock() - self.last_rx > self.STALE_S
         return {"connected": self.ws is not None, "stale": stale, "bridgeId": self.bridge_id, "connectedAtMs": int(self.connected_at * 1000) if self.connected_at else None,
                 "lastMessageMs": int(self.last_rx * 1000) if self.last_rx else None, "detail": self.last_detail, "counts": dict(self.counts)}
 
@@ -118,12 +127,12 @@ class Mt5Relay:
     # -------------------------------------------------------------- link side (aiohttp WebSocketResponse)
     async def attach(self, ws, bridge_id: str) -> None:
         if self.ws is not None:
-            log.warning("MT5 bridge link %s replaces the previous link %s", bridge_id, self.bridge_id)
+            self.LOGGER.warning("%s %s replaces the previous link %s", self.LABEL, bridge_id, self.bridge_id)
             try:
                 await self.ws.close(code=4000, message=b"replaced")
             except Exception:
                 pass
-            self._fail_pending("MT5 bridge link replaced.")
+            self._fail_pending(f"{self.LABEL} replaced.")
         self.ws, self.bridge_id = ws, bridge_id[:64]
         self.connected_at = self.last_rx = self.clock()
         self.rx_seq = 0
@@ -134,7 +143,7 @@ class Mt5Relay:
         if self.ws is ws:
             self.ws = None
             self.last_detail = why
-            self._fail_pending(f"MT5 bridge link closed ({why}).")
+            self._fail_pending(f"{self.LABEL} closed ({why}).")
 
     def _fail_pending(self, why: str) -> None:
         for fut in self.pending.values():
@@ -173,11 +182,16 @@ class Mt5Relay:
         ws = self.ws
         if ws is None:
             return
-        if self.last_rx is not None and self.clock() - self.last_rx > STALE_AFTER_S:
-            log.warning("MT5 bridge link stale (no message for %d s) - closing", STALE_AFTER_S)
+        if self.last_rx is not None and self.clock() - self.last_rx > self.STALE_S:
+            self.LOGGER.warning("%s stale (no message for %d s) - closing", self.LABEL, self.STALE_S)
             await self._integrity("STALE", {"bridgeId": self.bridge_id})
-            await ws.close(code=4001, message=b"stale")
+            # Detach BEFORE closing. `ws.close()` yields, the socket's own handler runs its
+            # finally and detaches with why="closed", and the detach below then finds
+            # `self.ws is not ws` and does nothing - so the reason was lost and `detail`
+            # always read "closed". Detaching first records "stale" and fails the waiting
+            # requests at once instead of after the close round-trip.
             self.detach(ws, "stale")
+            await ws.close(code=4001, message=b"stale")
             return
         await ws.send_str(json.dumps(self.envelope({"type": "heartbeat"})))
 

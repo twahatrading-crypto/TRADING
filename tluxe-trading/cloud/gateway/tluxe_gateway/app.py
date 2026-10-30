@@ -35,6 +35,10 @@ from .store import MemoryStore, PgStore
 from .stream import StreamHub
 
 log = logging.getLogger("tluxe.gateway")
+
+#: Gateway -> HLR link heartbeat. bridge/hlr-link reconnects when the gateway has sent
+#: it nothing for STALE_S = 45 s, so this must stay well under that; 10 s leaves 4.5x.
+HLR_HB_S = 10
 MAX_JSON = 256_000
 MAX_SNAPSHOT = 64_000
 DATABENTO_PATH = re.compile(r"^v1/(health|feed|book/(GC|SI)|trades/(GC|SI)|candles/(GC|SI))$")
@@ -855,6 +859,29 @@ async def _mt5_heartbeat_worker(app: web.Application) -> None:
         await asyncio.sleep(MT5_HB_S)
 
 
+async def _hlr_heartbeat_worker(app: web.Application) -> None:
+    """The same for the HLR link, which had no heartbeat of any kind.
+
+    WHY IT IS NEEDED. bridge/hlr-link waits on `recv()` with a 45 s timeout and reconnects
+    when the gateway has sent it NOTHING for that long (link.py: "no gateway message for
+    %d s - reconnecting"). The gateway only ever spoke on this link when a browser made a
+    request, so an idle dashboard guaranteed a reconnect - 27 of them in the 35 h measured on
+    2026-10-30. The MT5 relay never had the problem because it has had this worker all along.
+
+    Sending at HLR_HB_S keeps the client's timer comfortably reset, and it also makes the
+    inherited stale check run at last, so a silent link is closed and its waiting requests
+    are failed instead of being left to time out one by one.
+    """
+    while True:
+        try:
+            await app[K_HLR].heartbeat()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("hlr heartbeat")
+        await asyncio.sleep(HLR_HB_S)
+
+
 async def _retention_worker(app: web.Application) -> None:
     while True:
         try:
@@ -899,7 +926,8 @@ def make_app(cfg: GatewayConfig, store=None, workers: bool = True, http_session_
         app[K_STATE]["previousStatus"] = {"restoredFromDatabase": True, "components": await app[K_STORE].last_statuses()}
         app[K_HTTP] = (http_session_factory or ClientSession)()
         if workers:
-            for w in (_status_worker, _databento_worker, _news_worker, _mt5_heartbeat_worker, _retention_worker, _ibkr_worker):
+            for w in (_status_worker, _databento_worker, _news_worker, _mt5_heartbeat_worker,
+                      _hlr_heartbeat_worker, _retention_worker, _ibkr_worker):
                 app[K_STATE]["tasks"].append(asyncio.create_task(w(app)))
             if cfg.ibkr_depth.configured:
                 await app[K_DEPTH].load_stats()
@@ -961,7 +989,11 @@ def make_app(cfg: GatewayConfig, store=None, workers: bool = True, http_session_
             relay.counts["authRejected"] += 1
             await store.auth_event("HLR_BRIDGE_REJECTED", bridge_id)
             return _err(401, "UNAUTHORIZED", "Invalid HLR bridge credential.")
-        ws = web.WebSocketResponse(heartbeat=None, max_msg_size=4_000_000)
+        # heartbeat=30: aiohttp pings the link and closes it if no pong returns, so a dead
+        # TCP socket is detected here instead of being held open and answering 504s. The
+        # client replies at the protocol level, so this needs nothing of it. It does NOT
+        # reset the client's own recv() timer - only the application heartbeat does that.
+        ws = web.WebSocketResponse(heartbeat=30, max_msg_size=4_000_000)
         await ws.prepare(request)
         await relay.attach(ws, bridge_id)
         await store.auth_event("HLR_BRIDGE_OK", bridge_id)
