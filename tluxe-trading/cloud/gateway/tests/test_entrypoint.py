@@ -43,6 +43,18 @@ class TestEmbeddedConfig(unittest.TestCase):
             self.assertNotIn(k, child)
         self.assertNotIn("PORT", child)  # Railway's PORT belongs to the gateway; the bridge stays on loopback
 
+    def test_the_history_refresh_setting_reaches_the_child(self):
+        """It is read by the bridge but set on the gateway, so it needs a PASS_THROUGH entry.
+
+        Without one the variable would be set on the Railway service and silently
+        never arrive, which looks exactly like a feature that does not work.
+        """
+        e = EmbeddedDatabento.from_env({"DATABENTO_API_KEY": KEY, "TLUXE_DB_HIST_REFRESH": "auto"})
+        self.assertEqual(e.child_env()["TLUXE_DB_HIST_REFRESH"], "auto")
+        # Unset on the service means unset for the child, which the bridge reads as off.
+        bare = EmbeddedDatabento.from_env({"DATABENTO_API_KEY": KEY})
+        self.assertNotIn("TLUXE_DB_HIST_REFRESH", bare.child_env())
+
 
 def stand_in(tmp: Path, body: str) -> None:
     (tmp / "run_bridge.py").write_text(textwrap.dedent(body))

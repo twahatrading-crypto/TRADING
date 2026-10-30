@@ -24,7 +24,7 @@ import threading
 import time
 
 from .book import px
-from .config import DATASET
+from .config import DATASET, ROOTS
 
 log = logging.getLogger("tluxe.databento.history")
 
@@ -202,3 +202,228 @@ class HistoryLoader:
         store.loaded_at_ms = self.now()
         self.on_loaded(store)
         return store
+
+    # ---------------------------------------------------------------- refresh
+    #
+    # WHY THIS EXISTS. `load()` runs once per contract (hub.on_contract), so the
+    # historical window ends at load time and never moves. The live CandleStore
+    # keeps only `replay_hours * 60 + 120` minutes - 1560, or 26 traded-hours, at
+    # the configured 24. `hub.candles()` serves the union of the two, so the
+    # moment the bridge has been running more than that overlap past its load,
+    # the oldest live minute is evicted past the historical end and a hole opens
+    # between them. It then widens by an hour every hour.
+    #
+    # It is not a failure mode: it is what healthy, uninterrupted operation does.
+    # Observed on 2026-10-29 - history ending 10-27 10:00, live buffer starting
+    # 10-28 03:23, a 17.4 h hole, matching the arithmetic to four minutes.
+    #
+    # The fix is to reload history before the overlap is spent. `add()` is a
+    # timestamp-keyed merge and `load()` never clears, so a reload fills holes
+    # and rewrites identical official bars; live still wins at serve time.
+    #
+    # WHAT THIS MUST NOT DO, 1: downgrade a healthy store. A transient API failure
+    # inside a refresh would otherwise flip a READY store to UNAVAILABLE and take
+    # a good history off the air. So a refresh loads into a store nothing serves
+    # and only publishes a result that succeeded. Bars already held are never
+    # touched by a failure - nothing in this file deletes a bar.
+    #
+    # WHAT THIS MUST NOT DO, 2: write into a dict a consumer is reading. `load()`
+    # writes bar by bar, while `hub.candles()` iterates those same dicts under
+    # hub.lock, which the loader does not hold. Reloading into the SERVED store
+    # would therefore raise "dictionary changed size during iteration" inside a
+    # consumer's request - rarely, and every refresh cycle gets another chance at
+    # it. Loading into a detached store and then REBINDING each finished schema
+    # dict is one atomic assignment per schema: a reader holds a reference to one
+    # complete dict or to the other, never to a mutating one.
+
+    def refresh(self, store: HistoryStore) -> str:
+        """Reload this store's contract into a DETACHED store, then publish it.
+
+        Returns the state of THIS ATTEMPT, which is not always the store's reported
+        state: a failed attempt over a healthy store leaves the store READY while
+        returning UNAVAILABLE / COST_BLOCKED / AUTH_ERROR. The caller needs the
+        attempt - scheduling on the store's state would treat a preserved READY as
+        a success, give the next try the normal interval instead of a backoff, and
+        never count the failure.
+        """
+        held = {s: len(b) for s, b in store.bars.items()}
+        fresh = HistoryStore(store.root, store.contract, store.instrument_id)
+        for schema, bars in store.bars.items():
+            fresh.bars[schema] = dict(bars)       # start from what we already have: a reload may never lose a bar
+        self.load(fresh)
+        attempt = fresh.state
+
+        if attempt == READY:
+            for schema, bars in fresh.bars.items():
+                store.bars[schema] = bars         # atomic per schema; no reader is ever mid-iteration
+            store.state, store.message = READY, None
+            store.range, store.estimated_cost_usd = fresh.range, fresh.estimated_cost_usd
+            store.loaded_at_ms = fresh.loaded_at_ms
+            gained = {s: len(b) - held.get(s, 0) for s, b in store.bars.items()}
+            log.info("history %s refreshed: +%s bars", store.root,
+                     {s: n for s, n in gained.items() if n})
+            self.on_loaded(store)                 # republish the status of the store that is actually served
+        elif store.state == READY:
+            # The attempt failed, but what we already had is still good. Report the
+            # old truth rather than a scare, and say why in the log only.
+            log.warning("history %s refresh failed (%s); keeping the previous READY history",
+                        store.root, attempt)
+        else:
+            # Nothing healthy to protect - report the latest attempt, as a first load would.
+            store.state, store.message = fresh.state, fresh.message
+            store.range, store.estimated_cost_usd = fresh.range, fresh.estimated_cost_usd
+            store.loaded_at_ms = fresh.loaded_at_ms
+        return attempt
+
+
+class HistoryRefresher:
+    """Reloads a root's history on a cadence shorter than the live overlap.
+
+    Enabled PER ROOT, so GC can refresh while SI stays off entirely.
+
+    `Manager` drives this from ONE background thread that steps the roots in turn
+    (`manager._refresh_loop`), so there is no lock here and no thread of its own.
+    What the roots do not share is state: `_inflight`, `_next_due` and `_failures`
+    are keyed by root, every attempt builds its own Historical client, and no lock
+    is held across a download - so a GC failure cannot touch SI's schedule, its
+    failure count or its history, and cannot block a consumer reading either root.
+
+    Because that one thread is sequential, a slow GC refresh does delay SI within
+    the same tick. That delay is bounded: the Databento SDK applies a 100 s connect
+    and read timeout to every request, so the worst case is minutes against a
+    cadence of hours.
+
+    A refresh already in flight is never started twice - `_inflight` is checked
+    before anything else that could issue a request.
+    """
+
+    def __init__(self, cfg, loader, stores, now=time.time, sleep=time.sleep) -> None:
+        self.cfg, self.loader, self.stores = cfg, loader, stores
+        self.now, self.sleep = now, sleep
+        self._stop = threading.Event()
+        self._inflight: dict[str, bool] = {}
+        self._next_due: dict[str, float] = {}
+        self._failures: dict[str, int] = {}
+
+    # CONFIGURATION, AND WHY IT READS THIS WAY.
+    #
+    # The first draft used 0 to mean "derive the interval from replay_hours". That
+    # was a bad setting: 0 looks like off everywhere else in this codebase, so a
+    # reader - or an operator reaching for the obvious way to disable it - would
+    # have switched the feature ON with a derived cadence. Worse, it made the
+    # production default enabled, which is the opposite of what is wanted while
+    # this is new.
+    #
+    # So the states are named, and "off" means off. The setting is ALSO per root,
+    # because rolling this feature out wants one instrument at a time:
+    #
+    #   "" / "0" / "off"    ->  EVERY root disabled. No timer and no automatic
+    #                           request to the Historical API, ever. This is the
+    #                           default, including when the variable is absent.
+    #   "auto"              ->  every root, a quarter of the live overlap - which is
+    #                           what keeps the historical window and the live buffer
+    #                           touching.
+    #   "<seconds>"         ->  every root, that interval, floored at 900 s so a
+    #                           typo cannot hammer the API.
+    #   "GC"                ->  GC on "auto"; every root NOT named stays OFF.
+    #   "GC:auto"/"GC:21600"->  GC with that interval; SI off.
+    #   "GC:auto,SI:28800"  ->  both, with independent intervals.
+    #   "GC:auto,SI:off"    ->  the same as "GC:auto"; a per-root "off" is explicit.
+    #
+    # A root named in the value is enabled and a root absent from it is off, so the
+    # safe direction is the default in both the global and the per-root form. An
+    # unknown name is logged and ignored rather than guessed at.
+    OFF_WORDS = ("", "0", "off", "false", "no", "disabled")
+
+    def _interval(self, spec: str):
+        """One interval spec -> seconds, or None for off / unparseable."""
+        s = spec.strip().lower()
+        if s in self.OFF_WORDS:
+            return None
+        if s == "auto":
+            overlap_min = max(60, self.cfg.replay_hours * 60 + 120)
+            return max(900.0, overlap_min * 60 / 4.0)
+        try:
+            return max(900.0, float(int(s)))
+        except (TypeError, ValueError):
+            log.warning("TLUXE_DB_HIST_REFRESH=%r is not 'auto', 'off', a number of seconds or a "
+                        "per-instrument list such as 'GC:auto' - historical refresh stays DISABLED",
+                        spec[:32])
+            return None
+
+    def plan(self) -> dict[str, float]:
+        """{root: interval_s} for the roots that are enabled. A root absent is OFF."""
+        raw = str(getattr(self.cfg, "hist_refresh", "") or "").strip()
+        if raw.lower() in self.OFF_WORDS:
+            return {}
+        entries = [e.strip() for e in raw.split(",") if e.strip()]
+        if not any(e.partition(":")[0].strip().upper() in ROOTS for e in entries):
+            # No instrument named: the whole value is one interval for every root.
+            secs = self._interval(raw)
+            return {r: secs for r in ROOTS} if secs is not None else {}
+        out: dict[str, float] = {}
+        for entry in entries:
+            head, _, spec = entry.partition(":")
+            root = head.strip().upper()
+            if root not in ROOTS:
+                log.warning("TLUXE_DB_HIST_REFRESH: %r is not a known instrument root %s - ignored "
+                            "(that instrument stays DISABLED)", head.strip()[:16], list(ROOTS))
+                continue
+            secs = self._interval(spec or "auto")
+            if secs is not None:
+                out[root] = secs
+        return out
+
+    def enabled(self, root: str) -> bool:
+        return root in self.plan()
+
+    def any_enabled(self) -> bool:
+        """True when at least one root is enabled - what the manager's loop checks."""
+        return bool(self.plan())
+
+    def interval_s(self, root: str):
+        """Seconds between refreshes of this root, or None when it is disabled."""
+        return self.plan().get(root)
+
+    def backoff_s(self, failures: int) -> float:
+        return min(3600.0, 60.0 * (2 ** max(0, failures - 1)))
+
+    def due(self, root: str) -> bool:
+        if not self.enabled(root):
+            return False
+        return self.now() >= self._next_due.get(root, 0.0)
+
+    def run_once(self, root: str) -> str:
+        """One refresh attempt for one root. Returns a short outcome word.
+
+        DISABLED is checked FIRST and unconditionally, for THIS root: a root that is
+        off returns before a store, a timer or a client is touched, so no automatic
+        call to the Historical API can originate here - including for an instrument
+        left out of the configuration while another one is enabled.
+        """
+        if not self.enabled(root):
+            return "DISABLED"
+        if self._inflight.get(root):
+            return "ALREADY_RUNNING"
+        store = self.stores().get(root)
+        if store is None:
+            return "NO_STORE"
+        if store.state == LOADING:
+            # The contract's FIRST load is still running (startup, or a roll a moment
+            # ago). A refresh now would download the same window a second time for
+            # nothing, so wait for it; the next tick will find a settled store.
+            return "LOADING"
+        if not self.due(root):
+            return "NOT_DUE"
+        self._inflight[root] = True
+        try:
+            # The ATTEMPT, not store.state: a failed attempt over a healthy store
+            # deliberately leaves the store READY, so reading the store here would
+            # schedule a failure as a success and never back off.
+            ok = self.loader.refresh(store) == READY
+            self._failures[root] = 0 if ok else self._failures.get(root, 0) + 1
+            wait = self.interval_s(root) if ok else self.backoff_s(self._failures[root])
+            self._next_due[root] = self.now() + wait
+            return "REFRESHED" if ok else "FAILED"
+        finally:
+            self._inflight[root] = False

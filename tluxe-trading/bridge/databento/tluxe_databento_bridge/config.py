@@ -97,6 +97,14 @@ class BridgeConfig:
     hist_h1_days: int = 400
     hist_d1_days: int = 1100
     hist_max_cost_usd: float = 2.0
+    # Historical refresh cadence, PER INSTRUMENT ROOT. "off" (the default, and what an absent
+    # variable means) issues NO automatic Historical API request at all, for any root. "auto"
+    # derives a quarter of the live overlap, which is what keeps the historical window and the
+    # live buffer touching; a number is that many seconds, floored at 900. Either form applies
+    # to every root. "GC", "GC:auto" or "GC:21600" enables that root alone and leaves every
+    # other one OFF; "GC:auto,SI:28800" enables both independently. A value LONGER than the
+    # overlap reopens the gap.
+    hist_refresh: str = "off"
 
     @property
     def depth_plan(self) -> bool:
@@ -189,5 +197,6 @@ def from_env(env: dict | None = None) -> BridgeConfig:
         hist_h1_days=_int(e, "TLUXE_DB_HIST_H1_DAYS", 400, 0, 2000),
         hist_d1_days=_int(e, "TLUXE_DB_HIST_D1_DAYS", 1100, 0, 5000),
         hist_max_cost_usd=_float(e, "TLUXE_DB_HIST_MAX_COST_USD", 2.0, 0.0, 100.0),
+        hist_refresh=(e.get("TLUXE_DB_HIST_REFRESH") or "off").strip(),
         replay_margin_min=_int(e, "TLUXE_DB_REPLAY_MARGIN_MIN", 30, 0, 240),
     )

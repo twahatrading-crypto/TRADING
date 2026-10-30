@@ -39,7 +39,10 @@ DEFAULT_DIR = "/app/databento"
 DEFAULT_PORT = 8766
 # Bridge options the operator may set on the gateway service; everything else in the gateway env stays private to it.
 PASS_THROUGH = ("TLUXE_DB_PLAN", "TLUXE_DB_CONTRACT_MODE", "TLUXE_DB_CONTRACT_GC", "TLUXE_DB_CONTRACT_SI", "TLUXE_DB_MAX_TRADES",
-                "TLUXE_DB_MAX_FRAMES", "TLUXE_DB_PUBLISH_MS", "TLUXE_DB_REPLAY_HOURS", "TLUXE_DB_REPLAY_MARGIN_MIN", "LOG_LEVEL")
+                "TLUXE_DB_MAX_FRAMES", "TLUXE_DB_PUBLISH_MS", "TLUXE_DB_REPLAY_HOURS", "TLUXE_DB_REPLAY_MARGIN_MIN",
+                # Historical refresh cadence (off / auto / seconds). This is an ALLOWLIST: without an entry here the
+                # variable would be set on the service and silently never reach the bridge child that reads it.
+                "TLUXE_DB_HIST_REFRESH", "LOG_LEVEL")
 BACKOFF_MIN_S, BACKOFF_MAX_S = 2.0, 60.0
 AUTH_EXIT_BACKOFF_S = 300.0  # exit code 2 = bad configuration (e.g. rejected key): do not hammer Databento
 

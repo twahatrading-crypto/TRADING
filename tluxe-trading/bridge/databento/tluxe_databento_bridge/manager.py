@@ -327,6 +327,15 @@ class Manager:
 
         self.history = HistoryLoader(cfg, self.hub.history_loaded, client_factory=history_client_factory)
         self.hub.on_contract = self.history.start
+        # Periodic reload, so the historical window never stops overlapping the live buffer.
+        # `stores()` reads through the hub each time, so a contract roll that replaces a
+        # HistoryStore is picked up without the refresher holding a stale reference.
+        from .history import HistoryRefresher
+
+        self.refresher = HistoryRefresher(
+            cfg, self.history,
+            stores=lambda: {r: st.history for r, st in self.hub.roots.items() if st.history is not None},
+        )
         self.ingest = Ingest(self.hub)
         factory = factory or default_client_factory
         # Standard plan: ONE Databento session (trades + ohlcv-1m). The MBO book session exists only on a MBO plan.
@@ -334,17 +343,51 @@ class Manager:
         self.runners = [SessionRunner(n, cfg, self.hub, self.ingest, factory) for n in names]
         self._stop = threading.Event()
         self._pub = threading.Thread(target=self._publish_loop, name="databento-publish", daemon=True)
+        self._refresh = threading.Thread(target=self._refresh_loop, name="databento-history-refresh", daemon=True)
 
     def _publish_loop(self) -> None:
         while not self._stop.wait(self.cfg.publish_ms / 1000):
             self.hub.set_queue_depth(self.ingest.qsize())
             self.hub.publish()
 
+    def _refresh_loop(self) -> None:
+        """Keep each root's history overlapping the live buffer.
+
+        `load()` runs once per contract, so the historical window ends at load time
+        while the live CandleStore keeps only `replay_hours` of minutes. Once the
+        bridge has been up longer than that overlap, the oldest live minute is
+        evicted past the historical end and a hole opens between them - out of
+        healthy operation, with no outage involved.
+
+        This loop reloads history before that happens. Every root is OFF unless
+        TLUXE_DB_HIST_REFRESH enables it, and a root that is off issues no request:
+        `run_once` returns DISABLED before touching a store, a timer or a client.
+        The setting is per root ("GC:auto" leaves SI off entirely), so this loop
+        asks about each root separately rather than about the feature as a whole.
+
+        Roots are stepped one at a time, so GC and SI never share a request and a
+        failure on one cannot fail the other. It does mean a slow GC refresh delays
+        SI within the same tick, bounded by the SDK's 100 s request timeout.
+        """
+        while not self._stop.wait(self.cfg.publish_ms / 1000 * 10):
+            if not self.refresher.any_enabled():
+                continue
+            for root in list(self.hub.roots):
+                if self._stop.is_set():
+                    return
+                try:
+                    self.refresher.run_once(root)
+                except Exception:  # noqa: BLE001 - a refresh must never take the bridge down
+                    log.exception("history refresh %s", root)
+
     def start(self) -> None:
         self.ingest.start()
         for r in self.runners:
             r.start()
         self._pub.start()
+        # Started unconditionally; the loop is inert while the feature is off, so
+        # enabling it later needs nothing beyond the variable.
+        self._refresh.start()
 
     def stop(self) -> None:
         self._stop.set()
