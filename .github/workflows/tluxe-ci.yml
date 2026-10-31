@@ -38,6 +38,9 @@ jobs:
       - run: npm run lint
       - run: npx vitest run --maxWorkers=2
       - run: npm run test:scripts
+      # GC HLR -> gateway credential (no HLR originals needed). The other GC HLR tests need the private originals and
+      # run where GC HLR is hosted: npm run test:gc-hlr (GC_HLR_ORIGINALS=<folder>).
+      - run: npm run test:gc-hlr-auth
       - run: npm run build
       # Fails if the public bundle contains a localhost endpoint, an API key or any credential.
       - run: npm run build:cloud
@@ -85,5 +88,13 @@ jobs:
       # IBKR: IBKR's official ibapi is installed on the VPS from the TWS API download; its tests use a fake API.
       - if: matrix.bridge != 'mt5'
         run: pip install -r bridge/${{ matrix.bridge }}/requirements.txt
-      - run: python -m unittest discover -s tests -v
+      - if: matrix.bridge != 'databento'
+        run: python -m unittest discover -s tests -v
+        working-directory: tluxe-trading/bridge/${{ matrix.bridge }}
+      # Databento's history-refresh tests are pytest-style functions: unittest would import them and silently run
+      # none. pytest runs those AND every existing unittest class. Test tool only - not a bridge dependency.
+      - if: matrix.bridge == 'databento'
+        run: pip install pytest==9.2.0
+      - if: matrix.bridge == 'databento'
+        run: python -m pytest tests -v
         working-directory: tluxe-trading/bridge/${{ matrix.bridge }}

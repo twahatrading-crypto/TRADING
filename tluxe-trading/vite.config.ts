@@ -1,4 +1,4 @@
-import { defineConfig } from 'vitest/config';
+import { configDefaults, defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 
 // `--mode cloud` (npm run build:cloud / dev:cloud) builds the gateway-served bundle: every backend call goes to the
@@ -33,5 +33,9 @@ export default defineConfig(({ mode }) => ({
     environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],
     css: false,
+    // bridge/** holds the services that run beside the site (VPS / gateway), never the web app. Their Node tests
+    // run in their own environment - GC HLR needs the private HLR originals: `npm run test:gc-hlr` there, and
+    // `npm run test:gc-hlr-auth` (no originals needed) in CI.
+    exclude: [...configDefaults.exclude, 'bridge/**'],
   },
 }));

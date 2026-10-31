@@ -1,7 +1,7 @@
 /* GC session-day tests. Run: node bridge/gc-hlr/tests/session-day.test.js
    Loads the REAL engines read-only. Writes nothing. Opens no connection. */
 const fs = require('fs'), path = require('path');
-const ORIG = String.raw`C:\Users\twaha\hlr-upload-staging\hlr-original`;
+const ORIG = process.env.GC_HLR_ORIGINALS || String.raw`C:\Users\twaha\hlr-upload-staging\hlr-original`;  // same variable as server.cjs
 const GC = path.join(__dirname, '..', 'engine', 'gc-hlr-engine.js');
 
 const g = globalThis; g.window = g;

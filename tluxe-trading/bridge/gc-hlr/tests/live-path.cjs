@@ -4,7 +4,7 @@
 const fs = require('fs'), path = require('path');
 const P = require('../lib/producer.cjs');
 
-const ORIG = String.raw`C:\Users\twaha\hlr-upload-staging\hlr-original`;
+const ORIG = process.env.GC_HLR_ORIGINALS || String.raw`C:\Users\twaha\hlr-upload-staging\hlr-original`;  // same variable as server.cjs
 const g = globalThis; g.window = g;
 for (const f of ['data.js', 'vpr-engine.js']) (0, eval)(fs.readFileSync(path.join(ORIG, f), 'utf8'));
 (0, eval)(fs.readFileSync(path.join(__dirname, '..', 'engine', 'gc-hlr-engine.js'), 'utf8'));

@@ -14,6 +14,8 @@
     "lint": "eslint . --max-warnings=0",
     "test": "vitest run",
     "test:scripts": "node --test scripts/scan-bundle.nodetest.cjs",
+    "test:gc-hlr-auth": "node --test bridge/gc-hlr/tests/source-auth.test.cjs",
+    "test:gc-hlr": "node bridge/gc-hlr/tests/session-day.test.cjs && node bridge/gc-hlr/tests/producer.test.cjs && node bridge/gc-hlr/tests/reconnect.test.cjs",
     "test:watch": "vitest",
     "check": "npm run typecheck && npm run lint && npm run test && npm run build",
     "preview:check": "node scripts/preview-check.cjs --hmr"
