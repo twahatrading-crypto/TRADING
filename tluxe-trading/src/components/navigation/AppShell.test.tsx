@@ -11,6 +11,11 @@ vi.mock('../chart/ChartController', () => ({
     upsert() {}
     setOverlays() {}
     setZones() {}
+    setSmc() {}
+    setTimeBands() {}
+    onBarClick() {
+      return () => {};
+    }
     screenshot() {
       return document.createElement('canvas');
     }
@@ -81,7 +86,7 @@ describe('Left sidebar navigation', () => {
 
     for (let i = 0; i < 2; i++) {
       go('#/engines/support-resistance');
-      expect(document.querySelector('.srgrid')).not.toBeNull();
+      expect(document.querySelector('.srgrid, .srp')).not.toBeNull(); // S&R route: classic or Pro view
       go('#/');
       expect(document.querySelector('.dash')).not.toBeNull();
     }

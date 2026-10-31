@@ -3,7 +3,7 @@ import { useHashRoute } from '../hooks/useHashRoute';
 import { Dashboard } from '../components/dashboard/Dashboard';
 import { ModulePage } from '../components/dashboard/ModulePage';
 import { SettingsPage } from '../components/settings/SettingsPage';
-import { SRPage } from '../components/sr/SRPage';
+import { SRRoute } from '../components/srPro/SRRoute';
 import { LiquidityPage } from '../components/liquidity/LiquidityPage';
 import { OrderBlocksPage } from '../components/orderBlocks/OrderBlocksPage';
 import { HLRPage } from '../components/hlReversal/HLRPage';
@@ -25,7 +25,7 @@ export function App() {
   // One shell for every page: the sidebar and market header persist across navigation.
   return (
     <AppShell>
-      {route === SR_ROUTE ? <SRPage /> : route === LIQUIDITY_ROUTE ? <LiquidityPage /> : route === ORDER_BLOCKS_ROUTE ? <OrderBlocksPage /> : route === HLR_ROUTE ? <HLRPage /> : route === HLE_ROUTE ? <HighLowEnginePage /> : route === HEATMAP_ROUTE ? <LiquidityHeatmapPage /> : route === GC_MAP_ROUTE ? <GcLiquidityMapPage /> : route === SMC_ROUTE ? <SmcPage /> : route === VP_ROUTE ? <VolumeProfilePage /> : route === FOOTPRINT_ROUTE ? <VolumeFootprintPage /> : route === OFP_ROUTE ? <OrderFlowProPage /> : route === NEWS_ROUTE ? <NewsAnalysisPage /> : route === HLR_ORIGINAL_ROUTE ? <HlrOriginalPage /> : route === SETTINGS_ROUTE ? <SettingsPage /> : module ? <ModulePage module={module} /> : <Dashboard />}
+      {route === SR_ROUTE ? <SRRoute /> : route === LIQUIDITY_ROUTE ? <LiquidityPage /> : route === ORDER_BLOCKS_ROUTE ? <OrderBlocksPage /> : route === HLR_ROUTE ? <HLRPage /> : route === HLE_ROUTE ? <HighLowEnginePage /> : route === HEATMAP_ROUTE ? <LiquidityHeatmapPage /> : route === GC_MAP_ROUTE ? <GcLiquidityMapPage /> : route === SMC_ROUTE ? <SmcPage /> : route === VP_ROUTE ? <VolumeProfilePage /> : route === FOOTPRINT_ROUTE ? <VolumeFootprintPage /> : route === OFP_ROUTE ? <OrderFlowProPage /> : route === NEWS_ROUTE ? <NewsAnalysisPage /> : route === HLR_ORIGINAL_ROUTE ? <HlrOriginalPage /> : route === SETTINGS_ROUTE ? <SettingsPage /> : module ? <ModulePage module={module} /> : <Dashboard />}
     </AppShell>
   );
 }

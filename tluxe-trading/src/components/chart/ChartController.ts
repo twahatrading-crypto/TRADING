@@ -14,6 +14,7 @@ import { declutterMarkers, markerGapBars, type VPDrawable, type VPHistogram, typ
 import { VP_LABEL_LANE, VolumeProfilePrimitive, vpHistogramWidth } from './VolumeProfilePrimitive';
 import type { FPMarker, FPRenderData } from '../volumeFootprint/fpView';
 import { FootprintPrimitive } from './FootprintPrimitive';
+import { TimeBandsPrimitive, type TimeBand } from './TimeBandsPrimitive';
 import type { Candle } from '../../types/market';
 import type { ChartOverlay } from '../../types/overlays';
 import { COMPACT_LABEL_WIDTH, ZONE_LABEL_MARGIN_MAX_SHARE, ZONE_LABEL_MARGIN_PX, ZonesPrimitive, type ZoneDrawable } from './ZonesPrimitive';
@@ -70,6 +71,7 @@ export class ChartController {
   private vpMarkers: readonly VPMarker[] | null = null;
   private vpGap = 0;
   private fpPrimitive: FootprintPrimitive | null = null;
+  private bandsPrimitive: TimeBandsPrimitive | null = null;
   /** Zoom limits / reset zoom (defaults for every chart; the footprint chart needs wider candles). */
   private maxBarSpacing = MAX_BAR_SPACING;
   private defaultBarSpacing = DEFAULT_BAR_SPACING;
@@ -166,6 +168,16 @@ export class ChartController {
     const width = ts.width();
     const margin = Math.min(width < COMPACT_LABEL_WIDTH ? 110 : ZONE_LABEL_MARGIN_PX, width * ZONE_LABEL_MARGIN_MAX_SHARE);
     ts.applyOptions({ rightOffset: zones.length ? Math.ceil(margin / ts.options().barSpacing) : 0 });
+  }
+
+  /** Shaded vertical time bands behind the candles (sessions, thin history). Additive: other pages never call it. */
+  setTimeBands(bands: TimeBand[]): void {
+    if (this.disposed) return;
+    if (!this.bandsPrimitive) {
+      this.bandsPrimitive = new TimeBandsPrimitive();
+      this.candles.attachPrimitive(this.bandsPrimitive);
+    }
+    this.bandsPrimitive.setBands(bands);
   }
 
   /** Click on the chart → open time of the clicked bar (null outside the bars). Returns an unsubscribe. */

@@ -45,7 +45,10 @@ const rows = () => screen.queryAllByTestId(/^zone-row-/);
 const lastDrawn = () => (setZones.mock.calls.at(-1)?.[0] ?? []) as { id: string; selected: boolean; highlighted: boolean }[];
 const detailValue = (label: string) => within(screen.getByRole('region', { name: 'Zone Details' })).getByText(label).nextElementSibling!.textContent;
 
-beforeEach(() => setZones.mockClear());
+beforeEach(() => {
+  setZones.mockClear();
+  localStorage.setItem('tluxe.sr.view', JSON.stringify('classic')); // these tests cover the classic view of the S&R route
+});
 
 describe('S&R page without a provider', () => {
   it('shows truthful unavailable states and no zones or example prices', () => {

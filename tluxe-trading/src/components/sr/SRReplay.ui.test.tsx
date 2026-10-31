@@ -51,6 +51,7 @@ const flush = async () => {
 };
 
 beforeEach(() => {
+  localStorage.setItem('tluxe.sr.view', JSON.stringify('classic')); // classic view of the S&R route (replay lives there)
   setData.mockClear();
   upsert.mockClear();
 });
