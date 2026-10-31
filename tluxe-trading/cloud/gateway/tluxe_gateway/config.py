@@ -98,6 +98,9 @@ class GatewayConfig:
     #: Production monitoring credential (TLUXE_MONITOR_TOKEN_SHA256, sha256 hex list): /api/monitor/health only -
     #: feed states, ages and counters, never prices, depth, candles or trades. Empty = the endpoint does not exist.
     monitor_keys: tuple[Mt5BridgeKey, ...] = ()
+    #: GC HLR producer credential (TLUXE_GC_HLR_TOKEN_SHA256, sha256 hex list, optional @expiry): opens exactly
+    #: GET /api/databento/v1/candles/GC and nothing else. Empty = no request is ever accepted with it (fail closed).
+    gc_hlr_keys: tuple[Mt5BridgeKey, ...] = ()
     ai: Upstream = field(default_factory=lambda: Upstream("ai", "", Secret("")))
     databento: Upstream = field(default_factory=lambda: Upstream("databento", "", Secret("")))
     news: Upstream = field(default_factory=lambda: Upstream("news", "", Secret("")))
@@ -292,6 +295,7 @@ def from_env(env: dict | None = None) -> GatewayConfig:
     if owner_email and not _EMAIL_RE.match(owner_email):
         errors.append("TLUXE_OWNER_EMAIL must be a single e-mail address")
     monitor_keys = check(_mt5_keys, e.get("TLUXE_MONITOR_TOKEN_SHA256") or "", "TLUXE_MONITOR_TOKEN_SHA256", default=())
+    gc_hlr_keys = check(_mt5_keys, e.get("TLUXE_GC_HLR_TOKEN_SHA256") or "", "TLUXE_GC_HLR_TOKEN_SHA256", default=())
     mt5_keys = check(_mt5_keys, e.get("TLUXE_MT5_BRIDGE_TOKEN_SHA256") or "", default=())
     ibkr_keys = check(_mt5_keys, e.get("TLUXE_IBKR_BRIDGE_TOKEN_SHA256") or "", "TLUXE_IBKR_BRIDGE_TOKEN_SHA256", default=())
     hlr_keys = check(_mt5_keys, e.get("TLUXE_HLR_BRIDGE_TOKEN_SHA256") or "", "TLUXE_HLR_BRIDGE_TOKEN_SHA256", default=())
@@ -315,6 +319,7 @@ def from_env(env: dict | None = None) -> GatewayConfig:
         owner_email=owner_email,
         session_idle_s=idle_min * 60,
         monitor_keys=monitor_keys,
+        gc_hlr_keys=gc_hlr_keys,
         ai=upstream("ai", "TLUXE_AI_URL", "TLUXE_AI_TOKEN"),
         databento=upstream("databento", "TLUXE_DATABENTO_URL", "TLUXE_DB_BRIDGE_TOKEN"),
         news=upstream("news", "TLUXE_NEWS_URL", "TLUXE_NEWS_TOKEN"),

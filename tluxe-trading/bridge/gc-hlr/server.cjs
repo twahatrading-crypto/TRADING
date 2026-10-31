@@ -34,6 +34,7 @@ const fs = require('fs');
 const path = require('path');
 const P = require('./lib/producer.cjs');
 const cal = require('./lib/cme-calendar.cjs');
+const { sourceAuth, sourceHeaders } = require('./lib/source-auth.cjs');
 
 // ---- configuration (environment only; no secret is read or logged) ---------
 const PORT = Number(process.env.GC_HLR_PORT || 8261);
@@ -47,6 +48,15 @@ if (HOST !== '127.0.0.1' && HOST !== 'localhost' && HOST !== '::1') {
   console.error(`refusing to bind ${HOST}: this service is loopback-only`);
   process.exit(2);
 }
+
+// Read-only GC candle credential for the gateway (see lib/source-auth.cjs). Checked
+// once; a bad configuration stops the service rather than leaking or guessing.
+const AUTH = sourceAuth(process.env, SOURCE);
+if (AUTH.problem) {
+  console.error(`refusing to start: ${AUTH.problem}`);
+  process.exit(2);
+}
+if (AUTH.warning) console.warn(AUTH.warning);
 
 // ---- load the engines, read-only ------------------------------------------
 const g = globalThis;
@@ -77,7 +87,7 @@ async function fetchTf(tf) {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), 20000);
   try {
-    const r = await fetch(url, { headers: { 'User-Agent': UA }, signal: ctl.signal, cache: 'no-store' });
+    const r = await fetch(url, { headers: sourceHeaders(AUTH, UA), signal: ctl.signal, cache: 'no-store' });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     return await r.json();
   } finally { clearTimeout(timer); }

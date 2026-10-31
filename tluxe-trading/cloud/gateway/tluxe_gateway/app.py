@@ -43,6 +43,8 @@ log = logging.getLogger("tluxe.gateway")
 HLR_HB_S = 10
 MAX_JSON = 256_000
 MAX_SNAPSHOT = 64_000
+#: The ONE path the GC HLR producer credential opens.
+GC_HLR_CANDLES = "v1/candles/GC"
 DATABENTO_PATH = re.compile(r"^v1/(health|feed|book/(GC|SI)|trades/(GC|SI)|candles/(GC|SI))$")
 NEWS_PATH = re.compile(r"^v1/(health|calendar|headlines)$")
 STREAM_RECHECK_S = 30
@@ -435,11 +437,39 @@ async def databento_status(request: web.Request) -> web.Response:
 
 
 @market_data_route
-async def databento_proxy(request: web.Request) -> web.Response:
+async def _databento_proxy_guarded(request: web.Request) -> web.Response:
     path = request.match_info["path"]
     if not DATABENTO_PATH.match(path):
         return _err(404, "NOT_FOUND", "Unknown endpoint.")
     return await _proxy_get(request, request.app[K_CFG].databento, path)
+
+
+async def databento_proxy(request: web.Request) -> web.Response:
+    """Browsers use the owner session (or the public mode) as before. A request that presents a machine credential
+    is the GC HLR producer and is judged ONLY by that credential - never by a session, never by the public mode."""
+    if "Authorization" in request.headers:
+        return await _gc_hlr_candles(request)
+    return await _databento_proxy_guarded(request)
+
+
+async def _gc_hlr_candles(request: web.Request) -> web.Response:
+    """GC HLR producer (Windows VPS): TLUXE_GC_HLR_TOKEN_SHA256 opens exactly GET /api/databento/v1/candles/GC.
+    Fails closed: no configured key, a wrong / expired / revoked token, another path or method -> refused. The token
+    is never logged, never forwarded upstream (the gateway uses its own Databento bridge token) and grants nothing
+    else: every other route ignores the Authorization header."""
+    cfg = request.app[K_CFG]
+    client = _client(request)
+    # The producer polls a few timeframes every 15 s: a per-client budget bounds guessing and audit rows.
+    if not request.app[K_STATE]["gcHlrLimiter"].allow(client):
+        return _err(429, "RATE_LIMITED", "Too many requests - slow down.")
+    auth = request.headers.get("Authorization", "")
+    if not token_ok(auth[7:] if auth.startswith("Bearer ") else "", cfg.gc_hlr_keys):
+        log.warning("GC HLR credential rejected from %s", client[:64])
+        await request.app[K_STORE].auth_event("GC_HLR_REJECTED", client)
+        return _err(401, "UNAUTHORIZED", "Invalid GC HLR credential.")
+    if request.method != "GET" or request.match_info["path"] != GC_HLR_CANDLES:
+        return _err(403, "OUT_OF_SCOPE", "This credential only reads GC candles.")
+    return await _proxy_get(request, cfg.databento, GC_HLR_CANDLES)
 
 
 @require_session
@@ -1031,6 +1061,7 @@ def make_app(cfg: GatewayConfig, store=None, workers: bool = True, http_session_
     app[K_STORE] = store or (PgStore(cfg.database_url.reveal()) if cfg.database_url else MemoryStore())
     app[K_HUB] = StreamHub()
     app[K_STATE] = {"limiter": LoginLimiter(), "globalLimiter": GlobalFailLimiter(), "publicLimiter": PublicRateLimiter(), "monitorLimiter": PublicRateLimiter(rate_per_s=0.2, burst=10),
+                      "gcHlrLimiter": PublicRateLimiter(rate_per_s=2.0, burst=40),
                     # Separate from the owner login: HLR failures never lock the owner out, or vice versa.
                     "hlrLimiter": DualLimiter(), "tasks": []}
 

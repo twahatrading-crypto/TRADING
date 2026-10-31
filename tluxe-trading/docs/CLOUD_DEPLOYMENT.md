@@ -94,6 +94,17 @@ per-process.
   * Monitoring: `TLUXE_MONITOR_TOKEN_SHA256` (optional) enables `GET /api/monitor/health` with
     `Authorization: Bearer <token>` - feed states, contract codes, ages and counters only, never prices or book rows.
     The token opens nothing else.
+  * GC HLR producer: `TLUXE_GC_HLR_TOKEN_SHA256` (SHA-256 of the producer's token; comma list for rotation, optional
+    `@expiryEpochSeconds`). It opens exactly `GET /api/databento/v1/candles/GC` - any other path is 403, every other
+    route ignores it, a wrong / expired / removed token is 401 (audited as `GC_HLR_REJECTED`, never logged). Set it
+    **before** activating the owner login, or GC HLR goes OFFLINE (it never shows invented data).
+    * Where it runs: on the same Windows machine as `bridge/hlr-link` (the link reads it on loopback,
+      `127.0.0.1:8261`). For VPS hosting that machine needs Node 22, the HLR original files in a folder named by
+      `GC_HLR_ORIGINALS`, and `GC_HLR_SOURCE_TOKEN` (32+ random characters, set as a machine/user environment
+      variable - never in a file in this repository). `GC_HLR_SOURCE` must be `https://`; the service refuses to
+      start with a token and a clear-text source.
+    * Rotation: add the new hash next to the old one, switch the VPS variable, then remove the old hash.
+    * Tests on that machine: `npm run test:gc-hlr` (needs the originals) and `npm run test:gc-hlr-auth`.
 * Internal services:
   * `TLUXE_AI_URL`, `TLUXE_AI_TOKEN`
   * `TLUXE_DATABENTO_URL`, `TLUXE_DB_BRIDGE_TOKEN`
